@@ -105,6 +105,9 @@ func UploadFile(ctx context.Context, client Cloud, absPath string, creator cloud
 	if asset.AssetID == 0 {
 		return 0, fmt.Errorf("assets: upload operation finished without an asset id")
 	}
+	if assetType == TypeDecal {
+		return client.ResolveImageID(ctx, asset.AssetID)
+	}
 	return asset.AssetID, nil
 }
 
@@ -146,6 +149,11 @@ func uploadOne(ctx context.Context, client Cloud, projectDir string, item PlanIt
 	}
 	if id == 0 {
 		return 0, fmt.Errorf("assets: upload operation finished without an asset id")
+	}
+	// Image uploads create a Decal wrapper whose id does not render in image
+	// properties; store the underlying Image id instead.
+	if item.Action == ActionCreate && item.File.Type == TypeDecal {
+		return client.ResolveImageID(ctx, id)
 	}
 	return id, nil
 }

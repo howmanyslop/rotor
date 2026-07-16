@@ -79,6 +79,12 @@ func (f *fakeCloud) PollOperation(_ context.Context, path string, into any) erro
 	return nil
 }
 
+// ResolveImageID mimics the decal→image unwrap with a recognizable offset so
+// tests can assert the unwrapped id (not the decal id) was recorded.
+func (f *fakeCloud) ResolveImageID(_ context.Context, decalID int64) (int64, error) {
+	return decalID + 500000, nil
+}
+
 func writeProjectFile(t *testing.T, dir, rel, content string) {
 	t.Helper()
 	p := filepath.Join(dir, filepath.FromSlash(rel))

@@ -58,6 +58,12 @@ func (f *fakeCloud) PollOperation(_ context.Context, path string, into any) erro
 	return nil
 }
 
+// ResolveImageID mimics the decal→image unwrap with a recognizable offset so
+// tests can assert the unwrapped id (not the decal id) was recorded.
+func (f *fakeCloud) ResolveImageID(_ context.Context, decalID int64) (int64, error) {
+	return decalID + 500000, nil
+}
+
 func writeFile(t *testing.T, dir, rel, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, filepath.FromSlash(rel))
@@ -115,8 +121,9 @@ func TestResolveUploadsOnMissAndRecordsEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if id != "7000" {
-		t.Errorf("id = %q, want %q", id, "7000")
+	// 507000 = the fake's decal id (7000) unwrapped to its Image id.
+	if id != "507000" {
+		t.Errorf("id = %q, want %q", id, "507000")
 	}
 	if !r.Dirty() {
 		t.Error("an upload-on-miss must mark the resolver dirty")
@@ -138,8 +145,8 @@ func TestResolveUploadsOnMissAndRecordsEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("upload did not record a lockfile entry")
 	}
-	if entry.Hash != hash || entry.AssetID != 7000 {
-		t.Errorf("entry = %+v, want hash=%s id=7000", entry, hash)
+	if entry.Hash != hash || entry.AssetID != 507000 {
+		t.Errorf("entry = %+v, want hash=%s id=507000", entry, hash)
 	}
 	if got := r.Entries(); len(got) != 1 || got[0] != "assets/new.png" {
 		t.Errorf("Entries() = %v, want [assets/new.png]", got)

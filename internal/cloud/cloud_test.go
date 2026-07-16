@@ -602,3 +602,39 @@ func TestRetryAfterHTTPDate(t *testing.T) {
 		t.Errorf("retryAfter(absent) = %v, want 0", d)
 	}
 }
+
+// ResolveImageID follows the asset-delivery location to the decal's content
+// XML and extracts the wrapped Image asset id.
+func TestResolveImageID(t *testing.T) {
+	var srvURL string
+	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/asset-delivery-api/v1/assetId/111":
+			fmt.Fprintf(w, `{"location":%q}`, srvURL+"/cdn/decal.xml")
+		case "/cdn/decal.xml":
+			fmt.Fprint(w, `<roblox><url>http://www.roblox.com/asset/?id=222</url></roblox>`)
+		case "/asset-delivery-api/v1/assetId/333":
+			w.WriteHeader(http.StatusForbidden)
+			fmt.Fprint(w, `{"errors":[{"code":403,"message":"forbidden"}]}`)
+		default:
+			t.Errorf("unexpected request %s", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	srvURL = c.baseURL
+
+	id, err := c.ResolveImageID(context.Background(), 111)
+	if err != nil {
+		t.Fatalf("ResolveImageID: %v", err)
+	}
+	if id != 222 {
+		t.Errorf("id = %d, want 222", id)
+	}
+
+	// A 403 (missing legacy-assets scope) names the scope in the error.
+	if _, err := c.ResolveImageID(context.Background(), 333); err == nil {
+		t.Error("expected an error for 403")
+	} else if !strings.Contains(err.Error(), "legacy-assets") {
+		t.Errorf("403 error should mention the legacy-assets scope, got: %v", err)
+	}
+}
