@@ -206,3 +206,47 @@ func TestResolveRelativeToImporter(t *testing.T) {
 		t.Errorf("id = %q, want 99", id)
 	}
 }
+
+// [assets].base prefixes non-relative macro paths (project root + base),
+// while ./-relative references and lockfile keys are unaffected.
+func TestResolveWithBase(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "assets/images/ui/icon.png", "icon-bytes")
+	hash, err := assets.HashFile(filepath.Join(dir, "assets", "images", "ui", "icon.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lock := assets.NewLockfile()
+	lock.Assets["assets/images/ui/icon.png"] = assets.LockEntry{Hash: hash, AssetID: 4242}
+	r := New(Options{ProjectDir: dir, Base: "assets/images", Lockfile: lock})
+
+	// The macro path omits the base but hits the lockfile's project-relative key.
+	id, err := r.Resolve("", "ui/icon.png")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if id != "4242" {
+		t.Errorf("id = %q, want %q", id, "4242")
+	}
+	if r.Dirty() {
+		t.Error("a cache hit must not mark the resolver dirty")
+	}
+
+	// ./-relative references bypass the base entirely.
+	importer := filepath.ToSlash(filepath.Join(dir, "src", "app.ts"))
+	if _, err := r.Resolve(importer, "./missing.png"); err == nil {
+		t.Error("a ./-relative miss must not resolve under base")
+	}
+
+	// New uploads under base still record project-relative lockfile keys.
+	writeFile(t, dir, "assets/images/ui/new.png", "new-bytes")
+	fc := newFakeCloud(9000)
+	r2 := New(Options{ProjectDir: dir, Base: "assets/images", Client: fc, Creator: cloud.Creator{UserID: 1}})
+	if _, err := r2.Resolve("", "ui/new.png"); err != nil {
+		t.Fatalf("Resolve upload: %v", err)
+	}
+	if _, ok := r2.Lockfile().Assets["assets/images/ui/new.png"]; !ok {
+		t.Errorf("lockfile keys must stay project-relative; got %v", r2.Entries())
+	}
+}

@@ -31,6 +31,7 @@ import (
 // safe for concurrent use (CompileProject transforms files in parallel).
 type Resolver struct {
 	projectDir string        // absolute project directory (lockfile root)
+	base       string        // project-relative prefix for non-relative paths ("" = project root)
 	creator    cloud.Creator // owner for uploaded assets; zero when unset
 	client     assets.Cloud  // nil when offline / no ROBLOX_API_KEY
 	hasCreator bool          // a usable creator was configured
@@ -54,6 +55,10 @@ type Options struct {
 	// ProjectDir is the project root; the lockfile and project-relative paths
 	// are resolved against it.
 	ProjectDir string
+	// Base is a project-relative directory ([assets].base) prepended to
+	// non-relative $asset paths. `./`-relative references and lockfile keys
+	// are unaffected. Empty means paths resolve from the project root.
+	Base string
 	// Lockfile is the loaded rotor-lock.json (use assets.LoadLockfile). May be
 	// nil — an empty lockfile is used.
 	Lockfile *assets.Lockfile
@@ -78,6 +83,7 @@ func New(opts Options) *Resolver {
 	}
 	return &Resolver{
 		projectDir: filepath.ToSlash(dir),
+		base:       strings.Trim(filepath.ToSlash(opts.Base), "/"),
 		creator:    opts.Creator,
 		client:     opts.Client,
 		hasCreator: opts.Creator.UserID != 0 || opts.Creator.GroupID != 0,
@@ -90,7 +96,8 @@ func New(opts Options) *Resolver {
 // Resolve maps path (as written in `$asset("path")`) to a Roblox asset id.
 //
 //   - A path beginning with "./" or "../" is resolved relative to importerPath
-//     (the source file containing the call); otherwise it is project-relative.
+//     (the source file containing the call); otherwise it is resolved from the
+//     project root, under [assets].base when one is configured.
 //   - Missing file -> transformer.ErrAssetFileNotFound.
 //   - The content hash is looked up in the in-memory cache, then in the
 //     lockfile (hit -> reuse id, fully offline).
@@ -161,7 +168,7 @@ func (r *Resolver) resolvePath(importerPath, path string) (string, error) {
 		}
 		abs = filepath.Join(filepath.FromSlash(base), filepath.FromSlash(slash))
 	} else {
-		abs = filepath.Join(filepath.FromSlash(r.projectDir), filepath.FromSlash(slash))
+		abs = filepath.Join(filepath.FromSlash(r.projectDir), filepath.FromSlash(r.base), filepath.FromSlash(slash))
 	}
 	return abs, nil
 }

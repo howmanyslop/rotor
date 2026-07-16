@@ -327,3 +327,21 @@ func TestSchemaIsValidJSON(t *testing.T) {
 		t.Errorf("assets.mode enum = %v, want two values (module, macro)", mode["enum"])
 	}
 }
+
+// assets.base must be a relative directory inside the project.
+func TestValidateAssetsBase(t *testing.T) {
+	valid := []string{"", "assets", "assets/images", "./assets/images"}
+	for _, base := range valid {
+		c := &Config{Assets: &AssetsConfig{Mode: "macro", Base: base, Creator: Creator{Type: "user", ID: 1}}}
+		if errs := c.Validate(); len(errs) != 0 {
+			t.Errorf("base %q: unexpected errors %v", base, errs)
+		}
+	}
+	invalid := []string{"/abs/path", "../outside", "assets/../../outside"}
+	for _, base := range invalid {
+		c := &Config{Assets: &AssetsConfig{Mode: "macro", Base: base, Creator: Creator{Type: "user", ID: 1}}}
+		if errs := c.Validate(); len(errs) == 0 {
+			t.Errorf("base %q: expected a validation error", base)
+		}
+	}
+}

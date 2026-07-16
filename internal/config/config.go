@@ -16,7 +16,11 @@
 // and by `rotor migrate` when it serializes a migrated config.
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"path"
+	"strings"
+)
 
 // Config is the typed shape of rotor.toml (and, via the legacy path, the
 // object default-exported from rotor.config.ts). All sections are optional.
@@ -35,7 +39,11 @@ type Config struct {
 type AssetsConfig struct {
 	// Mode selects how assets reach Luau: "module" (generate assets.luau +
 	// assets.d.ts; default) or "macro" (the $asset transformer + rotor-asset.d.ts).
-	Mode    string       `json:"mode,omitempty" toml:"mode,omitempty"`
+	Mode string `json:"mode,omitempty" toml:"mode,omitempty"`
+	// Base is a project-relative directory prepended to non-relative $asset
+	// paths, so `$asset("ui/icon.png")` resolves `<base>/ui/icon.png`. It does
+	// not affect Paths globs, `./`-relative references, or lockfile keys.
+	Base    string       `json:"base,omitempty" toml:"base,omitempty"`
 	Paths   []string     `json:"paths,omitempty" toml:"paths,omitempty"`
 	Output  AssetsOutput `json:"output,omitempty" toml:"output,omitempty"`
 	Creator Creator      `json:"creator,omitempty" toml:"creator,omitempty"`
@@ -149,6 +157,16 @@ func (c *Config) Validate() []error {
 			errs = append(errs, fmt.Errorf(
 				"assets.mode must be %q or %q, got %q",
 				"module", "macro", c.Assets.Mode))
+		}
+		if base := c.Assets.Base; base != "" {
+			slash := strings.ReplaceAll(base, "\\", "/")
+			if path.IsAbs(slash) || strings.Contains(slash, ":") {
+				errs = append(errs, fmt.Errorf(
+					"assets.base must be a project-relative directory, got absolute path %q", base))
+			} else if clean := path.Clean(slash); clean == ".." || strings.HasPrefix(clean, "../") {
+				errs = append(errs, fmt.Errorf(
+					"assets.base must stay inside the project, got %q", base))
+			}
 		}
 		switch c.Assets.Creator.Type {
 		case "user", "group":

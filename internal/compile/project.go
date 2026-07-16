@@ -324,7 +324,9 @@ func newAssetResolver(projectDir string) *assetresolve.Resolver {
 	}
 
 	var creator cloud.Creator
+	var base string
 	if cfg, err := config.Load(projectDir); err == nil && cfg.Assets != nil {
+		base = cfg.Assets.Base
 		switch cfg.Assets.Creator.Type {
 		case "user":
 			creator.UserID = cfg.Assets.Creator.ID
@@ -344,6 +346,7 @@ func newAssetResolver(projectDir string) *assetresolve.Resolver {
 
 	return assetresolve.New(assetresolve.Options{
 		ProjectDir: projectDir,
+		Base:       base,
 		Lockfile:   lock,
 		Client:     client,
 		Creator:    creator,
