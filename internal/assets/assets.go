@@ -28,6 +28,7 @@ type Cloud interface {
 	CreateAsset(ctx context.Context, req cloud.CreateAssetRequest, fileName string, file io.Reader) (operationPath string, err error)
 	UpdateAssetContent(ctx context.Context, assetID int64, fileName string, file io.Reader) (operationPath string, err error)
 	PollOperation(ctx context.Context, path string, into any) error
+	ResolveImageID(ctx context.Context, decalID int64) (int64, error)
 }
 
 var _ Cloud = (*cloud.Client)(nil)

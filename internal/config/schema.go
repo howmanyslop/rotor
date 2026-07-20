@@ -45,6 +45,10 @@ const Schema = `{
           "description": "How assets reach Luau: \"module\" generates assets.luau + assets.d.ts (default); \"macro\" uses the $asset transformer + rotor-asset.d.ts.",
           "enum": ["module", "macro"]
         },
+        "base": {
+          "type": "string",
+          "description": "Project-relative directory prepended to non-relative $asset paths, e.g. \"assets/images\" lets you write $asset(\"ui/icon.png\") for assets/images/ui/icon.png. Does not affect paths globs, ./-relative references, or lockfile keys."
+        },
         "paths": {
           "type": "array",
           "description": "Glob patterns of asset files relative to the project root.",

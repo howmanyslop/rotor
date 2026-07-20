@@ -58,6 +58,12 @@ func (f *fakeCloud) PollOperation(_ context.Context, path string, into any) erro
 	return nil
 }
 
+// ResolveImageID mimics the decal→image unwrap with a recognizable offset so
+// tests can assert the unwrapped id (not the decal id) was recorded.
+func (f *fakeCloud) ResolveImageID(_ context.Context, decalID int64) (int64, error) {
+	return decalID + 500000, nil
+}
+
 func writeFile(t *testing.T, dir, rel, content string) string {
 	t.Helper()
 	p := filepath.Join(dir, filepath.FromSlash(rel))
@@ -115,8 +121,9 @@ func TestResolveUploadsOnMissAndRecordsEntry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if id != "7000" {
-		t.Errorf("id = %q, want %q", id, "7000")
+	// 507000 = the fake's decal id (7000) unwrapped to its Image id.
+	if id != "507000" {
+		t.Errorf("id = %q, want %q", id, "507000")
 	}
 	if !r.Dirty() {
 		t.Error("an upload-on-miss must mark the resolver dirty")
@@ -138,8 +145,8 @@ func TestResolveUploadsOnMissAndRecordsEntry(t *testing.T) {
 	if !ok {
 		t.Fatal("upload did not record a lockfile entry")
 	}
-	if entry.Hash != hash || entry.AssetID != 7000 {
-		t.Errorf("entry = %+v, want hash=%s id=7000", entry, hash)
+	if entry.Hash != hash || entry.AssetID != 507000 {
+		t.Errorf("entry = %+v, want hash=%s id=507000", entry, hash)
 	}
 	if got := r.Entries(); len(got) != 1 || got[0] != "assets/new.png" {
 		t.Errorf("Entries() = %v, want [assets/new.png]", got)
@@ -204,5 +211,49 @@ func TestResolveRelativeToImporter(t *testing.T) {
 	}
 	if id != "99" {
 		t.Errorf("id = %q, want 99", id)
+	}
+}
+
+// [assets].base prefixes non-relative macro paths (project root + base),
+// while ./-relative references and lockfile keys are unaffected.
+func TestResolveWithBase(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "assets/images/ui/icon.png", "icon-bytes")
+	hash, err := assets.HashFile(filepath.Join(dir, "assets", "images", "ui", "icon.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lock := assets.NewLockfile()
+	lock.Assets["assets/images/ui/icon.png"] = assets.LockEntry{Hash: hash, AssetID: 4242}
+	r := New(Options{ProjectDir: dir, Base: "assets/images", Lockfile: lock})
+
+	// The macro path omits the base but hits the lockfile's project-relative key.
+	id, err := r.Resolve("", "ui/icon.png")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if id != "4242" {
+		t.Errorf("id = %q, want %q", id, "4242")
+	}
+	if r.Dirty() {
+		t.Error("a cache hit must not mark the resolver dirty")
+	}
+
+	// ./-relative references bypass the base entirely.
+	importer := filepath.ToSlash(filepath.Join(dir, "src", "app.ts"))
+	if _, err := r.Resolve(importer, "./missing.png"); err == nil {
+		t.Error("a ./-relative miss must not resolve under base")
+	}
+
+	// New uploads under base still record project-relative lockfile keys.
+	writeFile(t, dir, "assets/images/ui/new.png", "new-bytes")
+	fc := newFakeCloud(9000)
+	r2 := New(Options{ProjectDir: dir, Base: "assets/images", Client: fc, Creator: cloud.Creator{UserID: 1}})
+	if _, err := r2.Resolve("", "ui/new.png"); err != nil {
+		t.Fatalf("Resolve upload: %v", err)
+	}
+	if _, ok := r2.Lockfile().Assets["assets/images/ui/new.png"]; !ok {
+		t.Errorf("lockfile keys must stay project-relative; got %v", r2.Entries())
 	}
 }

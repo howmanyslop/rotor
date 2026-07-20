@@ -69,6 +69,7 @@ One typed TOML config drives the cloud tools. `rotor init` writes it with a `#:s
 
 [assets]
 mode = "macro"                  # "module" (assets.luau) | "macro" ($asset transformer)
+base = "assets"                 # optional: $asset("logo.png") -> assets/logo.png
 paths = ["assets/**/*.png", "assets/**/*.ogg"]
 [assets.creator]
 type = "group"
@@ -94,9 +95,9 @@ url = "https://discord.gg/x"
 type = "discord"
 ```
 
-- **`rotor asset sync`** scans the globs, uploads new/changed files via Open Cloud (SHA-256 lockfile `rotor-lock.json` — unchanged files never re-upload, updates keep asset ids stable). In `mode = "module"` it generates `assets.luau` + `assets.d.ts`; in `mode = "macro"` you reference assets inline with **`$asset("assets/logo.png")`**, which resolves from the cache and auto-uploads any miss when `ROBLOX_API_KEY` is set.
+- **`rotor asset sync`** scans the globs, uploads new/changed files via Open Cloud (SHA-256 lockfile `rotor-lock.json` — unchanged files never re-upload, updates keep asset ids stable). In `mode = "module"` it generates `assets.luau` + `assets.d.ts`; in `mode = "macro"` you reference assets inline with **`$asset("assets/logo.png")`**, which resolves from the cache and auto-uploads any miss when `ROBLOX_API_KEY` is set. An optional `[assets] base` directory is prepended to non-relative `$asset` paths, so files can live under e.g. `assets/images/` while references stay short. Image uploads are unwrapped to the underlying **Image** asset id (an upload creates a Decal wrapper whose id doesn't render in `ImageLabel.Image` and friends).
 - **`rotor deploy`** is infrastructure-as-code: it diffs the config against per-environment state (`.rotor/deploy/<env>.json`), shows a plan, and applies only the drift — place file publishing + place settings, experience settings, badges and game passes (icons upload automatically first, shared icons dedupe), experience icon + thumbnails, developer products, and social links. Deletes require `--allow-deletes`.
-- Auth is an Open Cloud key in **`ROBLOX_API_KEY`** (scopes: Assets R/W, Universe Places W, Universe R/W). `rotor doctor` checks your config and key setup.
+- Auth is an Open Cloud key in **`ROBLOX_API_KEY`** (scopes: Assets R/W, Legacy Assets manage — used to unwrap image uploads to their Image id, Universe Places W, Universe R/W). `rotor doctor` checks your config and key setup.
 
 Full config shape, every command flag, and all the macros: [docs.md](docs.md).
 
