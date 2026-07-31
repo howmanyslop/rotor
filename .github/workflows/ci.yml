@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-16vcpu-ubuntu-2404
 
     steps:
       - name: Check out repository
@@ -50,7 +50,7 @@ jobs:
           ROTOR_REQUIRE_TRANSFORMERS_FIXTURE: "1"
 
   vuln:
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
 
     steps:
       - name: Check out repository
