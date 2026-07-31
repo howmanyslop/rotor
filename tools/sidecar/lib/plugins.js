@@ -119,8 +119,40 @@ function flattenIntoTransformers(transforms) {
   ];
 }
 
+function fixOrphanedParents(ts, root) {
+  const walk = (parent) => {
+    ts.forEachChild(parent, (child) => {
+      if (!child.parent || !child.parent.getSourceFile?.()) {
+        child.parent = parent;
+      }
+      walk(child);
+    });
+  };
+  walk(root);
+}
+
+function wrapTransformersWithParentFix(ts, transformers) {
+  const lastIndex = transformers.length - 1;
+  return transformers.map((factory, index) => {
+    if (index === lastIndex) {
+      return factory;
+    }
+    return (context) => {
+      const transform = factory(context);
+      return (sourceFile) => {
+        const result = transform(sourceFile);
+        if (result !== sourceFile && ts.isSourceFile(result)) {
+          fixOrphanedParents(ts, result);
+        }
+        return result;
+      };
+    };
+  });
+}
+
 module.exports = {
   createTransformerList,
   flattenIntoTransformers,
   getPluginConfigs,
+  wrapTransformersWithParentFix,
 };

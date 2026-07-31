@@ -155,3 +155,36 @@ func TestCompileProjectPnpmSymlinks(t *testing.T) {
 		t.Errorf("produced %d files, want 1 (%v)", len(files), keys(files))
 	}
 }
+
+func TestCompileProjectPnpmSymlinksWithNodeModulesRojoPath(t *testing.T) {
+	dir := writePnpmFixture(t)
+	if resolvedDir, err := filepath.EvalSymlinks(dir); err == nil {
+		dir = resolvedDir
+	}
+	config := `{"name":"pnpm","tree":{"$path":"out","include":{"$path":"include"},"node_modules":{"$path":"node_modules"}}}`
+	if err := os.WriteFile(filepath.Join(dir, "default.project.json"), []byte(config), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	nodeModulesConfig := `{"name":"node_modules","tree":{"@rbxts":{"dummy":{"$path":".pnpm/@rbxts+dummy@1.0.0/node_modules/@rbxts/dummy"},"linked":{"$path":".pnpm/@rbxts+linked@1.0.0/node_modules/@rbxts/linked"}}}}`
+	if err := os.WriteFile(filepath.Join(dir, "node_modules", "default.project.json"), []byte(nodeModulesConfig), 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	files, diags, err := CompileProject(dir)
+	if err != nil {
+		t.Fatalf("CompileProject: %v (diags: %v)", err, diags)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("diagnostics: %v", diags)
+	}
+
+	want := "-- Compiled with roblox-ts v3.0.0\n" +
+		"local TS = require(script.Parent.include.RuntimeLib)\n" +
+		"local dummy = TS.import(script, script.Parent, \"node_modules\", \"@rbxts\", \"dummy\", \"out\").dummy\n" +
+		"local linked = TS.import(script, script.Parent, \"node_modules\", \"@rbxts\", \"linked\").linked\n" +
+		"print(dummy(), linked())\n" +
+		"return nil\n"
+	if got := files["out/main.luau"]; got != want {
+		t.Errorf("out/main.luau:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}

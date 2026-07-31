@@ -109,6 +109,14 @@ func TestValidateCompilerOptions(t *testing.T) {
 	}{
 		{name: "canonical valid config", overrides: nil, want: nil},
 		{
+			name: "preserve bundler config",
+			overrides: map[string]string{
+				"module":           `		"module": "preserve",`,
+				"moduleResolution": `		"moduleResolution": "bundler",`,
+			},
+			want: nil,
+		},
+		{
 			// L45-47: the target check is commented out upstream.
 			name:      "target not enforced",
 			overrides: map[string]string{"target": `		"target": "ES2015",`},
@@ -278,6 +286,23 @@ func TestValidateCompilerOptions(t *testing.T) {
 				t.Errorf("validateCompilerOptions =\n%q\nwant:\n%q", got, want)
 			}
 		})
+	}
+}
+
+func TestValidateCompilerOptions_accepts_preserve_bundler_from_extended_config(t *testing.T) {
+	got, _ := validateConfigText(
+		t,
+		`{"extends":"./tsconfig.base.json"}`,
+		map[string]string{
+			"tsconfig.base.json": validConfig(map[string]string{
+				"module":           `		"module": "preserve",`,
+				"moduleResolution": `		"moduleResolution": "bundler",`,
+			}),
+		},
+	)
+
+	if got != "" {
+		t.Fatalf("validateCompilerOptions = %q, want clean", got)
 	}
 }
 

@@ -75,6 +75,7 @@ type RojoContext struct {
 	// UseCaseSensitiveFileNames feeds the canonical-file-name lookups
 	// (Shared/util/getCanonicalFileName.ts).
 	UseCaseSensitiveFileNames bool
+	ImportPathMap             map[string]string
 }
 
 // NewMultiState returns an empty compilation-step cache container.

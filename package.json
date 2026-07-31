@@ -1,6 +1,6 @@
 {
   "name": "@rotor-rbx/rotor",
-  "version": "2.2.1",
+  "version": "2.2.1-fork.1",
   "publishConfig": {
     "access": "public",
     "provenance": true
@@ -9,11 +9,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/uproot/rotor.git"
+    "url": "git+https://github.com/howmanysmall/rotor.git"
   },
-  "homepage": "https://github.com/uproot/rotor#readme",
+  "homepage": "https://github.com/howmanysmall/rotor#readme",
   "bugs": {
-    "url": "https://github.com/uproot/rotor/issues"
+    "url": "https://github.com/howmanysmall/rotor/issues"
   },
   "keywords": [
     "roblox",
