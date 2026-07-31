@@ -240,7 +240,7 @@ func transformImportEqualsDeclaration(s *State, node *ast.Node) *luau.List[luau.
 		if aliasSymbol == nil {
 			panic("transformer: transformImportEqualsDeclaration: no alias symbol") // upstream assert
 		}
-		if isSymbolOfValue(checker.SkipAlias(aliasSymbol, s.Checker)) {
+		if isSymbolOfValue(checker.SkipAlias(aliasSymbol, s.Checker)) || isImportedNameReferencedAsValue(s, decl.Name()) {
 			statements.PushList(s.CaptureStatements(func() {
 				transformVariable(s, decl.Name(), importExp)
 			}))
