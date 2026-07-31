@@ -45,7 +45,7 @@ function assetUrl() {
   const { os, arch, ext } = targetInfo();
   const base = (
     process.env.ROTOR_INSTALL_BASE_URL ||
-    `https://github.com/uproot/rotor/releases/download/v${pkg.version}`
+    `https://github.com/howmanysmall/rotor/releases/download/v${pkg.version}`
   ).replace(/\/+$/, "");
   return `${base}/rotor-v${pkg.version}-${os}-${arch}-bin${ext}`;
 }
@@ -78,7 +78,7 @@ async function install({ force = false, quiet = false } = {}) {
       `rotor: binary not found (HTTP 404):\n  ${url}\n` +
         `The v${pkg.version} release may not be published yet, or the asset for ` +
         `this platform is missing.\n` +
-        `Grab a binary from https://github.com/uproot/rotor/releases or build ` +
+        `Grab a binary from https://github.com/howmanysmall/rotor/releases or build ` +
         `from source: go build ./cmd/rotor`
     );
   }
