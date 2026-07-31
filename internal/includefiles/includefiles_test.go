@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// wantNames is the exact upstream include/ payload (roblox-ts 3.0.0 ships
-// RuntimeLib.lua and Promise.lua, nothing else).
+// wantNames is the exact compiler runtime payload.
 var wantNames = []string{"Promise.lua", "RuntimeLib.lua"}
 
 func TestNames(t *testing.T) {
@@ -61,6 +60,19 @@ func TestEmbeddedMatchesVendored(t *testing.T) {
 	}
 	if len(luaFiles) != len(wantNames) {
 		t.Errorf("include/ has %d .lua files, embed has %d — vendor both copies together", len(luaFiles), len(wantNames))
+	}
+}
+
+func TestRuntimeLibAllowsSameRuntimeReload(t *testing.T) {
+	runtimeLib, err := Read("RuntimeLib.lua")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(runtimeLib, []byte("TS.__runtimeScript = script")) {
+		t.Fatal("RuntimeLib.lua does not identify reloads of the same runtime")
+	}
+	if !bytes.Contains(runtimeLib, []byte("registeredBy.__runtimeScript ~= script")) {
+		t.Fatal("RuntimeLib.lua rejects modules registered by a reload of the same runtime")
 	}
 }
 

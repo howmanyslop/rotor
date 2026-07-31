@@ -4,11 +4,10 @@
 // single binary.
 //
 // The .lua files in this directory are byte-for-byte copies of
-// reference/roblox-ts/include/ (roblox-ts 3.0.0), vendored a second time here
+// reference/roblox-ts/include/, vendored a second time here
 // because go:embed cannot reference files above the package directory; the
 // human-facing copy lives in the repo-root include/ directory per the design
-// doc. They are reused VERBATIM — never modified. TestEmbeddedMatchesVendored
-// fails if the two copies drift.
+// doc. TestEmbeddedMatchesVendored fails if the copies drift.
 package includefiles
 
 import (
