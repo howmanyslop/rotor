@@ -191,6 +191,91 @@ func writeProject(t *testing.T, pkgName, rojoConfig string) string {
 	return dir
 }
 
+func TestCompileProjectObjectRestDestructuring(t *testing.T) {
+	dir := writeProject(t, "@scope/object-rest-fixture", "")
+	tsconfig := `{
+	"compilerOptions": {
+		"allowSyntheticDefaultImports": true,
+		"module": "Preserve",
+		"moduleResolution": "Bundler",
+		"noLib": true,
+		"moduleDetection": "force",
+		"strict": true,
+		"target": "ESNext",
+		"types": [],
+		"typeRoots": ["node_modules/@rbxts"],
+		"rootDir": "src",
+		"outDir": "out"
+	},
+	"include": ["src"]
+}`
+	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := "interface Props { readonly Change: number; readonly Other: string }\n" +
+		"declare const props: Props;\n" +
+		"const { Change: change, ...rest } = props;\n" +
+		"print(change, rest.Other);\n"
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, diags, err := CompileProject(dir)
+	if err != nil {
+		t.Fatalf("CompileProject: %v (diags: %v)", err, diags)
+	}
+	if len(diags) > 0 {
+		t.Fatalf("diagnostics: %v", diags)
+	}
+
+	want := "-- Compiled with roblox-ts v3.0.0\n" +
+		"local _binding = props\n" +
+		"local change = _binding.Change\n" +
+		"local _extracted = {\n\t[\"Change\"] = true,\n}\n" +
+		"local _rest = {}\n" +
+		"for _k, _v in _binding do\n\tif not _extracted[_k] then\n\t\t_rest[_k] = _v\n\tend\nend\n" +
+		"local rest = _rest\n" +
+		"print(change, rest.Other)\n" +
+		"return nil\n"
+	if got := files["out/main.luau"]; got != want {
+		t.Errorf("out/main.luau:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestCompileProjectReferenceUsesReferencedOutDir(t *testing.T) {
+	dir := t.TempDir()
+	for _, path := range []string{"src", "test", "out", "include", "node_modules/@rbxts"} {
+		if err := os.MkdirAll(filepath.Join(dir, path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		"package.json":           `{"name":"project-reference-fixture"}`,
+		"include/RuntimeLib.lua": "return {}\n",
+		"default.project.json":   `{"name":"fixture","tree":{"$className":"DataModel","ReplicatedStorage":{"include":{"$path":"include"},"lib":{"$path":"out"},"tests":{"$path":"out-test"}}}}`,
+		"tsconfig.lib.json":      `{"compilerOptions":{"allowSyntheticDefaultImports":true,"composite":true,"declaration":true,"module":"CommonJS","moduleResolution":"Node","noLib":true,"moduleDetection":"force","strict":true,"target":"ESNext","types":[],"typeRoots":["node_modules/@rbxts"],"rootDir":"src","outDir":"out"},"include":["src"]}`,
+		"tsconfig.test.json":     `{"compilerOptions":{"allowSyntheticDefaultImports":true,"module":"CommonJS","moduleResolution":"Node","noLib":true,"moduleDetection":"force","strict":true,"target":"ESNext","types":[],"typeRoots":["node_modules/@rbxts"],"rootDir":"test","outDir":"out-test"},"references":[{"path":"./tsconfig.lib.json"}],"include":["test"]}`,
+		"src/value.ts":           "export const value = 42;\n",
+		"out/value.d.ts":         "export declare const value = 42;\n",
+		"test/globals.d.ts":      noLibGlobalStubs,
+		"test/main.ts":           "import { value } from \"../src/value\";\nprint(value);\n",
+	}
+	for path, content := range files {
+		if err := os.WriteFile(filepath.Join(dir, path), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	outputs, diags, err := CompileProjectWithOptions(dir, ProjectOptions{TsConfigPath: filepath.Join(dir, "tsconfig.test.json")})
+	if err != nil {
+		t.Fatalf("CompileProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	got := outputs["out-test/main.luau"]
+	if !strings.Contains(got, `TS.import(script, game:GetService("ReplicatedStorage"), "lib", "value").value`) {
+		t.Fatalf("cross-project import did not use referenced outDir:\n%s", got)
+	}
+}
+
 // noLibGlobalStubs declares the fundamental global types the checker resolves
 // at initialization under noLib (@rbxts/compiler-types provides them in real
 // projects; stubbed so temp projects stay self-contained).

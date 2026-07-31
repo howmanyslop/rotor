@@ -50,7 +50,42 @@ func (l *lazyImportExp) set(value luau.IndexableExpression) {
 // ImportSpecifier); name is the bound identifier.
 func isReferencedAliasValue(s *State, declaration *ast.Node, name *ast.Node) bool {
 	symbol := getOriginalSymbolOfNode(s, name)
-	return s.EmitResolver().IsReferencedAliasDeclarationUnsafe(declaration) && (symbol == nil || isSymbolOfValue(symbol))
+	if s.EmitResolver().IsReferencedAliasDeclarationUnsafe(declaration) && (symbol == nil || isSymbolOfValue(symbol)) {
+		return true
+	}
+	if symbol != nil && symbol.Flags&ast.SymbolFlagsConstEnum != 0 {
+		return false
+	}
+	return isImportedNameReferencedAsValue(s, name)
+}
+
+func isImportedNameReferencedAsValue(s *State, name *ast.Node) bool {
+	alias := s.Checker.GetSymbolAtLocation(name)
+	if alias == nil {
+		return false
+	}
+	target := checker.SkipAlias(alias, s.Checker)
+	var visit func(node *ast.Node) bool
+	visit = func(node *ast.Node) bool {
+		if ast.IsIdentifier(node) {
+			if node == name || node.Text() != name.Text() || ast.IsPartOfTypeNode(node) || ast.IsPartOfTypeQuery(node) {
+				return false
+			}
+			reference := s.Checker.GetSymbolAtLocation(node)
+			if reference == alias || reference != nil && checker.SkipAlias(reference, s.Checker) == target {
+				return true
+			}
+			if node.Parent != nil && ast.IsShorthandPropertyAssignment(node.Parent) {
+				reference = s.Checker.GetShorthandAssignmentValueSymbol(node.Parent)
+				if reference == alias || reference != nil && checker.SkipAlias(reference, s.Checker) == target {
+					return true
+				}
+			}
+			return true
+		}
+		return node.ForEachChild(visit)
+	}
+	return s.SourceFile.AsNode().ForEachChild(visit)
 }
 
 // countImportExpUses ports transformImportDeclaration.ts countImportExpUses
@@ -205,7 +240,7 @@ func transformImportEqualsDeclaration(s *State, node *ast.Node) *luau.List[luau.
 		if aliasSymbol == nil {
 			panic("transformer: transformImportEqualsDeclaration: no alias symbol") // upstream assert
 		}
-		if isSymbolOfValue(checker.SkipAlias(aliasSymbol, s.Checker)) {
+		if isSymbolOfValue(checker.SkipAlias(aliasSymbol, s.Checker)) || isImportedNameReferencedAsValue(s, decl.Name()) {
 			statements.PushList(s.CaptureStatements(func() {
 				transformVariable(s, decl.Name(), importExp)
 			}))

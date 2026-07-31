@@ -108,6 +108,41 @@ test("createTransformerList instantiates checker and compilerOptions factories",
   assert.match(result.transformed[0].text, /checker:options:start/);
 });
 
+test("transformSourceFiles repairs orphaned parents between transformers", () => {
+  const program = createProgram();
+  const sourceFile = program.getSourceFile(sourcePath);
+  assert.ok(sourceFile, "expected source file");
+
+  const createSyntheticLiteral = (context) => {
+    const visit = (node) => {
+      if (ts.isStringLiteral(node) && node.text === "start") {
+        return ts.factory.createStringLiteral("synthetic");
+      }
+      return ts.visitEachChild(node, visit, context);
+    };
+    return (file) => ts.visitNode(file, visit);
+  };
+  const requireSyntheticParent = (context) => {
+    const visit = (node) => {
+      if (ts.isStringLiteral(node) && node.text === "synthetic") {
+        assert.ok(node.parent, "synthetic node must have a parent before the next transformer");
+        assert.ok(ts.isVariableDeclaration(node.parent));
+      }
+      return ts.visitEachChild(node, visit, context);
+    };
+    return (file) => ts.visitNode(file, visit);
+  };
+
+  const result = sidecar.transformSourceFiles(ts, program, [sourceFile], {
+    before: [createSyntheticLiteral, requireSyntheticParent],
+    after: [],
+    afterDeclarations: [],
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.match(result.transformed[0].text, /synthetic/);
+});
+
 test("main.js serves protocol v1 requests and reuses overlay updates", async () => {
   const child = spawn(process.execPath, [mainPath], {
     cwd: path.resolve(__dirname, ".."),
