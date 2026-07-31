@@ -9,6 +9,7 @@ const {
   createTransformerList,
   flattenIntoTransformers,
   getPluginConfigs,
+  wrapTransformersWithParentFix,
 } = require("./plugins");
 
 function createParseHost(session, ts) {
@@ -176,7 +177,7 @@ class SidecarProjectSession {
   }
 
   transformSourceFiles(program, sourceFiles, transforms) {
-    const transformerList = flattenIntoTransformers(transforms);
+    const transformerList = wrapTransformersWithParentFix(this.ts, flattenIntoTransformers(transforms));
     const printer = this.ts.createPrinter();
 
     if (transformerList.length === 0) {

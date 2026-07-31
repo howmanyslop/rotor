@@ -295,11 +295,11 @@ func buildIterableFunctionLuaTupleLoop(t *checker.Type) loopBuilder {
 		}
 		tupleArgType := luaTupleType.Alias().TypeArguments()[0]
 		// if initializer is a variable declaration `for (const a of iter())`
-		// and LuaTuple has defined element amount, and no rest elements
+		// and LuaTuple has a fixed element count
 		// then use lua for-in loop, specifying all elements and putting them in table
 		if ast.IsVariableDeclarationList(initializer) &&
 			tupleArgType.IsTupleType() &&
-			tupleCombinedFlags(tupleArgType.TargetTupleType())&checker.ElementFlagsRest == 0 {
+			tupleCombinedFlags(tupleArgType.TargetTupleType())&checker.ElementFlagsVariable == 0 {
 			tupleType := tupleArgType.TargetTupleType()
 			for _, info := range tupleType.ElementInfos() {
 				name := "element"

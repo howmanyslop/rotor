@@ -3,6 +3,7 @@ package transformer
 import (
 	"rotor/internal/luau"
 	"rotor/tsgo/ast"
+	"rotor/tsgo/core"
 )
 
 // This file ports the object-pattern destructuring transforms:
@@ -13,38 +14,79 @@ import (
 // Binding patterns — `const { a, b: c } = exp`
 // ---------------------------------------------------------------------------
 
-// transformObjectBindingPattern ports transformObjectBindingPattern.ts
-// (L13-48). A rest element (`...rest`) raises noSpreadDestructuring and
-// ABORTS the remaining elements. `{ a: b }` reads property `a` and declares
-// `b`; a nested pattern name guarantees a propertyName (upstream
-// `assert(prop)`).
+func spreadDestructureObject(s *State, parentID luau.AnyIdentifier, preSpreadNames []luau.Expression) luau.Expression {
+	extractedMembers := luau.NewList[luau.Expression]()
+	for _, expression := range preSpreadNames {
+		switch expression := expression.(type) {
+		case *luau.PropertyAccessExpression:
+			extractedMembers.Push(luau.Str(expression.Name))
+		case *luau.ComputedIndexExpression:
+			extractedMembers.Push(expression.Index)
+		default:
+			panic("transformer: spreadDestructureObject: unknown expression type")
+		}
+	}
+	extracted := s.PushToVar(luau.NewSet(extractedMembers), "extracted")
+	rest := s.PushToVar(luau.NewMap(luau.NewList[*luau.MapField]()), "rest")
+	keyID := luau.TempID("k")
+	valueID := luau.TempID("v")
+	s.Prereq(luau.NewFor(
+		luau.NewList[luau.AnyIdentifier](keyID, valueID),
+		parentID,
+		luau.NewList[luau.Statement](
+			luau.NewIf(
+				luau.NewUnary("not", luau.NewComputedIndex(extracted, keyID)),
+				luau.NewList[luau.Statement](
+					luau.NewAssignment(luau.NewComputedIndex(rest, keyID), "=", valueID),
+				),
+				nil,
+			),
+		),
+	))
+	return rest
+}
+
 func transformObjectBindingPattern(s *State, bindingPattern *ast.Node, parentID luau.AnyIdentifier) {
 	validateNotAnyType(s, bindingPattern)
+	preSpreadNames := make([]luau.Expression, 0, len(bindingPattern.AsBindingPattern().Elements.Nodes))
 	for _, element := range bindingPattern.AsBindingPattern().Elements.Nodes {
 		bindingElement := element.AsBindingElement()
-		if bindingElement.DotDotDotToken != nil {
+		if bindingElement.DotDotDotToken != nil && (s.Program == nil || s.Program.Options().Module != core.ModuleKindPreserve) {
 			s.Diags.Add(DiagNoSpreadDestructuring(element))
 			return
 		}
 		name := bindingElement.Name()
 		prop := bindingElement.PropertyName
+		isSpread := bindingElement.DotDotDotToken != nil
 		if ast.IsIdentifier(name) {
-			nameOrProp := prop
-			if nameOrProp == nil {
-				nameOrProp = name
+			var value luau.Expression
+			if isSpread {
+				value = spreadDestructureObject(s, parentID, preSpreadNames)
+			} else {
+				nameOrProp := prop
+				if nameOrProp == nil {
+					nameOrProp = name
+				}
+				value = objectAccessor(s, parentID, s.GetType(bindingPattern), nameOrProp)
 			}
-			value := objectAccessor(s, parentID, s.GetType(bindingPattern), nameOrProp)
+			preSpreadNames = append(preSpreadNames, value)
+			if isSpread && IsPossiblyType(s, s.GetType(bindingPattern), IsRobloxType(s)) {
+				s.Diags.Add(DiagNoRestSpreadingOfRobloxTypes(element))
+				continue
+			}
 			id := transformVariable(s, name, value)
 			if bindingElement.Initializer != nil {
 				s.Prereq(transformInitializer(s, id, bindingElement.Initializer))
 			}
 		} else {
-			// if name is not identifier, it must be a binding pattern
-			// in that case, prop is guaranteed to exist
 			if prop == nil {
 				panic("transformer: transformObjectBindingPattern: nested pattern without property name") // upstream assert
 			}
+			if isSpread {
+				panic("transformer: transformObjectBindingPattern: nested spread pattern")
+			}
 			value := objectAccessor(s, parentID, s.GetType(bindingPattern), prop)
+			preSpreadNames = append(preSpreadNames, value)
 			id := s.PushToVar(value, "binding")
 			if bindingElement.Initializer != nil {
 				s.Prereq(transformInitializer(s, id, bindingElement.Initializer))

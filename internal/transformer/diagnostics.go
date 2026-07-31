@@ -156,6 +156,10 @@ func DiagNoSpreadDestructuring(node *ast.Node) Diagnostic {
 	return errorDiag("noSpreadDestructuring", node, "Operator `...` is not supported for destructuring!")
 }
 
+func DiagNoRestSpreadingOfRobloxTypes(node *ast.Node) Diagnostic {
+	return errorDiag("noRestSpreadingOfRobloxTypes", node, "Operator `...` is not allowed on Roblox types!")
+}
+
 func DiagNoFunctionExpressionName(node *ast.Node) Diagnostic {
 	return errorDiag("noFunctionExpressionName", node, "Function expression names are not supported!")
 }

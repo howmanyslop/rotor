@@ -215,6 +215,7 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 	}
 
 	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
+	importPathMap := createCrossProjectImportPathMap(program, !opts.LuaExtension)
 
 	// checkRojoConfig + checkFileName queue project-level diagnostics
 	// (compileFiles.ts L69-75); upstream flushes them only after the emit
@@ -302,8 +303,49 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 			NodeModulesPath:           nodeModulesPath,
 			TypeRoots:                 typeRoots,
 			UseCaseSensitiveFileNames: useCaseSensitiveFileNames,
+			ImportPathMap:             importPathMap,
 		},
 	}, nil, nil
+}
+
+func createCrossProjectImportPathMap(program *compiler.Program, useLuauExtension bool) map[string]string {
+	useCaseSensitiveFileNames := osvfs.FS().UseCaseSensitiveFileNames()
+	result := make(map[string]string)
+	for _, reference := range program.GetResolvedProjectReferences() {
+		if reference == nil {
+			continue
+		}
+		options := reference.CompilerOptions()
+		if options == nil || options.OutDir == "" {
+			continue
+		}
+		rootDirs := options.RootDirs
+		if options.RootDir != "" {
+			rootDirs = []string{options.RootDir}
+		}
+		if len(rootDirs) == 0 {
+			continue
+		}
+		translator := rojo.NewPathTranslator(findAncestorDir(rootDirs), filepath.FromSlash(options.OutDir), "", options.Declaration.IsTrue(), useLuauExtension)
+		for _, fileName := range reference.FileNames() {
+			if !strings.HasSuffix(fileName, ".ts") && !strings.HasSuffix(fileName, ".tsx") {
+				continue
+			}
+			importPath := translator.GetImportPath(fileName, false)
+			canonical := rojo.CanonicalFileName(fileName, useCaseSensitiveFileNames)
+			if _, exists := result[canonical]; !exists {
+				result[canonical] = importPath
+			}
+			if options.Declaration.IsTrue() && !strings.HasSuffix(fileName, ".d.ts") {
+				declarationPath := translator.GetOutputDeclarationPath(fileName)
+				declarationCanonical := rojo.CanonicalFileName(declarationPath, useCaseSensitiveFileNames)
+				if _, exists := result[declarationCanonical]; !exists {
+					result[declarationCanonical] = importPath
+				}
+			}
+		}
+	}
+	return result
 }
 
 // newAssetResolver builds the build-time $asset resolver for one compile pass
@@ -818,7 +860,9 @@ func validateCompilerOptions(options *core.CompilerOptions, projectPath string, 
 		errs = append(errs, `"strict" must be true`)
 	}
 	// L45-47: the target check is commented out upstream — not enforced.
-	if options.Module != core.ModuleKindCommonJS {
+	isCommonJS := options.Module == core.ModuleKindCommonJS
+	isPreserve := options.Module == core.ModuleKindPreserve
+	if !isCommonJS && !isPreserve {
 		errs = append(errs, `"module" must be commonjs`)
 	}
 	if options.ModuleDetection != core.ModuleDetectionKindForce {
@@ -828,7 +872,11 @@ func validateCompilerOptions(options *core.CompilerOptions, projectPath string, 
 	// "node" and "node10" are the two spellings TS5 parses to Node10 —
 	// tsconfig enum values are matched case-insensitively (the same set
 	// SanitizeTSConfig rewrites).
-	if !raw.hasModuleResolution || !isNode10ModuleResolutionText(raw.moduleResolution) {
+	moduleResolutionValid := raw.hasModuleResolution &&
+		!isPreserve && isNode10ModuleResolutionText(raw.moduleResolution)
+	moduleResolutionValid = moduleResolutionValid ||
+		(isPreserve && options.GetModuleResolutionKind() == core.ModuleResolutionKindBundler)
+	if !moduleResolutionValid {
 		errs = append(errs, `"moduleResolution" must be "Node"`)
 	}
 	if options.AllowSyntheticDefaultImports != core.TSTrue {

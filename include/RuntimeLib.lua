@@ -10,6 +10,8 @@ local TS = {}
 
 TS.Promise = Promise
 
+TS.__runtimeScript = script
+
 local function isPlugin(context)
 	return RunService:IsStudio() and context:FindFirstAncestorWhichIsA("Plugin") ~= nil
 end
@@ -86,7 +88,11 @@ function TS.import(context, module, ...)
 	end
 
 	if not registeredLibraries[module] then
-		if _G[module] then
+		local registeredBy = _G[module]
+		if
+			registeredBy ~= nil
+			and (type(registeredBy) ~= "table" or registeredBy.__runtimeScript ~= script)
+		then
 			error(
 				OUTPUT_PREFIX
 				.. "Invalid module access! Do you have multiple TS runtimes trying to import this? "
@@ -138,14 +144,12 @@ function TS.async(callback)
 		local n = select("#", ...)
 		local args = { ... }
 		return Promise.new(function(resolve, reject)
-			coroutine.wrap(function()
-				local ok, result = pcall(callback, unpack(args, 1, n))
-				if ok then
-					resolve(result)
-				else
-					reject(result)
-				end
-			end)()
+			local ok, result = pcall(callback, unpack(args, 1, n))
+			if ok then
+				resolve(result)
+			else
+				reject(result)
+			end
 		end)
 	end
 end

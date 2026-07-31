@@ -51,7 +51,7 @@ checksum:
 
 release:
   github:
-    owner: uproot
+    owner: howmanysmall
     name: rotor
   prerelease: auto
 

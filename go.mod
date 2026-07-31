@@ -1,6 +1,6 @@
 module rotor
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/BurntSushi/toml v1.6.0
@@ -12,9 +12,9 @@ require (
 	github.com/mackerelio/go-osstat v0.2.7
 	github.com/peter-evans/patience v0.3.0
 	github.com/zeebo/xxh3 v1.1.0
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.21.0
 	golang.org/x/sys v0.45.0
-	golang.org/x/text v0.37.0
+	golang.org/x/text v0.39.0
 	gotest.tools/v3 v3.5.2
 )
 

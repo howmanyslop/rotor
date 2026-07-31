@@ -10,6 +10,7 @@ import (
 	"rotor/tsgo/ast"
 	"rotor/tsgo/core"
 	"rotor/tsgo/tspath"
+	"rotor/tsgo/vfs/osvfs"
 )
 
 // nodeModules ports Shared/constants.ts NODE_MODULES.
@@ -136,6 +137,45 @@ func findRelativeRbxPath(moduleOutPath string, pkgRojoResolvers []*rojo.RojoReso
 	return nil, false
 }
 
+func getPathsWithScope(resolver *rojo.RojoResolver, moduleScope string) []string {
+	results := make(map[string]struct{})
+	for _, partition := range resolver.GetPartitions() {
+		normalized := filepath.Clean(partition.FsPath)
+		if strings.HasSuffix(normalized, moduleScope) && !strings.Contains(normalized, nodeModules) {
+			results[normalized] = struct{}{}
+		}
+	}
+	paths := make([]string, 0, len(results))
+	for path := range results {
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func resolveSymlinkedModulePath(nodeModulesPath, moduleOutPath string, useCaseSensitiveFileNames bool) (string, bool) {
+	rel, err := filepath.Rel(nodeModulesPath, moduleOutPath)
+	if err != nil {
+		return "", false
+	}
+	segments := strings.Split(rel, string(filepath.Separator))
+	if len(segments) == 0 {
+		return "", false
+	}
+	packageSegments := 1
+	if strings.HasPrefix(segments[0], "@") {
+		packageSegments = 2
+	}
+	if len(segments) < packageSegments {
+		return "", false
+	}
+	packagePath := filepath.Join(nodeModulesPath, filepath.Join(segments[:packageSegments]...))
+	realPackagePath := filepath.FromSlash(osvfs.FS().Realpath(filepath.ToSlash(packagePath)))
+	if rojo.CanonicalFileName(realPackagePath, useCaseSensitiveFileNames) == rojo.CanonicalFileName(packagePath, useCaseSensitiveFileNames) {
+		return "", false
+	}
+	return filepath.Join(realPackagePath, filepath.Join(segments[packageSegments:]...)), true
+}
+
 // getNodeModulesImportParts ports createImportExpression.ts
 // getNodeModulesImportParts (L70-134).
 func getNodeModulesImportParts(s *State, sourceFile *ast.SourceFile, moduleSpecifier *ast.Node, moduleOutPath string) []luau.Expression {
@@ -178,8 +218,24 @@ func getNodeModulesImportParts(s *State, sourceFile *ast.SourceFile, moduleSpeci
 
 	moduleRbxPath, ok := s.Rojo.Resolver.GetRbxPathFromFilePath(moduleOutPath)
 	if !ok {
-		s.Diags.Add(DiagNoRojoData(moduleSpecifier, relToProject(s, moduleOutPath), true))
-		return []luau.Expression{luau.NewNone()}
+		if resolved, exists := resolveSymlinkedModulePath(s.Rojo.NodeModulesPath, moduleOutPath, s.Rojo.UseCaseSensitiveFileNames); exists {
+			moduleRbxPath, ok = s.Rojo.Resolver.GetRbxPathFromFilePath(resolved)
+		}
+	}
+	if !ok {
+		packageRelativePath := strings.Split(rel, string(filepath.Separator))[1:]
+		for _, scopePath := range getPathsWithScope(s.Rojo.Resolver, moduleScope) {
+			candidate := filepath.Join(scopePath, filepath.Join(packageRelativePath...))
+			if resolvedPath, exists := s.Rojo.Resolver.GetRbxPathFromFilePath(candidate); exists {
+				moduleRbxPath = resolvedPath
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			s.Diags.Add(DiagNoRojoData(moduleSpecifier, relToProject(s, moduleOutPath), true))
+			return []luau.Expression{luau.NewNone()}
+		}
 	}
 
 	indexOfScope := slices.Index(moduleRbxPath, moduleScope)
@@ -285,7 +341,10 @@ func getImportPartsImpl(s *State, sourceFile *ast.SourceFile, moduleSpecifier *a
 		return getNodeModulesImportParts(s, sourceFile, moduleSpecifier, moduleOutPath)
 	}
 
-	moduleOutPath := s.Rojo.PathTranslator.GetImportPath(virtualPath, false)
+	moduleOutPath, ok := s.Rojo.ImportPathMap[rojo.CanonicalFileName(virtualPath, s.Rojo.UseCaseSensitiveFileNames)]
+	if !ok {
+		moduleOutPath = s.Rojo.PathTranslator.GetImportPath(virtualPath, false)
+	}
 	moduleRbxPath, ok := s.Rojo.Resolver.GetRbxPathFromFilePath(moduleOutPath)
 	if !ok {
 		s.Diags.Add(DiagNoRojoData(moduleSpecifier, relToProject(s, moduleOutPath), false))

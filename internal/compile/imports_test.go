@@ -99,6 +99,10 @@ func TestCompileProjectImportsModel(t *testing.T) {
 			"local util = TS.import(script, script.Parent, \"_scratch_util\")\n" +
 			"print(util.VALUE)\n" +
 			"return nil\n",
+		"out/_scratch_eqchain.luau": importsHeaderModel +
+			"local VfxForge = TS.import(script, script.Parent, \"_scratch_eqchain_index\")\n" +
+			"VfxForge.emit(\"effect\")\n" +
+			"return nil\n",
 		// import-equals (entity name): plain aliasing, no import machinery.
 		"out/_scratch_eqns.luau": "-- Compiled with roblox-ts v3.0.0\n" +
 			"local A = Ambient\n" +
