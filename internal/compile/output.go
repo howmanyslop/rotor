@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"rotor/internal/assets"
 	"rotor/internal/includefiles"
@@ -143,19 +144,32 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	}
 	sort.Strings(relOuts)
 
-	for _, relOut := range relOuts {
-		// Defense-in-depth: output paths are derived from source/Rojo path
-		// mappings; refuse any that would escape the project directory.
-		if err := assertLocalOutputPath(relOut); err != nil {
-			return nil, nil, err
+	// The write loop is pure independent file I/O; fan it out across workers
+	// (Windows file writes are ~30x slower per syscall than macOS/APFS, so
+	// sequential writes dominate full-build wall time there). ROTOR_WRITE_WORKERS=1
+	// reproduces the pre-parallel behavior for A/B timing.
+	wrote := make([]bool, len(relOuts))
+	jobs := make([]func() error, len(relOuts))
+	for i, relOut := range relOuts {
+		i, relOut := i, relOut
+		jobs[i] = func() error {
+			// Defense-in-depth: output paths are derived from source/Rojo path
+			// mappings; refuse any that would escape the project directory.
+			if err := assertLocalOutputPath(relOut); err != nil {
+				return err
+			}
+			absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
+			w, err := writeOutputFile(absOut, outputs[relOut], opts.WriteOnlyChanged)
+			wrote[i] = w
+			return err
 		}
-		absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
-		wrote, err := writeOutputFile(absOut, outputs[relOut], opts.WriteOnlyChanged)
-		if err != nil {
-			return nil, nil, err
-		}
-		if wrote {
-			emittedFiles = append(emittedFiles, absOut)
+	}
+	if err := parallelize(writeWorkers(), jobs); err != nil {
+		return nil, nil, err
+	}
+	for i, w := range wrote {
+		if w {
+			emittedFiles = append(emittedFiles, filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOuts[i])))
 		}
 	}
 
@@ -220,7 +234,11 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 	}
 
 	ctx := context.Background()
-	var emittedFiles []string
+	var (
+		emittedMu sync.Mutex
+		emitted   []string
+	)
+	var jobs []func() error
 	for _, sourceFile := range program.SourceFiles() {
 		if sourceFile.IsDeclarationFile || !isCompilableFile(sourceFile.FileName()) {
 			continue
@@ -230,27 +248,35 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 				continue
 			}
 		}
-		result := program.Emit(ctx, compiler.EmitOptions{
-			TargetSourceFile: sourceFile,
-			EmitOnly:         compiler.EmitOnlyDts,
-			WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
-				text = rewriteDeclarationTypeReferences(text)
-				wrote, err := writeOutputFile(filepath.FromSlash(fileName), text, writeOnlyChanged)
-				if !wrote && data != nil {
-					data.SkippedDtsWrite = true
-				}
-				return err
-			},
+		jobs = append(jobs, func() error {
+			result := program.Emit(ctx, compiler.EmitOptions{
+				TargetSourceFile: sourceFile,
+				EmitOnly:         compiler.EmitOnlyDts,
+				WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
+					text = rewriteDeclarationTypeReferences(text)
+					wrote, err := writeOutputFile(filepath.FromSlash(fileName), text, writeOnlyChanged)
+					if !wrote && data != nil {
+						data.SkippedDtsWrite = true
+					}
+					return err
+				},
+			})
+			if result == nil {
+				return nil
+			}
+			if len(result.Diagnostics) > 0 {
+				return errors.New("compile: declaration emit diagnostics")
+			}
+			emittedMu.Lock()
+			emitted = append(emitted, result.EmittedFiles...)
+			emittedMu.Unlock()
+			return nil
 		})
-		if result == nil {
-			continue
-		}
-		if len(result.Diagnostics) > 0 {
-			return nil, errors.New("compile: declaration emit diagnostics")
-		}
-		emittedFiles = append(emittedFiles, result.EmittedFiles...)
 	}
-	return emittedFiles, nil
+	if err := parallelize(writeWorkers(), jobs); err != nil {
+		return nil, err
+	}
+	return emitted, nil
 }
 
 func rewriteDeclarationTypeReferences(text string) string {
@@ -361,6 +387,19 @@ func isOutputFileOrphaned(pathTranslator *rojo.PathTranslator, outPath string) b
 	for _, inputPath := range pathTranslator.GetInputPaths(outPath) {
 		if _, err := os.Stat(inputPath); err == nil {
 			return false
+		}
+	}
+	// `.d.ts.map` (and any `.map`) outputs have no direct reverse mapping, so
+	// they always look orphaned and get deleted on every build — and stay
+	// deleted after a no-op incremental build that writes nothing. When
+	// ROTOR_PRESERVE_DTS_MAPS=1, check the map's base path instead, keeping
+	// the map while its source exists (a map whose source was deleted is
+	// still cleaned up).
+	if os.Getenv("ROTOR_PRESERVE_DTS_MAPS") == "1" && strings.HasSuffix(outPath, ".map") {
+		for _, inputPath := range pathTranslator.GetInputPaths(strings.TrimSuffix(outPath, ".map")) {
+			if _, err := os.Stat(inputPath); err == nil {
+				return false
+			}
 		}
 	}
 	if pathTranslator.BuildInfoOutputPath == outPath {
