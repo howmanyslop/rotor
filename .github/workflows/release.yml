@@ -4,13 +4,6 @@ on:
   push:
     tags:
       - "v*"
-  pull_request:
-    paths:
-      - ".github/workflows/release.yml"
-      - "cmd/**"
-      - "internal/**"
-      - "go.mod"
-      - "go.sum"
   workflow_dispatch:
 
 permissions:
