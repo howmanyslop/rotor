@@ -389,6 +389,19 @@ func isOutputFileOrphaned(pathTranslator *rojo.PathTranslator, outPath string) b
 			return false
 		}
 	}
+	// `.d.ts.map` (and any `.map`) outputs have no direct reverse mapping, so
+	// they always look orphaned and get deleted on every build — and stay
+	// deleted after a no-op incremental build that writes nothing. When
+	// ROTOR_PRESERVE_DTS_MAPS=1, check the map's base path instead, keeping
+	// the map while its source exists (a map whose source was deleted is
+	// still cleaned up).
+	if os.Getenv("ROTOR_PRESERVE_DTS_MAPS") == "1" && strings.HasSuffix(outPath, ".map") {
+		for _, inputPath := range pathTranslator.GetInputPaths(strings.TrimSuffix(outPath, ".map")) {
+			if _, err := os.Stat(inputPath); err == nil {
+				return false
+			}
+		}
+	}
 	if pathTranslator.BuildInfoOutputPath == outPath {
 		return false
 	}
