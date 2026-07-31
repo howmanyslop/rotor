@@ -309,7 +309,7 @@ BSD-3-Clause AND LicenseRef-scancode-google-patent-license-golang
 
 ---------------------------------------------------------
 
-golang.org/x/text v0.37.0 - BSD-3-Clause AND LicenseRef-scancode-google-patent-license-golang
+golang.org/x/text v0.39.0 - BSD-3-Clause AND LicenseRef-scancode-google-patent-license-golang
 
 
 (c) AeHa (c)
@@ -399,4 +399,3 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 ---------------------------------------------------------
-
