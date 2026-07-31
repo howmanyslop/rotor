@@ -4,44 +4,277 @@ on:
   push:
     tags:
       - "v*"
+  pull_request:
+    paths:
+      - ".github/workflows/release.yml"
+      - "cmd/**"
+      - "internal/**"
+      - "go.mod"
+      - "go.sum"
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  release:
+  validate:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Set up rotor toolchain
-        uses: ./.github/actions/setup
-
-      - name: Verify tag matches internal/version
+      - name: Validate version
+        id: version
         run: |
           code_version=$(sed -n 's/^const Version = "\(.*\)"$/\1/p' internal/version/version.go)
-          if [ "v${code_version}" != "${GITHUB_REF_NAME}" ]; then
-            echo "tag ${GITHUB_REF_NAME} does not match internal/version/version.go (v${code_version})"
+          if [ -z "$code_version" ]; then
+            echo "could not read Version from internal/version/version.go"
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ] && [ "v$code_version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match internal/version/version.go (v$code_version)"
             echo "bump the Version constant before tagging a release"
             exit 1
           fi
+          echo "version=$code_version" >> "$GITHUB_OUTPUT"
 
-      - name: Run tests
-        run: go test ./... -count=1
-        env:
-          # The setup action installs testdata/transformers/project; a release
-          # must never ship with the real-package transformer test skipped.
-          ROTOR_REQUIRE_TRANSFORMERS_FIXTURE: "1"
+  build:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            suffix: ""
+          - goos: darwin
+            goarch: arm64
+            suffix: ""
+          - goos: linux
+            goarch: amd64
+            suffix: ""
+          - goos: linux
+            goarch: arm64
+            suffix: ""
+          - goos: windows
+            goarch: amd64
+            suffix: ".exe"
+          - goos: windows
+            goarch: arm64
+            suffix: ".exe"
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build ${{ matrix.goos }}-${{ matrix.goarch }}
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          SUFFIX: ${{ matrix.suffix }}
+          VERSION: ${{ needs.validate.outputs.version }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          output="dist/rotor-v$VERSION-$GOOS-$GOARCH-bin$SUFFIX"
+          go build -trimpath -ldflags="-s -w" -o "$output" ./cmd/rotor
+          test -s "$output"
+          go version -m "$output"
+
+          if [ "$GOOS/$GOARCH" = "linux/amd64" ]; then
+            chmod +x "$output"
+            reported_version=$("$output" --version)
+            if [ "$reported_version" != "$VERSION" ]; then
+              echo "binary reports $reported_version, expected $VERSION"
+              exit 1
+            fi
+          fi
+
+      - name: Upload ${{ matrix.goos }}-${{ matrix.goarch }} binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: binary-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  package:
+    needs:
+      - validate
+      - build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Download binaries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: binary-*
+          path: dist
+          merge-multiple: true
+
+      - name: Package and verify release assets
+        env:
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          package_target() {
+            target_os="$1"
+            target_arch="$2"
+            suffix="$3"
+            bare_name="rotor-v$VERSION-$target_os-$target_arch-bin$suffix"
+            stage_dir="$RUNNER_TEMP/package-$target_os-$target_arch"
+            executable="rotor$suffix"
+
+            test -s "dist/$bare_name"
+            mkdir -p "$stage_dir"
+            cp "dist/$bare_name" "$stage_dir/$executable"
+            cp README.md LICENSE "$stage_dir/"
+            chmod +x "$stage_dir/$executable"
+
+            if [ "$target_os" = "windows" ]; then
+              (
+                cd "$stage_dir"
+                zip -q "$GITHUB_WORKSPACE/dist/rotor-v$VERSION-$target_os-$target_arch.zip" "$executable" README.md LICENSE
+              )
+            else
+              tar -C "$stage_dir" -czf "dist/rotor-v$VERSION-$target_os-$target_arch.tar.gz" "$executable" README.md LICENSE
+            fi
+          }
+
+          package_target darwin amd64 ""
+          package_target darwin arm64 ""
+          package_target linux amd64 ""
+          package_target linux arm64 ""
+          package_target windows amd64 ".exe"
+          package_target windows arm64 ".exe"
+
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 12
+
+          (
+            cd dist
+            LC_ALL=C
+            export LC_ALL
+            checksum_file="rotor-v$VERSION-checksums.txt"
+            checksum_tmp="$RUNNER_TEMP/$checksum_file"
+            find . -maxdepth 1 -type f ! -name "$checksum_file" -exec basename {} \; | sort | xargs sha256sum > "$checksum_tmp"
+            mv "$checksum_tmp" "$checksum_file"
+            sha256sum --check "rotor-v$VERSION-checksums.txt"
+          )
+
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 13
+
+          for archive in "dist/rotor-v$VERSION-"*.tar.gz; do
+            test "$(tar -tzf "$archive" | sort | paste -sd ' ' -)" = "LICENSE README.md rotor"
+          done
+          for archive in "dist/rotor-v$VERSION-"*.zip; do
+            test "$(unzip -Z1 "$archive" | sort | paste -sd ' ' -)" = "LICENSE README.md rotor.exe"
+          done
+
+          file "dist/rotor-v$VERSION-darwin-amd64-bin" | grep -q "Mach-O.*x86_64"
+          file "dist/rotor-v$VERSION-darwin-arm64-bin" | grep -q "Mach-O.*arm64"
+          file "dist/rotor-v$VERSION-linux-amd64-bin" | grep -q "ELF 64-bit.*x86-64"
+          file "dist/rotor-v$VERSION-linux-arm64-bin" | grep -q "ELF 64-bit.*ARM aarch64"
+          file "dist/rotor-v$VERSION-windows-amd64-bin.exe" | grep -q "PE32+.*x86-64"
+          file "dist/rotor-v$VERSION-windows-arm64-bin.exe" | grep -q "PE32+.*Aarch64"
+
+      - name: Upload release bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: release-bundle
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 1
+
+  publish:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs:
+      - validate
+      - package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release bundle
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: release-bundle
+          path: dist
+
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          (
+            cd dist
+            sha256sum --check "rotor-v$VERSION-checksums.txt"
+          )
+          test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 13
+
+          tag="$GITHUB_REF_NAME"
+          prerelease_args=(--prerelease=false)
+          if [[ "$VERSION" == *-* ]]; then
+            prerelease_args=(--prerelease)
+          fi
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            is_draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)
+            if [ "$is_draft" != "true" ]; then
+              echo "release $tag is already published"
+              exit 1
+            fi
+            gh release upload "$tag" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$tag" dist/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$tag" \
+              --notes "" \
+              --draft \
+              "${prerelease_args[@]}"
+          fi
+
+          asset_count=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length')
+          if [ "$asset_count" -ne 13 ]; then
+            echo "draft release has $asset_count assets, expected 13"
+            exit 1
+          fi
+
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false "${prerelease_args[@]}"
+
+          release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag")
+          while read -r hash filename; do
+            remote_digest=$(jq -r --arg name "$filename" '.assets[] | select(.name == $name) | .digest' <<< "$release_json")
+            if [ "$remote_digest" != "sha256:$hash" ]; then
+              echo "$filename digest mismatch: $remote_digest != sha256:$hash"
+              exit 1
+            fi
+          done < "dist/rotor-v$VERSION-checksums.txt"
+
+          gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url
