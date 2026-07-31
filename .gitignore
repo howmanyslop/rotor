@@ -17,3 +17,8 @@ testdata/transformers/project/node_modules/
 testdata/transformers/project/out/
 testdata/transformers/project/include/
 testdata/transformers/project/flamework.build
+.agents/skills/agent-ci/
+.agents/skills/golang-code-style/
+.agents/skills/golang-continuous-integration/
+.agents/skills/golang-error-handling/
+.agents/skills/golang-testing/
