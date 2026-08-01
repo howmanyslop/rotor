@@ -31,9 +31,11 @@ type SolutionProjectState struct {
 }
 
 type SolutionCoordinator struct {
-	graph   *SolutionGraph
-	drainer SolutionProjectDrainer
-	states  map[string]SolutionProjectState
+	graph                *SolutionGraph
+	drainer              SolutionProjectDrainer
+	states               map[string]SolutionProjectState
+	writeRoots           map[string][]string
+	waitOnlyDependencies map[string][]string
 }
 
 type solutionProjectVisit uint8
@@ -122,8 +124,9 @@ func NewSolutionCoordinator(tsConfigPath string, entry ProjectOptions) (*Solutio
 	if err != nil {
 		return nil, err
 	}
-	drainer := &solutionBuildDrainer{importPathMap: populateCrossProjectImportPathMap(graph)}
-	return newSolutionCoordinator(graph, drainer)
+	importPathMap, metadata := populateCrossProjectMetadata(graph)
+	drainer := &solutionBuildDrainer{importPathMap: importPathMap}
+	return newSolutionCoordinator(graph, drainer, metadata)
 }
 
 func NewSolutionCoordinatorWithDrainer(tsConfigPath string, entry ProjectOptions, drainer SolutionProjectDrainer) (*SolutionCoordinator, error) {
@@ -134,15 +137,22 @@ func NewSolutionCoordinatorWithDrainer(tsConfigPath string, entry ProjectOptions
 	if err != nil {
 		return nil, err
 	}
-	return newSolutionCoordinator(graph, drainer)
+	_, metadata := populateCrossProjectMetadata(graph)
+	return newSolutionCoordinator(graph, drainer, metadata)
 }
 
-func newSolutionCoordinator(graph *SolutionGraph, drainer SolutionProjectDrainer) (*SolutionCoordinator, error) {
+func newSolutionCoordinator(graph *SolutionGraph, drainer SolutionProjectDrainer, metadata solutionWriteMetadata) (*SolutionCoordinator, error) {
 	states := make(map[string]SolutionProjectState, len(graph.Projects))
 	for _, project := range graph.Projects {
 		states[project.ConfigPath] = SolutionProjectState{Project: project}
 	}
-	return &SolutionCoordinator{graph: graph, drainer: drainer, states: states}, nil
+	return &SolutionCoordinator{
+		graph:                graph,
+		drainer:              drainer,
+		states:               states,
+		writeRoots:           metadata.writeRoots,
+		waitOnlyDependencies: metadata.waitOnlyDependencies,
+	}, nil
 }
 
 func (c *SolutionCoordinator) Drain() (*BuildResult, []string, error) {
@@ -264,7 +274,10 @@ func (c *SolutionCoordinator) Reload(tsConfigPath string, entry ProjectOptions) 
 	}
 	c.graph = graph
 	c.states = states
-	c.drainer = &solutionBuildDrainer{importPathMap: populateCrossProjectImportPathMap(graph)}
+	importPathMap, metadata := populateCrossProjectMetadata(graph)
+	c.writeRoots = metadata.writeRoots
+	c.waitOnlyDependencies = metadata.waitOnlyDependencies
+	c.drainer = &solutionBuildDrainer{importPathMap: importPathMap}
 	return nil
 }
 
