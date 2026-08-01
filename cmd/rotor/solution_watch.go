@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 
 	"rotor/internal/compile"
@@ -76,21 +77,60 @@ func (s *solutionWatchEvents) add(project string, events []fswatch.Event, watchE
 			s.projects[project] = struct{}{}
 			continue
 		}
-		if s.assets[project] == nil {
-			s.assets[project] = map[string]bool{}
-		}
-		s.assets[project][event.Path] = event.Kind == fswatch.EventDelete
+		s.addAsset(project, event)
 	}
 	if watchErr != nil {
 		s.projects[project] = struct{}{}
 	}
 }
 
+func (s *solutionWatchEvents) addRojo(project string, events []fswatch.Event, watchErr error) {
+	if watchErr != nil && !errors.Is(watchErr, fswatch.ErrOverflow) {
+		return
+	}
+	for _, event := range events {
+		s.paths[event.Path] = struct{}{}
+		if strings.HasSuffix(filepath.Base(event.Path), ".project.json") {
+			s.configs[event.Path] = struct{}{}
+			continue
+		}
+		if !watchCompilable(event.Path) {
+			s.addAsset(project, event)
+		}
+	}
+	if watchErr != nil {
+		s.configs[project] = struct{}{}
+	}
+}
+
+func (s *solutionWatchEvents) addAsset(project string, event fswatch.Event) {
+	if s.assets[project] == nil {
+		s.assets[project] = map[string]bool{}
+	}
+	s.assets[project][event.Path] = event.Kind == fswatch.EventDelete
+}
+
 func solutionWatchDirectories(set compile.SolutionWatchSet) []string {
 	directories := make([]string, 0, len(set.RootDirs)+len(set.RojoDirectories))
 	directories = append(directories, set.RootDirs...)
-	directories = append(directories, set.RojoDirectories...)
+	for _, directory := range set.RojoDirectories {
+		if solutionWatchDirectoryIsArtifact(directory, set.ArtifactDirectories) {
+			continue
+		}
+		directories = append(directories, directory)
+	}
 	return directories
+}
+
+func solutionWatchDirectoryIsArtifact(directory string, artifactDirectories []string) bool {
+	directory = filepath.Clean(directory)
+	for _, artifactDirectory := range artifactDirectories {
+		rel, err := filepath.Rel(filepath.Clean(artifactDirectory), directory)
+		if err == nil && (rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))) {
+			return true
+		}
+	}
+	return false
 }
 
 func runBuildSolutionWatch(tsConfigPath string, opts projectOptions, reload func() (projectOptions, error), wopts watchOptions) int {
@@ -167,14 +207,24 @@ func runBuildSolutionWatch(tsConfigPath string, opts projectOptions, reload func
 		watches = nil
 		for _, set := range coordinator.WatchSets() {
 			project := set.ProjectPath
-			callback := func(events []fswatch.Event, watchErr error) {
+			rootCallback := func(events []fswatch.Event, watchErr error) {
 				mu.Lock()
 				defer mu.Unlock()
 				s.add(project, events, watchErr)
 				gate.Trigger()
 			}
-			for _, root := range solutionWatchDirectories(set) {
-				if watch, watchErr := watcher.WatchDirectory(root, callback, fswatch.WithRecursive()); watchErr == nil {
+			rojoCallback := func(events []fswatch.Event, watchErr error) {
+				mu.Lock()
+				defer mu.Unlock()
+				s.addRojo(project, events, watchErr)
+				gate.Trigger()
+			}
+			for index, directory := range solutionWatchDirectories(set) {
+				callback := rootCallback
+				if index >= len(set.RootDirs) {
+					callback = rojoCallback
+				}
+				if watch, watchErr := watcher.WatchDirectory(directory, callback, fswatch.WithRecursive()); watchErr == nil {
 					watches = append(watches, watch)
 				}
 			}

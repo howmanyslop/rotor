@@ -39,6 +39,7 @@ func TestCompileGate(t *testing.T) {
 func TestSolutionWatchRojoDirectoryAssetEvent(t *testing.T) {
 	project := "/project/tsconfig.json"
 	assetPath := "/project/assets/nested/icon.png"
+	configPath := "/project/assets/nested/subtree.project.json"
 	events := &solutionWatchEvents{
 		projects: map[string]struct{}{},
 		configs:  map[string]struct{}{},
@@ -46,17 +47,50 @@ func TestSolutionWatchRojoDirectoryAssetEvent(t *testing.T) {
 		paths:    map[string]struct{}{},
 	}
 	set := compile.SolutionWatchSet{
-		RootDirs:        []string{"/project/src"},
-		RojoDirectories: []string{"/project/assets"},
+		RootDirs:            []string{"/project/src"},
+		RojoDirectories:     []string{"/project/assets"},
+		ArtifactDirectories: []string{"/project/out", "/project/include", "/project/.rotor"},
 	}
 
-	events.add(project, []fswatch.Event{{Kind: fswatch.EventDelete, Path: assetPath}}, nil)
+	events.addRojo(project, []fswatch.Event{
+		{Kind: fswatch.EventDelete, Path: assetPath},
+		{Kind: fswatch.EventUpdate, Path: configPath},
+		{Kind: fswatch.EventUpdate, Path: "/project/assets/nested/source.ts"},
+	}, nil)
 
 	if got := solutionWatchDirectories(set); !reflect.DeepEqual(got, []string{"/project/src", "/project/assets"}) {
 		t.Fatalf("solutionWatchDirectories() = %v, want root and Rojo directories", got)
 	}
 	if deleted, ok := events.assets[project][assetPath]; !ok || !deleted {
 		t.Fatalf("asset event = %v, want deleted Rojo-directory asset", events.assets)
+	}
+	if _, ok := events.configs[configPath]; !ok {
+		t.Fatalf("configs = %v, want Rojo project config %q", events.configs, configPath)
+	}
+	if len(events.projects) != 0 {
+		t.Fatalf("projects = %v, want no project invalidation for Rojo-directory source event", events.projects)
+	}
+}
+
+func TestWatchExcludesOutDir(t *testing.T) {
+	set := compile.SolutionWatchSet{
+		RootDirs: []string{"/project/src"},
+		RojoDirectories: []string{
+			"/project/assets",
+			"/project/out",
+			"/project/out/nested",
+			"/project/include",
+			"/project/.rotor/cache",
+		},
+		ArtifactDirectories: []string{
+			"/project/out",
+			"/project/include",
+			"/project/.rotor",
+		},
+	}
+
+	if got := solutionWatchDirectories(set); !reflect.DeepEqual(got, []string{"/project/src", "/project/assets"}) {
+		t.Fatalf("solutionWatchDirectories() = %v, want source and asset directories only", got)
 	}
 }
 
