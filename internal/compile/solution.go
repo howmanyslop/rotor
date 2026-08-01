@@ -22,11 +22,12 @@ type SolutionProjectDrainer interface {
 }
 
 type SolutionProjectState struct {
-	Project   SolutionProject
-	Result    *BuildResult
-	UpToDate  bool
-	BlockedBy string
-	Err       error
+	Project        SolutionProject
+	Result         *BuildResult
+	UpToDate       bool
+	BlockedBy      string
+	Err            error
+	forceFullBuild bool
 }
 
 type SolutionCoordinator struct {
@@ -163,6 +164,9 @@ func (c *SolutionCoordinator) Drain() (*BuildResult, []string, error) {
 			continue
 		}
 
+		if state.forceFullBuild {
+			project.Options.forceFullBuild = true
+		}
 		built, messages, err := c.drainer.Drain(project)
 		state.Result = built
 		if built != nil {
@@ -182,6 +186,7 @@ func (c *SolutionCoordinator) Drain() (*BuildResult, []string, error) {
 			state.BlockedBy = ""
 			state.Err = nil
 			state.UpToDate = true
+			state.forceFullBuild = false
 		}
 		c.states[project.ConfigPath] = state
 	}
@@ -201,6 +206,64 @@ func (c *SolutionCoordinator) ProjectState(tsConfigPath string) (SolutionProject
 	}
 	state, ok := c.states[filepath.Clean(configPath)]
 	return state, ok
+}
+
+func (c *SolutionCoordinator) Invalidate(paths ...string) []string {
+	reverse := map[string][]string{}
+	for _, project := range c.graph.Projects {
+		for _, reference := range project.References {
+			reverse[reference] = append(reverse[reference], project.ConfigPath)
+		}
+	}
+	queue := []string{}
+	for _, path := range paths {
+		absolute, err := filepath.Abs(path)
+		if err == nil {
+			if _, ok := c.states[filepath.Clean(absolute)]; ok {
+				queue = append(queue, filepath.Clean(absolute))
+			}
+		}
+	}
+	seen := map[string]struct{}{}
+	for len(queue) > 0 {
+		path := queue[0]
+		queue = queue[1:]
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		queue = append(queue, reverse[path]...)
+	}
+	result := []string{}
+	for _, project := range c.graph.Projects {
+		if _, ok := seen[project.ConfigPath]; ok {
+			state := c.states[project.ConfigPath]
+			state.UpToDate = false
+			state.BlockedBy = ""
+			state.Err = nil
+			state.forceFullBuild = true
+			c.states[project.ConfigPath] = state
+			result = append(result, project.ConfigPath)
+		}
+	}
+	return result
+}
+
+func (c *SolutionCoordinator) Reload(tsConfigPath string, entry ProjectOptions) error {
+	graph, err := BuildSolutionGraph(tsConfigPath, entry)
+	if err != nil {
+		return err
+	}
+	states := make(map[string]SolutionProjectState, len(graph.Projects))
+	for _, project := range graph.Projects {
+		state := c.states[project.ConfigPath]
+		state.Project = project
+		states[project.ConfigPath] = state
+	}
+	c.graph = graph
+	c.states = states
+	c.drainer = &solutionBuildDrainer{importPathMap: populateCrossProjectImportPathMap(graph)}
+	return nil
 }
 
 func (c *SolutionCoordinator) failedDependency(project SolutionProject) string {

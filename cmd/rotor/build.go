@@ -346,6 +346,21 @@ func cmdBuild(args []string) int {
 		out.warn("--writeTransformedFiles is not supported by rotor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
 	}
 	if opts.watch {
+		if parsed.build {
+			reload := func() (projectOptions, error) {
+				declared, err := readRbxtsOptionsChecked(tsConfigPath)
+				if err != nil {
+					return projectOptions{}, err
+				}
+				next := mergeProjectOptions(defaultProjectOptions, declared, &parsed.opts)
+				next.minify = parsed.minify
+				next.emitDeclarationOnly = parsed.emitDeclarationOnly
+				return next, nil
+			}
+			return runBuildSolutionWatch(tsConfigPath, opts, reload, watchOptions{
+				maxErrors: parsed.maxErrors, bell: parsed.bell, clearScreen: parsed.clearScreen,
+			})
+		}
 		return runBuildWatch(dir, tsConfigPath, opts, watchOptions{
 			maxErrors:   parsed.maxErrors,
 			bell:        parsed.bell,

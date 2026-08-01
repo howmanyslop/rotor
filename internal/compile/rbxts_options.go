@@ -20,15 +20,22 @@ type RbxtsOptions struct {
 	OptimizedLoops         *bool
 	Rojo                   *string
 	Type                   *string
+	ConfigFiles            []string
 }
 
 // ReadRbxtsOptions ports getTsConfigProjectOptions: parent `extends` blocks
 // merge first, the child overrides them, and paths resolve at the declaration.
 func ReadRbxtsOptions(tsConfigPath string) (*RbxtsOptions, error) {
-	return readRbxtsOptions(tsConfigPath, make(map[string]struct{}))
+	return readRbxtsOptions(tsConfigPath, make(map[string]struct{}), nil)
 }
 
-func readRbxtsOptions(tsConfigPath string, visited map[string]struct{}) (*RbxtsOptions, error) {
+func ReadRbxtsOptionsWithChain(tsConfigPath string) (*RbxtsOptions, []string, error) {
+	chain := []string{}
+	opts, err := readRbxtsOptions(tsConfigPath, make(map[string]struct{}), &chain)
+	return opts, chain, err
+}
+
+func readRbxtsOptions(tsConfigPath string, visited map[string]struct{}, chain *[]string) (*RbxtsOptions, error) {
 	normalized, err := filepath.Abs(tsConfigPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve tsconfig %q: %w", tsConfigPath, err)
@@ -38,6 +45,9 @@ func readRbxtsOptions(tsConfigPath string, visited map[string]struct{}) (*RbxtsO
 		return nil, nil
 	}
 	visited[normalized] = struct{}{}
+	if chain != nil {
+		*chain = append(*chain, normalized)
+	}
 
 	data, err := os.ReadFile(normalized)
 	if os.IsNotExist(err) {
@@ -58,7 +68,7 @@ func readRbxtsOptions(tsConfigPath string, visited map[string]struct{}) (*RbxtsO
 		if err != nil {
 			return nil, err
 		}
-		inherited, err = readRbxtsOptions(parent, visited)
+		inherited, err = readRbxtsOptions(parent, visited, chain)
 		if err != nil {
 			return nil, err
 		}
@@ -76,7 +86,11 @@ func readRbxtsOptions(tsConfigPath string, visited map[string]struct{}) (*RbxtsO
 	if err != nil {
 		return nil, err
 	}
-	return mergeRbxtsOptions(inherited, current), nil
+	result := mergeRbxtsOptions(inherited, current)
+	if chain != nil && result != nil {
+		result.ConfigFiles = append([]string(nil), (*chain)...)
+	}
+	return result, nil
 }
 
 func resolveExtendsPath(dir, extends string) (string, error) {

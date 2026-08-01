@@ -107,6 +107,9 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			return nil, nil, err
 		}
 		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
+		if opts.forceFullBuild {
+			selectedFiles = sourceFiles
+		}
 	}
 
 	copyFilesGate := loadCopyFilesGatePreBuild(copyFilesGateInputs{

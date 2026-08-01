@@ -492,6 +492,8 @@ type ProjectOptions struct {
 	MinifyOutput bool
 
 	EmitDeclarationOnly bool
+
+	forceFullBuild bool
 }
 
 func ProjectOptionsForReferencedConfig(entry ProjectOptions, tsConfigPath string, inheritEntryTypeAndRojo bool) (ProjectOptions, error) {
