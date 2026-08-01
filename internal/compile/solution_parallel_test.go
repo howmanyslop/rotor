@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -248,9 +249,12 @@ func TestSolutionCoordinatorIndependentFailureBlocksOnlyDependents(t *testing.T)
 	if state, ok := coordinator.ProjectState(filepath.Join(root, "app", "tsconfig.json")); !ok || state.BlockedBy != brokenConfig {
 		t.Fatalf("app state = %+v, found=%t", state, ok)
 	}
-	if got, want := drainer.drainOrder(), []string{"broken", "sibling"}; !reflect.DeepEqual(got, want) {
+	got := drainer.drainOrder()
+	sort.Strings(got)
+	if want := []string{"broken", "sibling"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("first drained projects = %v, want %v", got, want)
 	}
+	firstDrainCount := len(got)
 
 	drainer.mu.Lock()
 	drainer.failures = nil
@@ -258,8 +262,9 @@ func TestSolutionCoordinatorIndependentFailureBlocksOnlyDependents(t *testing.T)
 	if _, _, err := coordinator.Drain(); err != nil {
 		t.Fatalf("Drain after recovery: %v", err)
 	}
-	if got, want := drainer.drainOrder(), []string{"broken", "sibling", "broken", "app"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("drained projects after recovery = %v, want %v", got, want)
+	got = drainer.drainOrder()
+	if want := []string{"broken", "app"}; !reflect.DeepEqual(got[firstDrainCount:], want) {
+		t.Fatalf("drained projects after recovery = %v, want suffix %v", got, want)
 	}
 }
 
