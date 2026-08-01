@@ -3,7 +3,10 @@ package logservice
 import (
 	"bytes"
 	"regexp"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 // capture redirects Output to a buffer for one test and resets the
@@ -86,5 +89,75 @@ func TestBenchmarkIfVerboseSilentWhenNotVerbose(t *testing.T) {
 	}
 	if buf.Len() != 0 {
 		t.Errorf("non-verbose benchmark leaked output: %q", buf.String())
+	}
+}
+
+func TestConcurrentBenchmarkIfVerboseAndWarn(t *testing.T) {
+	buf := capture(t)
+	Verbose = true
+
+	const benchmarkCount = 3
+	names := []string{"compile alpha", "compile beta", "compile gamma"}
+	started := make(chan string, benchmarkCount)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(benchmarkCount)
+
+	for _, name := range names {
+		name := name
+		go func() {
+			defer wg.Done()
+			BenchmarkIfVerbose(name, func() {
+				started <- name
+				<-release
+			})
+		}()
+	}
+
+	for range names {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("benchmark callback did not start")
+		}
+	}
+
+	warnDone := make(chan struct{})
+	go func() {
+		Warn("parallel compile in progress")
+		close(warnDone)
+	}()
+
+	select {
+	case <-warnDone:
+	case <-time.After(time.Second):
+		t.Fatal("Warn blocked while benchmark callbacks were waiting")
+	}
+
+	close(release)
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("benchmark callbacks did not finish")
+	}
+
+	got := buf.String()
+	if count := strings.Count(got, "Compiler Warning: parallel compile in progress\n"); count != 1 {
+		t.Fatalf("warning line count = %d, want 1; output: %q", count, got)
+	}
+	for _, name := range names {
+		line := regexp.MustCompile(`(?m)^` + regexp.QuoteMeta(name) + ` \( \d+ ms \)$`)
+		if !line.MatchString(got) {
+			t.Fatalf("missing benchmark line for %q; output: %q", name, got)
+		}
+	}
+	if strings.Contains(got, "Compiler Warning: parallel compile in progress (") {
+		t.Fatalf("warning glued to benchmark line: %q", got)
 	}
 }
