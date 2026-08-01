@@ -39,10 +39,10 @@ func TestBuildProjectOutputPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, text := range map[string]string{
-		filepath.Join(outDir, "stale.luau"):         "-- stale\n",
-		filepath.Join(outDir, "nested", "old.json"): "{}\n",
-		filepath.Join(outDir, ".git", "keep"):       "keep\n",
-		filepath.Join(outDir, "cache.tsbuildinfo"):  "{}\n",
+		filepath.Join(outDir, "stale.luau"):               "-- stale\n",
+		filepath.Join(outDir, "nested", "old.json"):       "{}\n",
+		filepath.Join(outDir, ".git", "keep"):             "keep\n",
+		filepath.Join(outDir, "cache.rbxtsc.tsbuildinfo"): "{}\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -80,11 +80,73 @@ func TestBuildProjectOutputPipeline(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "out", ".git", "keep")); err != nil {
 		t.Fatalf(".git sentinel missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "out", "cache.tsbuildinfo")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")); err != nil {
 		t.Fatalf("build info missing: %v", err)
 	}
 	if len(result.EmittedFiles) != 1 || filepath.Base(result.EmittedFiles[0]) != "main.luau" {
 		t.Fatalf("EmittedFiles = %v, want only compiled main.luau", result.EmittedFiles)
+	}
+}
+
+func TestRbxtscBuildInfoPath(t *testing.T) {
+	dir := writeProject(t, "@scope/rbxtsc-build-info-fixture", "")
+	enableIncrementalBuilds(t, dir)
+
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("BuildProjectWithOptions: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")); err != nil {
+		t.Fatalf("suffixed build info missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "cache.tsbuildinfo")); !os.IsNotExist(err) {
+		t.Fatalf("unsuffixed build info err = %v, want not-exist", err)
+	}
+}
+
+func TestBuildInfoFailureRollback(t *testing.T) {
+	dir := writeProject(t, "@scope/build-info-rollback-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+
+	buildInfoPath := filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")
+	prior, err := os.ReadFile(buildInfoPath)
+	if err != nil {
+		t.Fatalf("read prior build info: %v", err)
+	}
+	outputPath := filepath.Join(dir, "out", "main.luau")
+	if err := os.Remove(outputPath); err != nil {
+		t.Fatalf("remove output: %v", err)
+	}
+	if err := os.Mkdir(outputPath, 0o755); err != nil {
+		t.Fatalf("make output directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("export const value = 2;\n"), 0o644); err != nil {
+		t.Fatalf("change source: %v", err)
+	}
+
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err == nil {
+		t.Fatal("expected emit failure")
+	}
+	after, err := os.ReadFile(buildInfoPath)
+	if err != nil {
+		t.Fatalf("read rolled-back build info: %v", err)
+	}
+	if string(after) != string(prior) {
+		t.Fatalf("build info changed after failed emit: got %q, want %q", after, prior)
+	}
+}
+
+func TestDuplicateOutputGuard(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "out", "same.luau")
+	second := filepath.Join(dir, "out", ".", "same.luau")
+	if err := rejectDuplicateOutputPaths([]string{first, second}); err == nil {
+		t.Fatal("expected duplicate output error")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out")); !os.IsNotExist(err) {
+		t.Fatalf("output directory err = %v, want not-exist", err)
 	}
 }
 

@@ -15,6 +15,8 @@ const (
 	dExt           = ".d"
 	dtsExt         = dExt + tsExt
 	transformedExt = ".transformed"
+	buildInfoExt   = ".tsbuildinfo"
+	rbxtscInfix    = ".rbxtsc"
 
 	indexName = "index"
 )
@@ -84,10 +86,21 @@ func NewPathTranslator(rootDir, outDir, buildInfoOutputPath string, declaration,
 	return &PathTranslator{
 		RootDir:             rootDir,
 		OutDir:              outDir,
-		BuildInfoOutputPath: buildInfoOutputPath,
+		BuildInfoOutputPath: addRbxtscBuildInfoInfix(buildInfoOutputPath),
 		Declaration:         declaration,
 		UseLuauExtension:    useLuauExtension,
 	}
+}
+
+func addRbxtscBuildInfoInfix(filePath string) string {
+	if !strings.HasSuffix(filePath, buildInfoExt) {
+		return filePath
+	}
+	withoutExt := strings.TrimSuffix(filePath, buildInfoExt)
+	if strings.HasSuffix(withoutExt, rbxtscInfix) {
+		return filePath
+	}
+	return withoutExt + rbxtscInfix + buildInfoExt
 }
 
 func (pt *PathTranslator) getLuauExt() string {

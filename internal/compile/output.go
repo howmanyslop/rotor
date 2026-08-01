@@ -1,14 +1,13 @@
 package compile
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
-	"sync"
 
 	"rotor/internal/assets"
 	"rotor/internal/includefiles"
@@ -16,6 +15,8 @@ import (
 	"rotor/internal/luau/cst"
 	"rotor/internal/rojo"
 	"rotor/tsgo/compiler"
+	"rotor/tsgo/core"
+	"rotor/tsgo/vfs/osvfs"
 )
 
 // assetsLockfileName is the lockfile the $asset pipeline persists (aliased so
@@ -66,6 +67,16 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	}
 
 	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
+	sourceFiles := projectSourceFiles(program)
+	sourceOutputPaths := make([]string, len(sourceFiles))
+	for i, sourceFile := range sourceFiles {
+		sourceOutputPaths[i] = outputPathRelativeToDir(dir, pathTranslator.GetOutputPath(sourceFile.FileName()))
+	}
+	if err := rejectDuplicateOutputPaths(sourceOutputPaths); err != nil {
+		return nil, nil, err
+	}
+	rojoCache := loadRojoCachesPreBuild(dir, opts)
+	opts.rojoCache = rojoCache
 	cleanupOutputs(pathTranslator)
 
 	if err := maybeCopyInclude(dir, opts); err != nil {
@@ -74,8 +85,6 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err := copyNonCompiledFiles(pathTranslator, getRootDirs(program), opts.WriteOnlyChanged); err != nil {
 		return nil, nil, err
 	}
-
-	sourceFiles := projectSourceFiles(program)
 
 	// rotor extension: detect $env usage on the already-loaded source text
 	// (no extra IO; a substring scan per file). Drives the rotor-env.d.ts
@@ -139,11 +148,12 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 
 	emittedFiles := make([]string, 0, len(outputs))
 	relOuts := make([]string, 0, len(outputs))
-	for relOut := range outputs {
-		relOuts = append(relOuts, relOut)
+	for _, sourceFile := range selectedFiles {
+		relOut := outputPathRelativeToDir(dir, pathTranslator.GetOutputPath(sourceFile.FileName()))
+		if _, ok := outputs[relOut]; ok {
+			relOuts = append(relOuts, relOut)
+		}
 	}
-	sort.Strings(relOuts)
-
 	// The write loop is pure independent file I/O; fan it out across workers
 	// (Windows file writes are ~30x slower per syscall than macOS/APFS, so
 	// sequential writes dominate full-build wall time there). ROTOR_WRITE_WORKERS=1
@@ -151,7 +161,6 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	wrote := make([]bool, len(relOuts))
 	jobs := make([]func() error, len(relOuts))
 	for i, relOut := range relOuts {
-		i, relOut := i, relOut
 		jobs[i] = func() error {
 			// Defense-in-depth: output paths are derived from source/Rojo path
 			// mappings; refuse any that would escape the project directory.
@@ -228,16 +237,28 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	}, nil, nil
 }
 
+func loadRojoCachesPreBuild(dir string, opts ProjectOptions) *rojo.RojoResolverCache {
+	rojoConfigPath, _, err := resolveRojoConfigPath(dir, opts.RojoConfigPath)
+	if err != nil || rojoConfigPath == "" {
+		return nil
+	}
+	cache := rojo.NewRojoResolverCache(filepath.Join(filepath.FromSlash(dir), ".rotor", "cache", "rojo"), core.Version())
+	cache.Load(rojoConfigPath)
+	return cache
+}
+
 func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct{}, writeOnlyChanged bool) ([]string, error) {
 	if !program.Options().Declaration.IsTrue() {
 		return nil, nil
 	}
 
 	ctx := context.Background()
-	var (
-		emittedMu sync.Mutex
-		emitted   []string
-	)
+	type declarationWrite struct {
+		path string
+		text string
+		data *compiler.WriteFileData
+	}
+	var pendingByJob [][]declarationWrite
 	var jobs []func() error
 	for _, sourceFile := range program.SourceFiles() {
 		if sourceFile.IsDeclarationFile || !isCompilableFile(sourceFile.FileName()) {
@@ -248,33 +269,63 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 				continue
 			}
 		}
+		jobIndex := len(jobs)
+		pendingByJob = append(pendingByJob, nil)
 		jobs = append(jobs, func() error {
+			var pending []declarationWrite
 			result := program.Emit(ctx, compiler.EmitOptions{
 				TargetSourceFile: sourceFile,
 				EmitOnly:         compiler.EmitOnlyDts,
 				WriteFile: func(fileName string, text string, data *compiler.WriteFileData) error {
 					text = rewriteDeclarationTypeReferences(text)
-					wrote, err := writeOutputFile(filepath.FromSlash(fileName), text, writeOnlyChanged)
-					if !wrote && data != nil {
-						data.SkippedDtsWrite = true
-					}
-					return err
+					pending = append(pending, declarationWrite{path: filepath.FromSlash(fileName), text: text, data: data})
+					return nil
 				},
 			})
+			pendingByJob[jobIndex] = pending
 			if result == nil {
 				return nil
 			}
 			if len(result.Diagnostics) > 0 {
 				return errors.New("compile: declaration emit diagnostics")
 			}
-			emittedMu.Lock()
-			emitted = append(emitted, result.EmittedFiles...)
-			emittedMu.Unlock()
 			return nil
 		})
 	}
 	if err := parallelize(writeWorkers(), jobs); err != nil {
 		return nil, err
+	}
+	var pending []declarationWrite
+	for _, writes := range pendingByJob {
+		pending = append(pending, writes...)
+	}
+	paths := make([]string, len(pending))
+	for i, write := range pending {
+		paths[i] = write.path
+	}
+	if err := rejectDuplicateOutputPaths(paths); err != nil {
+		return nil, err
+	}
+	wrote := make([]bool, len(pending))
+	writeJobs := make([]func() error, len(pending))
+	for i, write := range pending {
+		writeJobs[i] = func() error {
+			var err error
+			wrote[i], err = writeOutputFile(write.path, write.text, writeOnlyChanged)
+			if !wrote[i] && write.data != nil {
+				write.data.SkippedDtsWrite = true
+			}
+			return err
+		}
+	}
+	if err := parallelize(writeWorkers(), writeJobs); err != nil {
+		return nil, err
+	}
+	emitted := make([]string, 0, len(pending))
+	for i, write := range pending {
+		if wrote[i] {
+			emitted = append(emitted, write.path)
+		}
 	}
 	return emitted, nil
 }
@@ -312,9 +363,37 @@ func assertLocalOutputPath(relOut string) error {
 	return nil
 }
 
+func outputPathRelativeToDir(dir, path string) string {
+	relOut, err := filepath.Rel(filepath.FromSlash(dir), filepath.FromSlash(path))
+	if err != nil {
+		relOut = filepath.FromSlash(path)
+	}
+	return filepath.ToSlash(relOut)
+}
+
+func rejectDuplicateOutputPaths(paths []string) error {
+	seen := make(map[string]string, len(paths))
+	caseSensitive := osvfs.FS().UseCaseSensitiveFileNames()
+	for _, path := range paths {
+		absolute, err := filepath.Abs(filepath.FromSlash(path))
+		if err != nil {
+			return fmt.Errorf("compile: resolving output path %q: %w", path, err)
+		}
+		key := filepath.Clean(absolute)
+		if !caseSensitive {
+			key = strings.ToLower(key)
+		}
+		if previous, ok := seen[key]; ok {
+			return fmt.Errorf("compile: duplicate output path detected: %s and %s", previous, path)
+		}
+		seen[key] = path
+	}
+	return nil
+}
+
 func writeOutputFile(path string, text string, writeOnlyChanged bool) (bool, error) {
 	if writeOnlyChanged {
-		if existing, err := os.ReadFile(path); err == nil && string(existing) == text {
+		if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, []byte(text)) {
 			return false, nil
 		}
 	}
@@ -458,7 +537,7 @@ func copyItem(pathTranslator *rojo.PathTranslator, itemPath string, writeOnlyCha
 			if err != nil {
 				return err
 			}
-			if string(existing) == string(incoming) {
+			if bytes.Equal(existing, incoming) {
 				return nil
 			}
 		}

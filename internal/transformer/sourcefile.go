@@ -5,6 +5,7 @@ import (
 
 	"rotor/internal/luau"
 	"rotor/internal/rojo"
+	"rotor/tsgo/ast"
 )
 
 // CompilerVersion is the rbxtsc release rotor targets byte-for-byte. Upstream
@@ -53,6 +54,34 @@ func TransformSourceFile(s *State) *luau.List[luau.Statement] {
 	prependHeader(s, statements)
 
 	return statements
+}
+
+func getExportSyntaxAnchor(exportSymbol *ast.Symbol, sourceFile *ast.SourceFile) *ast.Node {
+	for _, declaration := range exportSymbol.Declarations {
+		if ast.GetSourceFileOfNode(declaration) != sourceFile {
+			continue
+		}
+		if ast.IsExportSpecifier(declaration) || ast.IsExportAssignment(declaration) {
+			return declaration
+		}
+		if statement := ast.FindAncestor(declaration, ast.IsStatement); statement != nil &&
+			ast.HasSyntacticModifier(statement, ast.ModifierFlagsExport) {
+			return statement
+		}
+	}
+
+	for _, declaration := range exportSymbol.Declarations {
+		if ast.GetSourceFileOfNode(declaration) == sourceFile {
+			if statement := ast.FindAncestor(declaration, ast.IsStatement); statement != nil {
+				return statement
+			}
+			return declaration
+		}
+	}
+	if len(exportSymbol.Declarations) > 0 {
+		return exportSymbol.Declarations[0]
+	}
+	return nil
 }
 
 // ensureModuleReturn ports transformSourceFile.ts:213-220: append a plain

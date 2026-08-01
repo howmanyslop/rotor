@@ -59,7 +59,7 @@ class SidecarProjectSession {
     this.ts = ts;
     this.projectDir = normalizePath(projectDir);
     this.tsConfigPath = normalizePath(tsConfigPath);
-    this.documentRegistry = ts.createDocumentRegistry();
+    this.documentRegistry = ts.createDocumentRegistry(ts.sys.useCaseSensitiveFileNames);
     this.overrides = new Map();
     this.actualPaths = new Map();
     this.versions = new Map();
@@ -109,6 +109,9 @@ class SidecarProjectSession {
   updateFile(fileName, text) {
     const actualPath = this.rememberFile(fileName);
     const canonical = this.canonicalize(actualPath);
+    if (this.overrides.get(canonical) === text) {
+      return actualPath;
+    }
     this.overrides.set(canonical, text);
     this.versions.set(canonical, (this.versions.get(canonical) ?? 0) + 1);
     this.projectVersion += 1;

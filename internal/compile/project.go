@@ -182,29 +182,22 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 		return nil, nil, err
 	}
 
-	// createProjectData.ts L33-43: a truthy --rojo overrides discovery
-	// (path.resolve'd); QUIRK: `--rojo ""` (empty string) falls through to
-	// auto-discovery, whose warnings go to LogService.warn (they never fail a
-	// compile upstream).
-	var rojoConfigPath string
-	if opts.RojoConfigPath != "" {
-		abs, err := filepath.Abs(filepath.FromSlash(opts.RojoConfigPath))
-		if err != nil {
-			return nil, nil, err
-		}
-		rojoConfigPath = abs
-	} else {
-		var rojoWarnings []string
-		rojoConfigPath, rojoWarnings = rojo.FindRojoConfigFilePath(filepath.FromSlash(dir))
-		for _, warning := range rojoWarnings {
-			logservice.Warn(warning)
-		}
+	rojoConfigPath, rojoWarnings, err := resolveRojoConfigPath(dir, opts.RojoConfigPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, warning := range rojoWarnings {
+		logservice.Warn(warning)
 	}
 
 	// compileFiles.ts L61-63.
 	var rojoResolver *rojo.RojoResolver
 	if rojoConfigPath != "" {
-		rojoResolver = rojo.FromPath(rojoConfigPath)
+		if opts.rojoCache != nil {
+			rojoResolver = opts.rojoCache.Load(rojoConfigPath)
+		} else {
+			rojoResolver = rojo.FromPath(rojoConfigPath)
+		}
 	} else {
 		rojoResolver = rojo.Synthetic(filepath.FromSlash(outDir))
 	}
@@ -299,13 +292,25 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 			ProjectPath:       filepath.FromSlash(dir),
 
 			PkgRojoResolvers:          pkgRojoResolvers,
-			NodeModulesPathMapping:    createNodeModulesPathMapping(typeRoots, useCaseSensitiveFileNames),
+			NodeModulesPathMapping:    createNodeModulesPathMapping(typeRoots, useCaseSensitiveFileNames, options.CustomConditions),
 			NodeModulesPath:           nodeModulesPath,
 			TypeRoots:                 typeRoots,
 			UseCaseSensitiveFileNames: useCaseSensitiveFileNames,
 			ImportPathMap:             importPathMap,
 		},
 	}, nil, nil
+}
+
+func resolveRojoConfigPath(dir, configuredPath string) (string, []string, error) {
+	if configuredPath == "" {
+		path, warnings := rojo.FindRojoConfigFilePath(filepath.FromSlash(dir))
+		return path, warnings, nil
+	}
+	abs, err := filepath.Abs(filepath.FromSlash(configuredPath))
+	if err != nil {
+		return "", nil, err
+	}
+	return abs, nil, nil
 }
 
 func createCrossProjectImportPathMap(program *compiler.Program, useLuauExtension bool) map[string]string {
@@ -395,51 +400,6 @@ func newAssetResolver(projectDir string) *assetresolve.Resolver {
 	})
 }
 
-// createNodeModulesPathMapping ports
-// Project/functions/createNodeModulesPathMapping.ts: for each package under
-// each typeRoot, map the canonical resolved types/typings entry (.d.ts) to
-// the resolved main entry (the shipped .lua) — only when main is present.
-func createNodeModulesPathMapping(typeRoots []string, useCaseSensitiveFileNames bool) map[string]string {
-	mapping := make(map[string]string)
-	for _, typeRoot := range typeRoots {
-		scopePath := filepath.FromSlash(typeRoot)
-		entries, err := os.ReadDir(scopePath)
-		if err != nil {
-			continue // fs.pathExistsSync guard
-		}
-		for _, entry := range entries {
-			pkgPath := filepath.Join(scopePath, entry.Name())
-			// realPathExistsSync: os.ReadFile follows symlinks; a missing or
-			// unreadable package.json just skips the package.
-			data, err := os.ReadFile(filepath.Join(pkgPath, "package.json"))
-			if err != nil {
-				continue
-			}
-			var pkg struct {
-				Main    string `json:"main"`
-				Typings string `json:"typings"`
-				Types   string `json:"types"`
-			}
-			if json.Unmarshal(data, &pkg) != nil {
-				continue
-			}
-			// both "types" and "typings" are valid
-			typesPath := pkg.Types
-			if typesPath == "" {
-				typesPath = pkg.Typings
-			}
-			if typesPath == "" {
-				typesPath = "index.d.ts"
-			}
-			if pkg.Main != "" {
-				key := rojo.CanonicalFileName(resolveAgainst(pkgPath, typesPath), useCaseSensitiveFileNames)
-				mapping[key] = resolveAgainst(pkgPath, pkg.Main)
-			}
-		}
-	}
-	return mapping
-}
-
 // resolveAgainst mirrors Node path.resolve(base, p) for the two-argument
 // case used above.
 func resolveAgainst(base, p string) string {
@@ -455,6 +415,8 @@ func resolveAgainst(base, p string) string {
 // without any include emission, preserving the original CompileProject
 // behavior (pure: nothing but the returned map is produced).
 type ProjectOptions struct {
+	rojoCache *rojo.RojoResolverCache
+
 	// IncludePath is the raw --includePath value; "" applies upstream's
 	// default of <projectDir>/include (createProjectData.ts L29). It feeds
 	// both the RuntimeLib.lua Rojo-path validation (compileFiles.ts L88-89)

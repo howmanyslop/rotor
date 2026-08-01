@@ -49,6 +49,18 @@ func TestGetOutputPath(t *testing.T) {
 	}
 }
 
+func TestNewPathTranslatorAddsRbxtscBuildInfoInfix(t *testing.T) {
+	path := j("proj", "out", "tsconfig.tsbuildinfo")
+	pt := NewPathTranslator(j("proj", "src"), j("proj", "out"), path, false, true)
+	if want := j("proj", "out", "tsconfig.rbxtsc.tsbuildinfo"); pt.BuildInfoOutputPath != want {
+		t.Fatalf("BuildInfoOutputPath = %q, want %q", pt.BuildInfoOutputPath, want)
+	}
+	pt = NewPathTranslator(j("proj", "src"), j("proj", "out"), pt.BuildInfoOutputPath, false, true)
+	if want := j("proj", "out", "tsconfig.rbxtsc.tsbuildinfo"); pt.BuildInfoOutputPath != want {
+		t.Fatalf("idempotent BuildInfoOutputPath = %q, want %q", pt.BuildInfoOutputPath, want)
+	}
+}
+
 func TestGetOutputPathLuaExtension(t *testing.T) {
 	// useLuauExtension=false -> .lua (PathTranslator.ts L50-52).
 	pt := newTestTranslator(false)

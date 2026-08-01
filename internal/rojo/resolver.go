@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"sort"
 	"strings"
 
 	"rotor/tsgo/vfs/osvfs"
@@ -30,8 +31,10 @@ const (
 	moduleSubExt = ""
 )
 
-var rojoModuleExts = map[string]bool{luauExt: true, jsonExt: true, tomlExt: true}
-var rojoScriptExts = map[string]bool{luauExt: true}
+var (
+	rojoModuleExts = map[string]bool{luauExt: true, jsonExt: true, tomlExt: true}
+	rojoScriptExts = map[string]bool{luauExt: true}
+)
 
 // Config file names (RojoResolver.ts L47-49).
 var rojoFileRegex = regexp.MustCompile(`^.+\.project\.json$`)
@@ -87,8 +90,10 @@ var defaultIsolatedContainers = []RbxPath{
 	{"PluginDebugService"},
 }
 
-var clientContainers = []RbxPath{{"StarterPack"}, {"StarterGui"}, {"StarterPlayer"}}
-var serverContainers = []RbxPath{{"ServerStorage"}, {"ServerScriptService"}}
+var (
+	clientContainers = []RbxPath{{"StarterPack"}, {"StarterGui"}, {"StarterPlayer"}}
+	serverContainers = []RbxPath{{"ServerStorage"}, {"ServerScriptService"}}
+)
 
 // RbxPath is a Roblox instance tree path (RojoResolver.ts L79).
 type RbxPath = []string
@@ -112,6 +117,26 @@ type PartitionInfo struct {
 	FsPath  string
 }
 
+// ResolverFilePathState records one exact filesystem-to-Roblox mapping.
+type ResolverFilePathState struct {
+	Path    string  `json:"path"`
+	RbxPath RbxPath `json:"rbxPath"`
+}
+
+// ResolverState is a deterministic, serializable snapshot of a RojoResolver.
+// Partition order remains unchanged because it determines lookup precedence;
+// exact file mappings are sorted by path because their source is a map.
+type ResolverState struct {
+	Warnings           []string                `json:"warnings"`
+	RbxPath            RbxPath                 `json:"rbxPath"`
+	Partitions         []PartitionInfo         `json:"partitions"`
+	FilePaths          []ResolverFilePathState `json:"filePaths"`
+	IsolatedContainers []RbxPath               `json:"isolatedContainers"`
+	IsGame             bool                    `json:"isGame"`
+	WalkedConfigs      []string                `json:"walkedConfigs"`
+	WalkedDirectories  []string                `json:"walkedDirectories"`
+}
+
 // RojoResolver resolves filesystem paths to Roblox instance tree paths from
 // a Rojo project configuration.
 type RojoResolver struct {
@@ -120,6 +145,8 @@ type RojoResolver struct {
 	partitions           []PartitionInfo
 	filePathToRbxPathMap map[string]RbxPath
 	isolatedContainers   []RbxPath
+	walkedConfigs        []string
+	walkedDirectories    []string
 	// IsGame is true when the tree declares $className "DataModel".
 	IsGame bool
 }
@@ -167,6 +194,63 @@ func FindRojoConfigFilePath(projectPath string) (string, []string) {
 // GetWarnings returns warnings accumulated while parsing configs.
 func (r *RojoResolver) GetWarnings() []string {
 	return r.warnings
+}
+
+// GetState returns a deterministic, independent snapshot of the resolver.
+func (r *RojoResolver) GetState() ResolverState {
+	filePaths := make([]ResolverFilePathState, 0, len(r.filePathToRbxPathMap))
+	for path, rbxPath := range r.filePathToRbxPathMap {
+		filePaths = append(filePaths, ResolverFilePathState{
+			Path:    path,
+			RbxPath: slices.Clone(rbxPath),
+		})
+	}
+	sort.Slice(filePaths, func(i, j int) bool {
+		return filePaths[i].Path < filePaths[j].Path
+	})
+
+	partitions := make([]PartitionInfo, len(r.partitions))
+	for i, partition := range r.partitions {
+		partitions[i] = PartitionInfo{
+			FsPath:  partition.FsPath,
+			RbxPath: slices.Clone(partition.RbxPath),
+		}
+	}
+
+	return ResolverState{
+		Warnings:           slices.Clone(r.warnings),
+		RbxPath:            slices.Clone(r.rbxPath),
+		Partitions:         partitions,
+		FilePaths:          filePaths,
+		IsolatedContainers: cloneRbxPaths(r.isolatedContainers),
+		IsGame:             r.IsGame,
+		WalkedConfigs:      sortedStrings(r.walkedConfigs),
+		WalkedDirectories:  sortedStrings(r.walkedDirectories),
+	}
+}
+
+// FromState restores a resolver from a ResolverState snapshot.
+func FromState(state ResolverState) *RojoResolver {
+	r := &RojoResolver{
+		warnings:             slices.Clone(state.Warnings),
+		rbxPath:              slices.Clone(state.RbxPath),
+		partitions:           make([]PartitionInfo, len(state.Partitions)),
+		filePathToRbxPathMap: make(map[string]RbxPath, len(state.FilePaths)),
+		isolatedContainers:   cloneRbxPaths(state.IsolatedContainers),
+		walkedConfigs:        sortedStrings(state.WalkedConfigs),
+		walkedDirectories:    sortedStrings(state.WalkedDirectories),
+		IsGame:               state.IsGame,
+	}
+	for i, partition := range state.Partitions {
+		r.partitions[i] = PartitionInfo{
+			FsPath:  partition.FsPath,
+			RbxPath: slices.Clone(partition.RbxPath),
+		}
+	}
+	for _, filePath := range state.FilePaths {
+		r.filePathToRbxPathMap[filePath.Path] = slices.Clone(filePath.RbxPath)
+	}
+	return r
 }
 
 func (r *RojoResolver) warn(str string) {
@@ -226,6 +310,7 @@ func FromTree(basePath string, tree *Tree) *RojoResolver {
 // try/finally validates undefined) and, unlike upstream, does not re-throw.
 func (r *RojoResolver) parseConfig(rojoConfigFilePath string, doNotPush bool) {
 	realPath := realpathOr(rojoConfigFilePath)
+	r.walkConfig(realPath)
 	if !pathExists(realPath) {
 		r.warn(`RojoResolver: Path does not exist "` + rojoConfigFilePath + `"`)
 		return
@@ -282,6 +367,9 @@ func (r *RojoResolver) parsePath(itemPath string) {
 		if st, err := os.Stat(realPath); err == nil && st.IsDir() {
 			isDirectory = true
 		}
+		if isDirectory {
+			r.walkDirectory(realPath)
+		}
 		if isDirectory && dirContains(realPath, rojoDefaultName) {
 			r.parseConfig(filepath.Join(itemPath, rojoDefaultName), true)
 		} else {
@@ -303,6 +391,7 @@ func (r *RojoResolver) parsePath(itemPath string) {
 // directory's own name.
 func (r *RojoResolver) searchDirectory(directory, item string) {
 	realPath := realpathOr(directory)
+	r.walkDirectory(realPath)
 	entries, err := os.ReadDir(realPath)
 	if err != nil {
 		return
@@ -344,6 +433,31 @@ func (r *RojoResolver) searchDirectory(directory, item string) {
 	if item != "" {
 		r.rbxPath = r.rbxPath[:len(r.rbxPath)-1]
 	}
+}
+
+func (r *RojoResolver) walkConfig(path string) {
+	r.walkedConfigs = append(r.walkedConfigs, filepath.Clean(path))
+}
+
+func (r *RojoResolver) walkDirectory(path string) {
+	r.walkedDirectories = append(r.walkedDirectories, filepath.Clean(path))
+}
+
+func cloneRbxPaths(paths []RbxPath) []RbxPath {
+	cloned := make([]RbxPath, len(paths))
+	for i, path := range paths {
+		cloned[i] = slices.Clone(path)
+	}
+	return cloned
+}
+
+func sortedStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	sorted := slices.Clone(values)
+	sort.Strings(sorted)
+	return slices.Compact(sorted)
 }
 
 // entryKind reports whether a directory entry resolves to a directory or a

@@ -49,8 +49,9 @@ func ChooseExportShape(hasExportEquals, hasExportFrom, hasMutableExports, hasImm
 }
 
 type exportPair struct {
-	name string
-	id   luau.AnyIdentifier
+	name   string
+	id     luau.AnyIdentifier
+	symbol *ast.Symbol
 }
 
 // handleExports ports transformSourceFile.ts handleExports (lines 94-189):
@@ -90,7 +91,7 @@ func handleExports(s *State, sourceFile *ast.SourceFile, symbol *ast.Symbol, sta
 				continue
 			}
 			name, id := getExportPair(s, exportSymbol)
-			exportPairs = append(exportPairs, exportPair{name, id})
+			exportPairs = append(exportPairs, exportPair{name: name, id: id, symbol: exportSymbol})
 		}
 	}
 
@@ -112,11 +113,16 @@ func handleExports(s *State, sourceFile *ast.SourceFile, symbol *ast.Symbol, sta
 			luau.NewMap(luau.NewList[*luau.MapField]()),
 		))
 		for _, pair := range exportPairs {
-			statements.Push(luau.NewAssignment(
+			assignment := luau.NewAssignment(
 				luau.GlobalProperty("exports", pair.name),
 				"=",
 				pair.id,
-			))
+			)
+			if anchor := getExportSyntaxAnchor(pair.symbol, sourceFile); anchor != nil {
+				s.setSourcePosition(assignment, s.getOriginalSourcePosition(anchor, false))
+				s.setSourceEndPosition(assignment, s.getOriginalSourcePosition(anchor, true))
+			}
+			statements.Push(assignment)
 		}
 		statements.Push(luau.NewReturn(luau.GlobalID("exports")))
 

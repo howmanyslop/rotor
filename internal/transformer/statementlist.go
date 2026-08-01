@@ -54,6 +54,8 @@ func TransformStatementList(s *State, parent *ast.Node, statements []*ast.Node, 
 			result.Push(hoist)
 		}
 
+		s.setStatementListSourcePositions(prereqs, statement)
+		s.setStatementListSourcePositions(transformed, statement)
 		result.PushList(prereqs)
 		lastNode := transformed.Tail
 		result.PushList(transformed)
@@ -64,11 +66,13 @@ func TransformStatementList(s *State, parent *ast.Node, statements []*ast.Node, 
 
 		if exportInfo != nil {
 			for _, exportName := range exportInfo.Mapping[statement] {
-				result.Push(luau.NewAssignment(
+				assignment := luau.NewAssignment(
 					luau.NewPropertyAccess(exportInfo.ID, exportName),
 					"=",
 					luau.ID(exportName),
-				))
+				)
+				s.setSourcePosition(assignment, s.getOriginalSourcePosition(statement, false))
+				result.Push(assignment)
 			}
 		}
 	}
