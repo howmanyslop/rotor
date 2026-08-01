@@ -347,15 +347,6 @@ func effectiveSolutionBuilders(entry ProjectOptions) int {
 	return *entry.Builders
 }
 
-func (c *SolutionCoordinator) failedDependency(project SolutionProject) string {
-	for _, reference := range project.References {
-		if state, ok := c.states[reference]; ok && state.Err != nil {
-			return reference
-		}
-	}
-	return ""
-}
-
 func BuildSolutionWithOptions(tsConfigPath string, entry ProjectOptions) (*BuildResult, []string, error) {
 	coordinator, err := NewSolutionCoordinator(tsConfigPath, entry)
 	if err != nil {
