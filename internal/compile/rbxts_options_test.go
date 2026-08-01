@@ -143,6 +143,30 @@ func TestRbxtsOptionsValidation(t *testing.T) {
 	}
 }
 
+func TestRbxtsOptionsRejectsExtendsCycle(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	first := filepath.Join(dir, "first.json")
+	second := filepath.Join(dir, "second.json")
+	if err := os.WriteFile(first, []byte(`{"extends":"./second.json"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(second, []byte(`{"extends":"./first.json"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	_, err := ReadRbxtsOptions(first)
+
+	// Then
+	if err == nil {
+		t.Fatal("ReadRbxtsOptions succeeded for an extends cycle")
+	}
+	if !strings.Contains(err.Error(), "cycle") || !strings.Contains(err.Error(), first) {
+		t.Fatalf("cycle error = %q, want the cycle and repeated config", err)
+	}
+}
+
 func TestPerProjectRbxtsOptions(t *testing.T) {
 	// Given
 	dir := t.TempDir()

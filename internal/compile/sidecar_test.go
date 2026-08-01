@@ -1,6 +1,9 @@
 package compile
 
 import (
+	"bufio"
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -130,6 +133,48 @@ func TestBuildProjectWithoutPluginsDoesNotRequireNode(t *testing.T) {
 	}
 	if result == nil {
 		t.Fatal("nil result")
+	}
+}
+
+func TestSidecarRoundTripTimesOut(t *testing.T) {
+	// Given
+	t.Setenv(sidecarResponseTimeoutEnv, "10ms")
+	timeout, err := sidecarResponseTimeout()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdinReader, stdinWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stdinReader.Close() })
+	t.Cleanup(func() { _ = stdinWriter.Close() })
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = stdoutReader.Close() })
+	t.Cleanup(func() { _ = stdoutWriter.Close() })
+	session := &sidecarSession{
+		stdin:  stdinWriter,
+		stdout: bufio.NewReader(stdoutReader),
+		stderr: newSidecarStderrTail(strings.NewReader("")),
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), timeout)
+	defer cancel()
+
+	// When
+	_, err = session.roundTrip(ctx, sidecarRequest{})
+
+	// Then
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("roundTrip error = %v, want context deadline exceeded", err)
+	}
+	if !strings.Contains(err.Error(), "response timed out") {
+		t.Fatalf("roundTrip error = %q, want timeout context", err)
+	}
+	if !session.dead {
+		t.Fatal("timed-out sidecar session remains reusable")
 	}
 }
 

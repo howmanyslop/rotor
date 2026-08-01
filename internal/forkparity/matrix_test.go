@@ -9,6 +9,14 @@ import (
 func TestDivergenceLedgerCoversMatrixCases(t *testing.T) {
 	// Given
 	ledgerPath := filepath.Join(repoRoot(t), "testdata", "forkparity", "divergence-ledger.json")
+	transformerFixtures, err := LoadTransformerFixtures(repoRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectFixtures, err := LoadProjectFixtures(repoRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// When
 	ledger, err := ReadDivergenceLedger(ledgerPath)
@@ -17,7 +25,7 @@ func TestDivergenceLedgerCoversMatrixCases(t *testing.T) {
 	}
 
 	// Then
-	if err := ledger.Validate(AllMatrixCaseIDs()); err != nil {
+	if err := ledger.Validate(matrixCaseIDs(transformerFixtures, projectFixtures)); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -45,7 +53,7 @@ func TestDivergenceLedgerRejectsUnknownMatrixCase(t *testing.T) {
 	}
 }
 
-func TestCompareMatrixObservationsAttributesEveryDrift(t *testing.T) {
+func TestMatrixArtifactDrift(t *testing.T) {
 	// Given
 	want := MatrixObservation{
 		ExitCode:    0,

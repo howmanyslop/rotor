@@ -87,10 +87,15 @@ func TestCopyFilesGate(t *testing.T) {
 	if cold.SkipCleanup || cold.SkipCopyFiles {
 		t.Fatalf("cold gate = %+v, want both skips false", cold)
 	}
-	cold.Persist()
+	if err := cold.Persist(); err != nil {
+		t.Fatal(err)
+	}
 	warm := loadCopyFilesGatePreBuild(inputs(BuildStateSnapshot{}))
 	if !warm.SkipCleanup || !warm.SkipCopyFiles {
 		t.Fatalf("warm gate = %+v, want both skips true", warm)
+	}
+	if warm.Persist != nil {
+		t.Fatal("warm gate rewrites an unchanged manifest")
 	}
 
 	changed := loadCopyFilesGatePreBuild(inputs(BuildStateSnapshot{
@@ -115,6 +120,29 @@ func TestCopyFilesGate(t *testing.T) {
 	missingDest := loadCopyFilesGatePreBuild(inputs(BuildStateSnapshot{}))
 	if missingDest.SkipCopyFiles {
 		t.Fatal("missing destination incorrectly skipped copy")
+	}
+}
+
+func TestCopyFilesGatePersistPropagatesManifestWriteErrors(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	rootDir := filepath.Join(dir, "src")
+	outDir := filepath.Join(dir, "out")
+	writeCopyFilesTestFile(t, filepath.Join(rootDir, "asset.luau"), "asset")
+	writeCopyFilesTestFile(t, outDir, "not a directory")
+	translator := rojo.NewPathTranslator(rootDir, outDir, "", false, true)
+
+	// When
+	gate := loadCopyFilesGatePreBuild(copyFilesGateInputs{
+		RootDirs:       []string{rootDir},
+		OutDir:         outDir,
+		PathTranslator: translator,
+	})
+	err := gate.Persist()
+
+	// Then
+	if err == nil {
+		t.Fatal("Persist succeeded with a file in place of the output directory")
 	}
 }
 

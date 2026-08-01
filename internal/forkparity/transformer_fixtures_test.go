@@ -14,15 +14,18 @@ var ansiEscapeSequence = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
 func TestTransformerFixtureProvenance(t *testing.T) {
 	t.Parallel()
 
-	provenance := TransformerFixtureProvenance()
+	provenance, err := TransformerFixtureProvenance(repoRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if provenance.ZipDigest != committedZipDigest {
 		t.Fatalf("zip digest = %q, want %q", provenance.ZipDigest, committedZipDigest)
 	}
-	if provenance.ExtractionCommand == "" {
-		t.Fatal("extraction command is empty")
+	if provenance.CaptureCommand == "" {
+		t.Fatal("capture command is empty")
 	}
-	if provenance.CompilerInvocation == "" {
-		t.Fatal("compiler invocation is empty")
+	if provenance.CompilerVersion != expectedPackageName+"@"+expectedPackageVer {
+		t.Fatalf("compiler version = %q", provenance.CompilerVersion)
 	}
 }
 
@@ -44,7 +47,11 @@ func TestTransformerOracleGoldens(t *testing.T) {
 		ForkCLIPath: filepath.Join(extractDir, "roblox-ts", "dist", "CLI", "cli.cjs"),
 	}
 
-	for _, fixture := range AllTransformerFixtures() {
+	fixtures, err := LoadTransformerFixtures(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range fixtures {
 		t.Run(fixture.Name, func(t *testing.T) {
 			// Given
 			fixtureDir := writeTransformerFixture(t, nodeModules, fixture.TSCode)

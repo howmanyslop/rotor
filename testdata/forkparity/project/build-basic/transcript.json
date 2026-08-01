@@ -1,0 +1,19 @@
+{
+  "description": "Single-project compilation through the build command",
+  "category": "build-mode",
+  "expectedExitCode": 0,
+  "artifactChecks": {
+    "requireLuau": true,
+    "requireSourceMap": false
+  },
+  "invocations": [
+    {
+      "name": "build",
+      "arguments": [
+        "build",
+        "--project",
+        "."
+      ]
+    }
+  ]
+}

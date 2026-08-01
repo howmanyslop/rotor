@@ -1,0 +1,23 @@
+{
+  "description": "Referenced library imports through generated and hand-authored declarations",
+  "category": "cross-project",
+  "expectedExitCode": 0,
+  "artifactChecks": {
+    "requireLuau": true,
+    "requiredSuffixes": [
+      ".d.ts"
+    ],
+    "requireSourceMap": false
+  },
+  "invocations": [
+    {
+      "name": "build",
+      "arguments": [
+        "build",
+        "--project",
+        ".",
+        "--build"
+      ]
+    }
+  ]
+}

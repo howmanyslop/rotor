@@ -26,8 +26,17 @@ func TestFullForkParity(t *testing.T) {
 	if !report.ZeroDrift {
 		t.Fatalf("full fork parity drift:\n%s", report.String())
 	}
-	if len(report.Rows) != len(AllMatrixCaseIDs()) {
-		t.Fatalf("matrix report rows = %d, want %d", len(report.Rows), len(AllMatrixCaseIDs()))
+	transformerFixtures, err := LoadTransformerFixtures(runner.RepoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectFixtures, err := LoadProjectFixtures(runner.RepoRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caseIDs := matrixCaseIDs(transformerFixtures, projectFixtures)
+	if len(report.Rows) != len(caseIDs) {
+		t.Fatalf("matrix report rows = %d, want %d", len(report.Rows), len(caseIDs))
 	}
 	for _, row := range report.Rows {
 		if row.Surface == "" || row.Contract == "" || row.Verification == "" {

@@ -1,0 +1,47 @@
+{
+  "fixtures": [
+    {
+      "name": "array-rest",
+      "category": "spread-destructuring"
+    },
+    {
+      "name": "object-rest",
+      "category": "spread-destructuring"
+    },
+    {
+      "name": "iterable-rest",
+      "category": "spread-destructuring"
+    },
+    {
+      "name": "varargs-optimization",
+      "category": "varargs"
+    },
+    {
+      "name": "bitwise-flatten-and-compound",
+      "category": "bitwise"
+    },
+    {
+      "name": "shared-table-iteration",
+      "category": "shared-table"
+    },
+    {
+      "name": "range-literal-step",
+      "category": "range"
+    },
+    {
+      "name": "nullable-lua-tuple",
+      "category": "lua-tuple"
+    },
+    {
+      "name": "bigint-property-diagnostic",
+      "category": "diagnostics",
+      "diagnostics": [
+        "TS1539: A 'bigint' literal cannot be used as a property name."
+      ]
+    },
+    {
+      "name": "runtime-import",
+      "category": "runtime"
+    }
+  ]
+}

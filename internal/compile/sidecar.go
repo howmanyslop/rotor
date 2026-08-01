@@ -3,6 +3,7 @@ package compile
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,6 +25,10 @@ import (
 	"rotor/tsgo/vfs/osvfs"
 	"rotor/tsgo/vfs/wrapvfs"
 )
+
+const defaultSidecarResponseTimeout = 30 * time.Second
+
+const sidecarResponseTimeoutEnv = "ROTOR_SIDECAR_TIMEOUT"
 
 type sidecarRequest struct {
 	Protocol         int                  `json:"protocol"`
@@ -290,17 +295,35 @@ func spawnSidecarSession(dir, sidecarDir string) (*sidecarSession, error) {
 	}, nil
 }
 
-func (s *sidecarSession) roundTrip(request sidecarRequest) (*sidecarResponse, error) {
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.stdin.Write(append(payload, '\n')); err != nil {
-		return nil, s.fail(err)
-	}
-	line, err := s.stdout.ReadBytes('\n')
-	if err != nil {
-		return nil, s.fail(err)
+type sidecarRoundTripResult struct {
+	line []byte
+	err  error
+}
+
+func (s *sidecarSession) roundTrip(ctx context.Context, request sidecarRequest) (*sidecarResponse, error) {
+	result := make(chan sidecarRoundTripResult, 1)
+	go func() {
+		payload, err := json.Marshal(request)
+		if err == nil {
+			_, err = s.stdin.Write(append(payload, '\n'))
+		}
+		if err != nil {
+			result <- sidecarRoundTripResult{err: err}
+			return
+		}
+		line, err := s.stdout.ReadBytes('\n')
+		result <- sidecarRoundTripResult{line: line, err: err}
+	}()
+
+	var line []byte
+	select {
+	case response := <-result:
+		if response.err != nil {
+			return nil, s.fail(response.err)
+		}
+		line = response.line
+	case <-ctx.Done():
+		return nil, s.fail(fmt.Errorf("transformer sidecar response timed out: %w", ctx.Err()))
 	}
 	var response sidecarResponse
 	if err := json.Unmarshal(bytes.TrimSpace(line), &response); err != nil {
@@ -312,9 +335,21 @@ func (s *sidecarSession) roundTrip(request sidecarRequest) (*sidecarResponse, er
 func (s *sidecarSession) fail(err error) error {
 	s.dead = true
 	if tail := s.stderr.String(); tail != "" {
-		return fmt.Errorf("transformer sidecar failed: %s", strings.TrimSpace(tail))
+		return fmt.Errorf("transformer sidecar failed: %w: %s", err, strings.TrimSpace(tail))
 	}
 	return err
+}
+
+func sidecarResponseTimeout() (time.Duration, error) {
+	configured := os.Getenv(sidecarResponseTimeoutEnv)
+	if configured == "" {
+		return defaultSidecarResponseTimeout, nil
+	}
+	timeout, err := time.ParseDuration(configured)
+	if err != nil || timeout <= 0 {
+		return 0, fmt.Errorf("invalid %s value %q", sidecarResponseTimeoutEnv, configured)
+	}
+	return timeout, nil
 }
 
 func (s *sidecarSession) close() {
@@ -362,6 +397,10 @@ func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*a
 	if err != nil {
 		return nil, err
 	}
+	timeout, err := sidecarResponseTimeout()
+	if err != nil {
+		return nil, err
+	}
 
 	key := normalizeSourceFilePath(dir) + "|" + normalizeSourceFilePath(configPath)
 	sidecarMu.Lock()
@@ -400,11 +439,16 @@ func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*a
 			request.CompileFileNames = append(request.CompileFileNames, filepath.FromSlash(sourceFile.FileName()))
 		}
 
-		response, err := session.roundTrip(request)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		response, err := session.roundTrip(ctx, request)
+		cancel()
 		session.stderr.drainTo()
 		if err != nil {
 			delete(sidecarSessions, key)
 			session.close()
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
 			if attempt == 0 {
 				continue
 			}

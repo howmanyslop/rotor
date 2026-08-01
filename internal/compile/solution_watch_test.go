@@ -74,6 +74,56 @@ func TestTsconfigChainReload(t *testing.T) {
 	}
 }
 
+func TestTsconfigChainReloadCleansStaleLuaExtension(t *testing.T) {
+	root := t.TempDir()
+	childDir := filepath.Join(root, "child")
+	rootConfig := filepath.Join(root, "tsconfig.json")
+	childConfig := filepath.Join(childDir, "tsconfig.json")
+	baseConfig := filepath.Join(root, "base.json")
+	writeSolutionConfig(t, root, "tsconfig.json", []string{"./child"}, true)
+	writeBuildableSolutionProject(t, childDir)
+	childContents := string(mustReadFile(t, childConfig))
+	if err := os.WriteFile(childConfig, []byte(`{"extends":"../base.json",`+childContents[1:]), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(baseConfig, []byte(`{"rbxts":{"luau":true}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	coordinator, err := NewSolutionCoordinator(rootConfig, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("NewSolutionCoordinator: %v", err)
+	}
+	if _, messages, err := coordinator.Drain(); err != nil {
+		t.Fatalf("initial Drain: %v (%v)", err, messages)
+	}
+	oldOutput := filepath.Join(childDir, "out", "main.luau")
+	if _, err := os.Stat(oldOutput); err != nil {
+		t.Fatalf("initial output: %v", err)
+	}
+
+	if err := os.WriteFile(baseConfig, []byte(`{"rbxts":{"luau":false}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cleanStaleOutputs, err := coordinator.ReloadForWatch(rootConfig, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("ReloadForWatch: %v", err)
+	}
+	coordinator.Invalidate(childConfig)
+	if _, messages, err := coordinator.Drain(); err != nil {
+		t.Fatalf("reloaded Drain: %v (%v)", err, messages)
+	}
+	if err := cleanStaleOutputs(); err != nil {
+		t.Fatalf("clean stale outputs: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(childDir, "out", "main.lua")); err != nil {
+		t.Fatalf("new extension output: %v", err)
+	}
+	if _, err := os.Stat(oldOutput); !os.IsNotExist(err) {
+		t.Fatalf("old extension output stat error = %v, want not exists", err)
+	}
+}
+
 func TestWatchAssetDrain(t *testing.T) {
 	root, libDir, _ := writeCrossProjectSolution(t)
 	libConfig := filepath.Join(libDir, "tsconfig.json")

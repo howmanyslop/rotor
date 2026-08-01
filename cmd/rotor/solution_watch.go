@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"sync"
@@ -65,6 +66,33 @@ type solutionWatchEvents struct {
 	paths    map[string]struct{}
 }
 
+func (s *solutionWatchEvents) add(project string, events []fswatch.Event, watchErr error) {
+	if watchErr != nil && !errors.Is(watchErr, fswatch.ErrOverflow) {
+		return
+	}
+	for _, event := range events {
+		s.paths[event.Path] = struct{}{}
+		if watchCompilable(event.Path) {
+			s.projects[project] = struct{}{}
+			continue
+		}
+		if s.assets[project] == nil {
+			s.assets[project] = map[string]bool{}
+		}
+		s.assets[project][event.Path] = event.Kind == fswatch.EventDelete
+	}
+	if watchErr != nil {
+		s.projects[project] = struct{}{}
+	}
+}
+
+func solutionWatchDirectories(set compile.SolutionWatchSet) []string {
+	directories := make([]string, 0, len(set.RootDirs)+len(set.RojoDirectories))
+	directories = append(directories, set.RootDirs...)
+	directories = append(directories, set.RojoDirectories...)
+	return directories
+}
+
 func runBuildSolutionWatch(tsConfigPath string, opts projectOptions, reload func() (projectOptions, error), wopts watchOptions) int {
 	s := &solutionWatchEvents{projects: map[string]struct{}{}, configs: map[string]struct{}{}, assets: map[string]map[string]bool{}, paths: map[string]struct{}{}}
 	coordinator, err := compile.NewSolutionCoordinator(tsConfigPath, projectCompileOptions(tsConfigPath, opts))
@@ -77,6 +105,8 @@ func runBuildSolutionWatch(tsConfigPath string, opts projectOptions, reload func
 	watcher := fswatch.Default()
 	refresh := func() {}
 	cycle := func() {
+		var cleanStaleOutputs func() error
+		var reloadErr error
 		mu.Lock()
 		events := *s
 		s = &solutionWatchEvents{projects: map[string]struct{}{}, configs: map[string]struct{}{}, assets: map[string]map[string]bool{}, paths: map[string]struct{}{}}
@@ -95,7 +125,8 @@ func runBuildSolutionWatch(tsConfigPath string, opts projectOptions, reload func
 			} else {
 				opts = next
 			}
-			if reloadErr := coordinator.Reload(tsConfigPath, projectCompileOptions(tsConfigPath, opts)); reloadErr != nil {
+			cleanStaleOutputs, reloadErr = coordinator.ReloadForWatch(tsConfigPath, projectCompileOptions(tsConfigPath, opts))
+			if reloadErr != nil {
 				fmt.Fprintln(stderrWriter{}, reloadErr)
 				return
 			}
@@ -111,6 +142,9 @@ func runBuildSolutionWatch(tsConfigPath string, opts projectOptions, reload func
 		}
 		if len(events.projects) > 0 || len(events.configs) > 0 {
 			result, diags, drainErr := coordinator.Drain()
+			if drainErr == nil && len(events.configs) > 0 {
+				drainErr = cleanStaleOutputs()
+			}
 			reportBuildPass(newUI(fmtWriter{}), result, diagsToInfos(diags), 0, drainErr, &watchStats{maxErrors: wopts.maxErrors})
 			refresh()
 		}
@@ -136,32 +170,15 @@ func runBuildSolutionWatch(tsConfigPath string, opts projectOptions, reload func
 			callback := func(events []fswatch.Event, watchErr error) {
 				mu.Lock()
 				defer mu.Unlock()
-				if watchErr != nil && !errors.Is(watchErr, fswatch.ErrOverflow) {
-					return
-				}
-				for _, event := range events {
-					s.paths[event.Path] = struct{}{}
-					if watchCompilable(event.Path) {
-						s.projects[project] = struct{}{}
-					} else {
-						if s.assets[project] == nil {
-							s.assets[project] = map[string]bool{}
-						}
-						s.assets[project][event.Path] = event.Kind == fswatch.EventDelete
-					}
-				}
-				if watchErr != nil {
-					s.projects[project] = struct{}{}
-				}
+				s.add(project, events, watchErr)
 				gate.Trigger()
 			}
-			for _, root := range set.RootDirs {
+			for _, root := range solutionWatchDirectories(set) {
 				if watch, watchErr := watcher.WatchDirectory(root, callback, fswatch.WithRecursive()); watchErr == nil {
 					watches = append(watches, watch)
 				}
 			}
 			for _, config := range append(set.TsConfigPaths, set.RojoConfigs...) {
-				config := config
 				if watch, watchErr := watcher.WatchFile(config, func(events []fswatch.Event, watchErr error) {
 					mu.Lock()
 					s.configs[config] = struct{}{}
@@ -202,4 +219,4 @@ func (fmtWriter) Write(p []byte) (int, error) { return fmt.Print(string(p)) }
 
 type stderrWriter struct{}
 
-func (stderrWriter) Write(p []byte) (int, error) { return fmt.Print(string(p)) }
+func (stderrWriter) Write(p []byte) (int, error) { return os.Stderr.Write(p) }

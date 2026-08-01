@@ -70,34 +70,32 @@ func projectFixtureDrifts(fixture ProjectFixture, result *RunResult, artifacts m
 	if fixture.ExpectedExitCode != 0 {
 		return drifts
 	}
-	if !hasArtifactSuffix(artifacts, ".luau") {
+	checks := fixture.ArtifactChecks
+	if checks.RequireLuau && !hasArtifactSuffix(artifacts, ".luau") {
 		drifts = append(drifts, MatrixDrift{Surface: MatrixSurfaceByte, Detail: "successful project emitted no Luau artifact"})
 	}
-	switch fixture.Name {
-	case "build-declarations", "cross-project-dts", "transformer-declarations":
-		if !hasArtifactSuffix(artifacts, ".d.ts") {
-			drifts = append(drifts, MatrixDrift{Surface: MatrixSurfaceDeclaration, Detail: "declaration fixture emitted no declaration artifact"})
+	for _, suffix := range checks.RequiredSuffixes {
+		if !hasArtifactSuffix(artifacts, suffix) {
+			drifts = append(drifts, MatrixDrift{Surface: surfaceForArtifact(suffix), Detail: "required artifact suffix missing: " + suffix})
 		}
-		if fixture.Name == "transformer-declarations" {
-			if !hasArtifactText(artifacts, ".d.ts", "__DECLARATION_MARKER__") {
-				drifts = append(drifts, MatrixDrift{Surface: MatrixSurfaceDeclaration, Detail: "afterDeclarations marker missing from declarations"})
-			}
-			if hasArtifactText(artifacts, ".luau", "__DECLARATION_MARKER__") {
-				drifts = append(drifts, MatrixDrift{Surface: MatrixSurfacePlugin, Detail: "afterDeclarations marker leaked into Luau"})
-			}
+	}
+	for _, component := range checks.RequiredComponents {
+		if !hasArtifactComponent(artifacts, component) {
+			drifts = append(drifts, MatrixDrift{Surface: MatrixSurfaceCache, Detail: "required artifact component missing: " + component})
 		}
-	case "per-project-rojo":
-		if !hasArtifactComponent(artifacts, ".rotor/cache/rojo/") {
-			drifts = append(drifts, MatrixDrift{Surface: MatrixSurfaceCache, Detail: "Rojo fixture emitted no resolver cache artifact"})
+	}
+	for _, check := range checks.RequiredTexts {
+		if !hasArtifactText(artifacts, check.Suffix, check.Text) {
+			drifts = append(drifts, MatrixDrift{Surface: surfaceForArtifact(check.Suffix), Detail: "required artifact text missing: " + check.Text})
 		}
-	case "transformer-ordering":
-		if !hasArtifactText(artifacts, ".luau", "__ORDER_BEFORE__") || !hasArtifactText(artifacts, ".luau", "__ORDER_AFTER__") {
-			drifts = append(drifts, MatrixDrift{Surface: MatrixSurfacePlugin, Detail: "transformer order markers missing from Luau"})
+	}
+	for _, check := range checks.ForbiddenTexts {
+		if hasArtifactText(artifacts, check.Suffix, check.Text) {
+			drifts = append(drifts, MatrixDrift{Surface: surfaceForArtifact(check.Suffix), Detail: "forbidden artifact text present: " + check.Text})
 		}
-	case "transformer-sourcemap":
-		if !matrixSourceMapValid(artifacts) {
-			drifts = append(drifts, MatrixDrift{Surface: MatrixSurfaceSourceMap, Detail: "source-map fixture emitted no valid Luau source map"})
-		}
+	}
+	if checks.RequireSourceMap && !matrixSourceMapValid(artifacts) {
+		drifts = append(drifts, MatrixDrift{Surface: MatrixSurfaceSourceMap, Detail: "source-map fixture emitted no valid Luau source map"})
 	}
 	return drifts
 }

@@ -42,7 +42,7 @@ func readRbxtsOptions(tsConfigPath string, visited map[string]struct{}, chain *[
 	}
 	normalized = filepath.Clean(normalized)
 	if _, ok := visited[normalized]; ok {
-		return nil, nil
+		return nil, fmt.Errorf("tsconfig extends cycle at %s", normalized)
 	}
 	visited[normalized] = struct{}{}
 	if chain != nil {

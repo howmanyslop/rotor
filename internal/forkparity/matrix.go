@@ -120,12 +120,12 @@ func validDivergenceClass(classification DivergenceClass) bool {
 	}
 }
 
-func AllMatrixCaseIDs() []string {
-	ids := make([]string, 0, len(AllTransformerFixtures())+len(AllProjectFixtures())+8)
-	for _, fixture := range AllTransformerFixtures() {
+func matrixCaseIDs(transformerFixtures []TransformerFixture, projectFixtures []ProjectFixture) []string {
+	ids := make([]string, 0, len(transformerFixtures)+len(projectFixtures)+8)
+	for _, fixture := range transformerFixtures {
 		ids = append(ids, "transformer/"+fixture.Name)
 	}
-	for _, fixture := range AllProjectFixtures() {
+	for _, fixture := range projectFixtures {
 		ids = append(ids, "project/"+fixture.Name)
 	}
 	ids = append(ids,

@@ -1,0 +1,19 @@
+{
+  "description": "Source maps retain original positions after synthetic transformer output",
+  "category": "source-map",
+  "expectedExitCode": 0,
+  "artifactChecks": {
+    "requireLuau": true,
+    "requireSourceMap": true
+  },
+  "invocations": [
+    {
+      "name": "build",
+      "arguments": [
+        "build",
+        "--project",
+        "."
+      ]
+    }
+  ]
+}

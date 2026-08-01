@@ -1,0 +1,20 @@
+{
+  "description": "Type errors produce a non-zero exit code and TypeScript diagnostic",
+  "category": "diagnostics",
+  "expectedExitCode": 1,
+  "expectedStdout": "error TS2322: Type 'string' is not assignable to type 'number'.",
+  "artifactChecks": {
+    "requireLuau": false,
+    "requireSourceMap": false
+  },
+  "invocations": [
+    {
+      "name": "build",
+      "arguments": [
+        "build",
+        "--project",
+        "."
+      ]
+    }
+  ]
+}

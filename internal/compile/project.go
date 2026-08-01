@@ -421,7 +421,7 @@ type ProjectOptions struct {
 	rojoCache *rojo.RojoResolverCache
 
 	crossProjectImportPathMap map[string]string
-	pendingSolutionPersists   *[]func()
+	pendingSolutionPersists   *[]func() error
 	deferRojoCachePersist     bool
 
 	// IncludePath is the raw --includePath value; "" applies upstream's

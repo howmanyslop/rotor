@@ -41,6 +41,8 @@ func newSourceTraceMap(raw, fileName, text string) (*sourceTraceMap, error) {
 	}
 
 	trace := &sourceTraceMap{fileName: fileName, text: text}
+	// DecodeMappings preserves generated-position order, which OriginalPosition
+	// relies on for its binary search below.
 	decoder := sourcemap.DecodeMappings(sourceMap.Mappings)
 	for mapping := range decoder.Values() {
 		if !mapping.IsSourceMapping() {

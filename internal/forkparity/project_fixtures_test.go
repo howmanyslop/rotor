@@ -1,7 +1,10 @@
 package forkparity
 
 import (
+	"context"
+	"os/exec"
 	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -11,7 +14,10 @@ func TestProjectFixtures(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	fixtures := AllProjectFixtures()
+	fixtures, err := LoadProjectFixtures(repoRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	expectedNames := []string{
 		"build-basic",
 		"build-declarations",
@@ -65,7 +71,11 @@ func TestProjectFixtures_coverForkScenarios(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	fixtures := fixturesByName(AllProjectFixtures())
+	loaded, err := LoadProjectFixtures(repoRoot(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures := fixturesByName(loaded)
 	tests := []struct {
 		name        string
 		fixtureName string
@@ -112,32 +122,32 @@ func TestProjectFixtureManifest(t *testing.T) {
 	t.Parallel()
 
 	// Given
-	manifest := ProjectFixtureManifest()
-	fixtures := AllProjectFixtures()
+	root := repoRoot(t)
+	provenance, err := ProjectFixtureProvenance(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures, err := LoadProjectFixtures(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Then
-	if manifest.ZipDigest != committedZipDigest {
-		t.Fatalf("manifest zip digest = %q, want %q", manifest.ZipDigest, committedZipDigest)
+	if provenance.ZipDigest != committedZipDigest {
+		t.Fatalf("provenance zip digest = %q, want %q", provenance.ZipDigest, committedZipDigest)
 	}
-	if manifest.ExtractionCommand != "FindZip(repoRoot) then VerifyAndExtract(zipPath)" {
-		t.Fatalf("manifest extraction command = %q", manifest.ExtractionCommand)
-	}
-	if len(manifest.Invocations) != len(fixtures)+1 {
-		t.Fatalf("manifest invocation count = %d, want %d", len(manifest.Invocations), len(fixtures)+1)
+	if provenance.CaptureCommand == "" {
+		t.Fatal("provenance capture command is empty")
 	}
 
 	invocationCount := make(map[string]int, len(fixtures))
-	for _, invocation := range manifest.Invocations {
-		if !slices.Contains(fixtureNames(fixtures), invocation.FixtureName) {
-			t.Fatalf("invocation fixture = %q, want catalog fixture", invocation.FixtureName)
+	for _, fixture := range fixtures {
+		for _, invocation := range fixture.Invocations {
+			if invocation.Name == "" || !slices.Contains(invocation.Arguments, "--project") {
+				t.Fatalf("fixture %q invocation = %#v, want named --project invocation", fixture.Name, invocation)
+			}
+			invocationCount[fixture.Name]++
 		}
-		if invocation.Name == "" || invocation.WorkingDirectory != "." {
-			t.Fatalf("invocation = %#v, want named fixture-root invocation", invocation)
-		}
-		if !slices.Contains(invocation.Arguments, "--project") {
-			t.Fatalf("invocation arguments = %v, want --project", invocation.Arguments)
-		}
-		invocationCount[invocation.FixtureName]++
 	}
 	for _, fixture := range fixtures {
 		want := 1
@@ -147,6 +157,41 @@ func TestProjectFixtureManifest(t *testing.T) {
 		if got := invocationCount[fixture.Name]; got != want {
 			t.Fatalf("invocation count for %q = %d, want %d", fixture.Name, got, want)
 		}
+	}
+}
+
+func TestProjectOracleGoldens(t *testing.T) {
+	// Given
+	root := repoRoot(t)
+	fixtures, err := LoadProjectFixtures(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotorBin := filepath.Join(t.TempDir(), "rotor")
+	build := exec.Command("go", "build", "-o", rotorBin, "./cmd/rotor")
+	build.Dir = root
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build rotor: %v\n%s", err, output)
+	}
+	runner := MatrixRunner{RepoRoot: root}
+	nodeModules, err := runner.rotorNodeModules()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, fixture := range fixtures {
+		t.Run(fixture.Name, func(t *testing.T) {
+			// When
+			result, err := runner.runProjectFixture(context.Background(), rotorBin, nodeModules, fixture)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Then
+			if len(result.Drifts) != 0 {
+				t.Fatalf("project oracle drift: %#v", result.Drifts)
+			}
+		})
 	}
 }
 

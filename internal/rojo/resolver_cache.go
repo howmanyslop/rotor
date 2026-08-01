@@ -120,7 +120,14 @@ func (c *RojoResolverCache) loadDisk(key string) (*RojoResolver, []resolverCache
 	if !manifestStillValid(file.MtimeManifest) {
 		return nil, nil, false
 	}
-	return FromState(file.State), slices.Clone(file.MtimeManifest), true
+	resolver, err := FromState(file.State)
+	if err != nil {
+		if !c.deferPersist {
+			_ = os.Remove(path)
+		}
+		return nil, nil, false
+	}
+	return resolver, slices.Clone(file.MtimeManifest), true
 }
 
 func (c *RojoResolverCache) writeDisk(key string, state ResolverState, manifest []resolverCacheManifestEntry) {

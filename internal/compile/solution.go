@@ -194,7 +194,9 @@ func (c *SolutionCoordinator) Drain() (*BuildResult, []string, error) {
 		return result, diagnosticInfoMessages(result.Diagnostics), firstErr
 	}
 	if drainer, ok := c.drainer.(*solutionBuildDrainer); ok {
-		drainer.persist()
+		if err := drainer.persist(); err != nil {
+			return result, diagnosticInfoMessages(result.Diagnostics), err
+		}
 	}
 	return result, nil, nil
 }

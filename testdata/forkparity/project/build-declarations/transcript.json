@@ -1,0 +1,23 @@
+{
+  "description": "Build-mode declaration emission",
+  "category": "build-mode",
+  "expectedExitCode": 0,
+  "artifactChecks": {
+    "requireLuau": true,
+    "requiredSuffixes": [
+      ".d.ts"
+    ],
+    "requireSourceMap": false
+  },
+  "invocations": [
+    {
+      "name": "build",
+      "arguments": [
+        "build",
+        "--project",
+        ".",
+        "--build"
+      ]
+    }
+  ]
+}

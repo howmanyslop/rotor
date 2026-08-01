@@ -63,7 +63,7 @@ func (r MatrixRunner) runTransformerFixture(
 		return matrixFixtureResult{}, err
 	}
 	return matrixFixtureResult{
-		Artifacts: artifacts,
+		Artifacts: matrixNormalizeArtifacts(artifacts, stage.dir),
 		Drifts:    transformerFixtureDrifts(fixture, result),
 	}, nil
 }
@@ -109,12 +109,12 @@ func (r MatrixRunner) runProjectFixture(
 		if second.ExitCode != fixture.ExpectedExitCode {
 			drifts = append(drifts, matrixExitDrift(fixture.ExpectedExitCode, second.ExitCode))
 		}
-		if len(trace) != 0 {
-			drifts = append(drifts, matrixSequenceDrift(MatrixSurfaceWrite, "no-change write trace", nil, trace))
+		if !slices.Equal(trace, fixture.ArtifactChecks.ExpectedWriteTrace) {
+			drifts = append(drifts, matrixSequenceDrift(MatrixSurfaceWrite, "no-change write trace", fixture.ArtifactChecks.ExpectedWriteTrace, trace))
 		}
 		artifacts = afterSecond
 	}
-	return matrixFixtureResult{Artifacts: artifacts, Drifts: drifts}, nil
+	return matrixFixtureResult{Artifacts: matrixNormalizeArtifacts(artifacts, stage.dir), Drifts: drifts}, nil
 }
 
 func matrixTransformerFiles(fixture TransformerFixture) map[string]string {
@@ -254,8 +254,8 @@ func matrixWriteTrace(before, after map[string][]byte) []string {
 }
 
 func matrixProjectArgs(fixture ProjectFixture) []string {
-	for _, invocation := range ProjectFixtureManifest().Invocations {
-		if invocation.FixtureName == fixture.Name && slices.Contains(invocation.Arguments, "--build") {
+	for _, invocation := range fixture.Invocations {
+		if slices.Contains(invocation.Arguments, "--build") {
 			return []string{"--build"}
 		}
 	}

@@ -230,7 +230,10 @@ func (r *RojoResolver) GetState() ResolverState {
 }
 
 // FromState restores a resolver from a ResolverState snapshot.
-func FromState(state ResolverState) *RojoResolver {
+func FromState(state ResolverState) (*RojoResolver, error) {
+	if err := validateResolverState(state); err != nil {
+		return nil, err
+	}
 	r := &RojoResolver{
 		warnings:             slices.Clone(state.Warnings),
 		rbxPath:              slices.Clone(state.RbxPath),
@@ -250,7 +253,36 @@ func FromState(state ResolverState) *RojoResolver {
 	for _, filePath := range state.FilePaths {
 		r.filePathToRbxPathMap[filePath.Path] = slices.Clone(filePath.RbxPath)
 	}
-	return r
+	return r, nil
+}
+
+func validateResolverState(state ResolverState) error {
+	for index, partition := range state.Partitions {
+		if partition.FsPath == "" {
+			return fmt.Errorf("invalid resolver state: partition %d has an empty filesystem path", index)
+		}
+		if filepath.Clean(partition.FsPath) != partition.FsPath {
+			return fmt.Errorf("invalid resolver state: partition %d has a non-canonical filesystem path %q", index, partition.FsPath)
+		}
+	}
+
+	filePaths := make(map[string]struct{}, len(state.FilePaths))
+	for index, filePath := range state.FilePaths {
+		if filePath.Path == "" {
+			return fmt.Errorf("invalid resolver state: file mapping %d has an empty path", index)
+		}
+		if filepath.Clean(filePath.Path) != filePath.Path {
+			return fmt.Errorf("invalid resolver state: file mapping %d has a non-canonical path %q", index, filePath.Path)
+		}
+		if convertToLuau(filePath.Path) != filePath.Path || !rojoModuleExts[extname(filePath.Path)] {
+			return fmt.Errorf("invalid resolver state: file mapping %d has an invalid Rojo module path %q", index, filePath.Path)
+		}
+		if _, ok := filePaths[filePath.Path]; ok {
+			return fmt.Errorf("invalid resolver state: duplicate file mapping %q", filePath.Path)
+		}
+		filePaths[filePath.Path] = struct{}{}
+	}
+	return nil
 }
 
 func (r *RojoResolver) warn(str string) {

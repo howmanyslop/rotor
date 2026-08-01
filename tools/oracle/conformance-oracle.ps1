@@ -28,14 +28,34 @@ node .\node_modules\roblox-ts\out\CLI\cli.js --type model --allowCommentDirectiv
 if ($LASTEXITCODE -ne 0) { Pop-Location; throw "rbxtsc failed with exit code $LASTEXITCODE" }
 Pop-Location
 
-Remove-Item -Recurse -Force $golden -ErrorAction SilentlyContinue
+$protected = @(
+	"tests/array.spec.luau",
+	"tests/class.spec.luau",
+	"tests/destructure.spec.luau",
+	"tests/exportLet.spec.luau",
+	"tests/function.spec.luau",
+	"tests/loop.spec.luau",
+	"tests/object.spec.luau"
+)
+# These fork-authoritative Rotor goldens must never be deleted or regenerated
+# by the upstream 3.0 oracle. See testdata/conformance/README.md.
+Get-ChildItem $golden -Recurse -File -ErrorAction SilentlyContinue | ForEach-Object {
+	$rel = $_.FullName.Substring($golden.Length + 1).Replace("\\", "/")
+	if ($protected -notcontains $rel) {
+		Remove-Item -Force $_.FullName
+	}
+}
 New-Item -ItemType Directory -Force $golden | Out-Null
 # the corpus has subdirectories (tests/, helpers/) — preserve structure
 $outDir = (Resolve-Path (Join-Path $proj "out")).Path
 Get-ChildItem $outDir -Recurse -Filter *.luau | ForEach-Object {
 	$rel = $_.FullName.Substring($outDir.Length + 1)
+	$rel = $rel.Replace("\\", "/")
+	if ($protected -contains $rel) {
+		return
+	}
 	$dest = Join-Path $golden $rel
 	New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null
 	Copy-Item $_.FullName $dest
 }
-Write-Host "goldens regenerated: $((Get-ChildItem $golden -Recurse -File).Count) files"
+Write-Host "goldens regenerated: $((Get-ChildItem $golden -Recurse -File).Count) files ($($protected.Count) fork-divergent fixtures preserved)"

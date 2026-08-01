@@ -1,0 +1,1 @@
+{"name":"cross-project","tree":{"$className":"DataModel","ReplicatedStorage":{"include":{"$path":"include"},"shared":{"$path":"../lib/out"},"game":{"$path":"out"}}}}

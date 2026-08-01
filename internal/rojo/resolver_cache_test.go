@@ -29,7 +29,10 @@ func TestResolverState_roundTripsDeterministically(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	restored := FromState(state)
+	restored, err := FromState(state)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Then
 	if string(first) != string(second) {
@@ -49,6 +52,57 @@ func TestResolverState_roundTripsDeterministically(t *testing.T) {
 	}
 	if !state.IsGame {
 		t.Error("restored state must preserve the game flag")
+	}
+}
+
+func TestResolverStateRejectsMalformedMappings(t *testing.T) {
+	tests := []struct {
+		name  string
+		state ResolverState
+	}{
+		{
+			name: "empty partition path",
+			state: ResolverState{Partitions: []PartitionInfo{{
+				FsPath:  "",
+				RbxPath: RbxPath{"ReplicatedStorage"},
+			}}},
+		},
+		{
+			name: "empty mapped file path",
+			state: ResolverState{FilePaths: []ResolverFilePathState{{
+				Path:    "",
+				RbxPath: RbxPath{"ReplicatedStorage"},
+			}}},
+		},
+		{
+			name: "duplicate mapped file path",
+			state: ResolverState{FilePaths: []ResolverFilePathState{
+				{Path: "/project/src/module.luau", RbxPath: RbxPath{"ReplicatedStorage", "Module"}},
+				{Path: "/project/src/module.luau", RbxPath: RbxPath{"ServerStorage", "Module"}},
+			}},
+		},
+		{
+			name: "Lua file mapping aliases Luau",
+			state: ResolverState{FilePaths: []ResolverFilePathState{{
+				Path:    "/project/src/module.lua",
+				RbxPath: RbxPath{"ReplicatedStorage", "Module"},
+			}}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			resolver, err := FromState(tt.state)
+
+			// Then
+			if err == nil {
+				t.Fatalf("FromState(%#v) succeeded with resolver %#v", tt.state, resolver)
+			}
+			if resolver != nil {
+				t.Fatalf("FromState(%#v) resolver = %#v, want nil", tt.state, resolver)
+			}
+		})
 	}
 }
 

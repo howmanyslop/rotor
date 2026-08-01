@@ -276,16 +276,21 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 		wroteLockfile = true
 	}
-	persist := func() {
+	persist := func() error {
 		if rojoCache != nil {
 			rojoCache.Persist()
 		}
-		copyFilesGate.Persist()
+		if copyFilesGate.Persist == nil {
+			return nil
+		}
+		return copyFilesGate.Persist()
 	}
 	if opts.pendingSolutionPersists != nil {
 		*opts.pendingSolutionPersists = append(*opts.pendingSolutionPersists, persist)
 	} else {
-		persist()
+		if err := persist(); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	return &BuildResult{

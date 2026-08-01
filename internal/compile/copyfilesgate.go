@@ -2,6 +2,7 @@ package compile
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -161,15 +162,38 @@ func buildCopyFilesManifest(inputs CopyFilesManifestInputs) CopyFilesManifest {
 	return manifest
 }
 
-func writeCopyFilesManifest(path string, manifest CopyFilesManifest) {
+func writeCopyFilesManifest(path string, manifest CopyFilesManifest) error {
 	data, err := json.Marshal(manifest)
 	if err != nil {
-		return
+		return fmt.Errorf("marshal copy-files manifest: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create copy-files manifest directory: %w", err)
 	}
-	_ = os.WriteFile(path, data, 0o644)
+	tmp, err := os.CreateTemp(dir, ".copyfiles-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create copy-files manifest temporary file: %w", err)
+	}
+	tmpName := tmp.Name()
+	_, writeErr := tmp.Write(data)
+	chmodErr := tmp.Chmod(0o644)
+	closeErr := tmp.Close()
+	if writeErr != nil || chmodErr != nil || closeErr != nil {
+		_ = os.Remove(tmpName)
+		if writeErr != nil {
+			return fmt.Errorf("write copy-files manifest: %w", writeErr)
+		}
+		if chmodErr != nil {
+			return fmt.Errorf("set copy-files manifest permissions: %w", chmodErr)
+		}
+		return fmt.Errorf("close copy-files manifest: %w", closeErr)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		_ = os.Remove(tmpName)
+		return fmt.Errorf("replace copy-files manifest: %w", err)
+	}
+	return nil
 }
 
 func tryLoadCopyFilesManifest(path, key string, declaration bool) *CopyFilesManifest {
@@ -199,7 +223,7 @@ type copyFilesGateInputs struct {
 type copyFilesGateOutputs struct {
 	SkipCleanup   bool
 	SkipCopyFiles bool
-	Persist       func()
+	Persist       func() error
 }
 
 func buildCopyFilesManifestKey(outDir string, rootDirs []string) string {
@@ -284,7 +308,6 @@ func loadCopyFilesGatePreBuild(inputs copyFilesGateInputs) copyFilesGateOutputs 
 		return copyFilesGateOutputs{
 			SkipCleanup:   true,
 			SkipCopyFiles: true,
-			Persist:       func() { writeCopyFilesManifest(cachePath, *cached) },
 		}
 	}
 	current := buildCopyFilesManifest(CopyFilesManifestInputs{
@@ -294,7 +317,7 @@ func loadCopyFilesGatePreBuild(inputs copyFilesGateInputs) copyFilesGateOutputs 
 		Key:            key,
 		PathTranslator: inputs.PathTranslator,
 	})
-	persist := func() {
+	persist := func() error {
 		refreshed := make([]CopyFilesFileEntry, len(current.Files))
 		for i, entry := range current.Files {
 			entry.DestMtimeMs = 0
@@ -304,7 +327,7 @@ func loadCopyFilesGatePreBuild(inputs copyFilesGateInputs) copyFilesGateOutputs 
 			refreshed[i] = entry
 		}
 		current.Files = refreshed
-		writeCopyFilesManifest(cachePath, current)
+		return writeCopyFilesManifest(cachePath, current)
 	}
 	if cached == nil {
 		return copyFilesGateOutputs{Persist: persist}

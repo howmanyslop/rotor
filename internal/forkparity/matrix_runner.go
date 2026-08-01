@@ -40,11 +40,20 @@ type MatrixRowResult struct {
 }
 
 func (r MatrixRunner) Run(ctx context.Context) (MatrixReport, error) {
+	transformerFixtures, err := LoadTransformerFixtures(r.RepoRoot)
+	if err != nil {
+		return MatrixReport{}, err
+	}
+	projectFixtures, err := LoadProjectFixtures(r.RepoRoot)
+	if err != nil {
+		return MatrixReport{}, err
+	}
+	caseIDs := matrixCaseIDs(transformerFixtures, projectFixtures)
 	ledger, err := ReadDivergenceLedger(filepath.Join(r.RepoRoot, "testdata", "forkparity", "divergence-ledger.json"))
 	if err != nil {
 		return MatrixReport{}, err
 	}
-	if err := ledger.Validate(AllMatrixCaseIDs()); err != nil {
+	if err := ledger.Validate(caseIDs); err != nil {
 		return MatrixReport{}, fmt.Errorf("validate divergence ledger: %w", err)
 	}
 
@@ -71,28 +80,28 @@ func (r MatrixRunner) Run(ctx context.Context) (MatrixReport, error) {
 		ZipDigest:       committedZipDigest,
 		ArchiveVerified: true,
 		ForkExecutable:  forkRuntimeDependenciesAvailable(extractDir),
-		Rows:            make([]MatrixRowResult, 0, len(AllMatrixCaseIDs())),
+		Rows:            make([]MatrixRowResult, 0, len(caseIDs)),
 	}
 	if !report.ForkExecutable {
 		report.ForkUnavailableReason = forkRuntimeUnavailableReason
 	}
 
 	rowsByID := ledgerRowsByID(ledger.Rows)
-	for _, fixture := range AllTransformerFixtures() {
+	for _, fixture := range transformerFixtures {
 		result, err := r.runTransformerFixture(ctx, rotorBin, projectNodeModules, fixture)
 		if err != nil {
 			return MatrixReport{}, fmt.Errorf("run transformer fixture %q: %w", fixture.Name, err)
 		}
 		report.Rows = append(report.Rows, matrixRowFromResult(rowsByID["transformer/"+fixture.Name], result))
 	}
-	for _, fixture := range AllProjectFixtures() {
+	for _, fixture := range projectFixtures {
 		result, err := r.runProjectFixture(ctx, rotorBin, projectNodeModules, fixture)
 		if err != nil {
 			return MatrixReport{}, fmt.Errorf("run project fixture %q: %w", fixture.Name, err)
 		}
 		report.Rows = append(report.Rows, matrixRowFromResult(rowsByID["project/"+fixture.Name], result))
 	}
-	for _, id := range AllMatrixCaseIDs() {
+	for _, id := range caseIDs {
 		row := rowsByID[id]
 		if row.Classification == DivergenceForkAuthoritative {
 			continue
