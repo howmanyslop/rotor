@@ -1,14 +1,11 @@
 package compile
 
 import (
-	"bytes"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
-
-	"rotor/internal/logservice"
 )
 
 // repoSidecarDir returns tools/sidecar in this repo checkout. Synthetic
@@ -172,10 +169,10 @@ func TestBuildProjectTransformerPluginRequiresNode(t *testing.T) {
 	}
 }
 
-func TestBuildProjectMissingTransformerWarnsAndContinues(t *testing.T) {
+func TestTransformerMissingIsError(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	dir := writeProject(t, "@scope/plugin-warning-fixture", "")
+	dir := writeProject(t, "@scope/plugin-missing-fixture", "")
 	t.Cleanup(closeSidecarSessions)
 	tsconfig := `{
 	"compilerOptions": {
@@ -206,33 +203,21 @@ func TestBuildProjectMissingTransformerWarnsAndContinues(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var warnings bytes.Buffer
-	oldOutput := logservice.Output
-	oldVerbose := logservice.Verbose
-	logservice.Output = &warnings
-	logservice.Verbose = false
-	t.Cleanup(func() {
-		logservice.Output = oldOutput
-		logservice.Verbose = oldVerbose
-	})
-
 	result, diags, err := BuildProjectWithOptions(dir, ProjectOptions{})
-	if err != nil {
-		t.Fatalf("BuildProjectWithOptions: %v (diags: %v)", err, diags)
+	if err == nil {
+		t.Fatal("BuildProjectWithOptions succeeded with a missing transformer")
 	}
-	if len(diags) > 0 {
-		t.Fatalf("diagnostics: %v", diags)
+	if result != nil {
+		t.Fatalf("result = %#v, want nil", result)
 	}
-	if result == nil {
-		t.Fatal("nil result")
+	if len(diags) != 1 {
+		t.Fatalf("diagnostics = %v, want one missing-transformer error", diags)
 	}
-	got := result.Outputs["out/main.luau"]
-	if !strings.Contains(got, `local phase = "start"`) {
-		t.Fatalf("out/main.luau should keep original string when plugin is missing:\n%s", got)
+	if !strings.Contains(diags[0], "Transformer `./plugins/does-not-exist.js` failed to load!") {
+		t.Fatalf("diagnostic = %q, want fork missing-transformer text", diags[0])
 	}
-	logText := warnings.String()
-	if !strings.Contains(logText, "Compiler Warning:") || !strings.Contains(logText, "Transformer `./plugins/does-not-exist.js` was not found!") {
-		t.Fatalf("warning output = %q, want transformer warning", logText)
+	if !strings.Contains(diags[0], "Suggestion: Did you forget to install the package, or to build it?") {
+		t.Fatalf("diagnostic = %q, want fork suggestion text", diags[0])
 	}
 }
 
@@ -253,7 +238,7 @@ module.exports = function (program, config, helpers) {
 };
 `
 
-func TestBuildProjectTransformerSidecarStaysWarmAcrossBuilds(t *testing.T) {
+func TestTransformerWarmSession(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
 

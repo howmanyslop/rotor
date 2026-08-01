@@ -529,61 +529,6 @@ func ProjectOptionsForReferencedConfig(entry ProjectOptions, tsConfigPath string
 	return entry, nil
 }
 
-func BuildSolutionWithOptions(tsConfigPath string, entry ProjectOptions) (*BuildResult, []string, error) {
-	result := &BuildResult{Outputs: make(map[string]string)}
-	seen := make(map[string]struct{})
-	_, solution, err := readProjectReferencePaths(tsConfigPath)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := buildReferencedProjects(tsConfigPath, entry, solution, seen, result); err != nil {
-		return result, diagnosticInfoMessages(result.Diagnostics), err
-	}
-	return result, nil, nil
-}
-
-func buildReferencedProjects(tsConfigPath string, entry ProjectOptions, inheritEntryTypeAndRojo bool, seen map[string]struct{}, result *BuildResult) error {
-	configPath, err := filepath.Abs(tsConfigPath)
-	if err != nil {
-		return err
-	}
-	if _, ok := seen[configPath]; ok {
-		return fmt.Errorf("compile: circular project reference %s", configPath)
-	}
-	seen[configPath] = struct{}{}
-	defer delete(seen, configPath)
-
-	references, solution, err := readProjectReferencePaths(configPath)
-	if err != nil {
-		return err
-	}
-	for _, reference := range references {
-		options, err := ProjectOptionsForReferencedConfig(entry, reference, inheritEntryTypeAndRojo)
-		if err != nil {
-			return err
-		}
-		if err := buildReferencedProjects(reference, options, inheritEntryTypeAndRojo, seen, result); err != nil {
-			return err
-		}
-	}
-	if solution {
-		return nil
-	}
-	entry.TsConfigPath = configPath
-	built, messages, err := BuildProjectWithOptions(filepath.Dir(configPath), entry)
-	if err != nil {
-		for _, message := range messages {
-			result.Diagnostics = append(result.Diagnostics, DiagnosticInfo{Message: message})
-		}
-		return err
-	}
-	for path, text := range built.Outputs {
-		result.Outputs[path] = text
-	}
-	result.EmittedFiles = append(result.EmittedFiles, built.EmittedFiles...)
-	return nil
-}
-
 // CompileProject compiles every file of the project rooted at projectDir —
 // the Go analog of upstream compileFiles.ts: ONE Program, the Rojo context
 // computed once, then per file: pre-emit diagnostics -> TransformState ->

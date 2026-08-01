@@ -186,10 +186,7 @@ class SidecarProjectSession {
     if (transformerList.length === 0) {
       return {
         diagnostics: [],
-        transformed: sourceFiles.map((sourceFile) => ({
-          fileName: sourceFile.fileName,
-          text: printer.printFile(sourceFile),
-        })),
+        transformed: [],
       };
     }
 
@@ -214,7 +211,7 @@ class SidecarProjectSession {
       return {
         diagnostics: (result.diagnostics ?? []).map((diagnostic) => toProtocolDiagnostic(this.ts, diagnostic)),
         transformed: result.transformed
-          .filter((node) => this.ts.isSourceFile(node))
+          .filter((node) => this.ts.isSourceFile(node) && !sourceFiles.includes(node))
           .map((sourceFile) => ({
             fileName: sourceFile.fileName,
             text: printer.printFile(sourceFile),
