@@ -115,8 +115,9 @@ func TestTsconfigChainReload(t *testing.T) {
 		t.Fatalf("NewSolutionCoordinator: %v", err)
 	}
 	watchSets := coordinator.WatchSets()
-	if len(watchSets) != 1 || !reflect.DeepEqual(watchSets[0].TsConfigPaths, []string{childConfig, baseConfig}) {
-		t.Fatalf("TsConfigPaths = %#v, want [%s %s]", watchSets, childConfig, baseConfig)
+	wantTsConfigPaths := canonicalWatchPaths([]string{childConfig, baseConfig})
+	if len(watchSets) != 1 || !reflect.DeepEqual(watchSets[0].TsConfigPaths, wantTsConfigPaths) {
+		t.Fatalf("TsConfigPaths = %#v, want %#v", watchSets, wantTsConfigPaths)
 	}
 
 	if err := os.WriteFile(baseConfig, []byte(`{"rbxts":{"rojo":"./second.project.json"}}`), 0o644); err != nil {
