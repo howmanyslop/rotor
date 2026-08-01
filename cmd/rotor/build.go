@@ -37,6 +37,8 @@ type buildArgs struct {
 	emitDeclarationOnly bool
 	help                bool
 	version             bool
+	builders            *int
+	checkers            *int
 	jsonOut             bool   // rotor DX extension: emit a machine-readable result object
 	cpuprofile          string // rotor DX extension: write a pprof CPU profile here
 	maxErrors           int    // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
@@ -162,6 +164,22 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			}
 			res.maxErrors = n
 			continue
+		case "builders", "checkers":
+			v := value
+			if !hasValue && i+1 < len(args) && isNumericFlagValue(args[i+1]) {
+				i++
+				v = args[i]
+			}
+			n, err := parsePositiveIntFlag(name, v)
+			if err != nil {
+				return nil, err
+			}
+			if name == "builders" {
+				res.builders = n
+			} else {
+				res.checkers = n
+			}
+			continue
 		case "json":
 			// rotor DX extension (not in rbxtsc): a plain boolean flag that
 			// swaps the styled UI for one machine-readable result object.
@@ -220,6 +238,9 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 	}
 	if positional != "" {
 		res.project = positional
+	}
+	if res.builders != nil && !res.build {
+		return nil, errors.New("--builders requires --build")
 	}
 
 	// yargs `implies: "watch"` (build.ts L68-72): --usePolling present in

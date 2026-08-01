@@ -171,6 +171,72 @@ func TestUsageErrorsExitOne(t *testing.T) {
 	if got := cmdCheck([]string{"--bogus"}); got != 1 {
 		t.Errorf("unknown check flag exit = %d, want 1", got)
 	}
+
+	for _, tt := range []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "builders missing value",
+			args:    []string{"--build", "--builders"},
+			wantErr: `invalid --builders value "" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers missing value",
+			args:    []string{"--checkers"},
+			wantErr: `invalid --checkers value "" (must be a positive integer)`,
+		},
+		{
+			name:    "builders zero",
+			args:    []string{"--build", "--builders", "0"},
+			wantErr: `invalid --builders value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers zero",
+			args:    []string{"--checkers=0"},
+			wantErr: `invalid --checkers value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "builders negative",
+			args:    []string{"--build", "--builders", "-1"},
+			wantErr: `invalid --builders value "-1" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers negative",
+			args:    []string{"--checkers=-1"},
+			wantErr: `invalid --checkers value "-1" (must be a positive integer)`,
+		},
+		{
+			name:    "builders non-integer",
+			args:    []string{"--build", "--builders", "many"},
+			wantErr: `invalid --builders value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers non-integer",
+			args:    []string{"--checkers=many"},
+			wantErr: `invalid --checkers value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "builders without build mode",
+			args:    []string{"--builders", "2"},
+			wantErr: "--builders requires --build",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stderr, code := captureStderr(t, func() int {
+				return cmdBuild(tt.args)
+			})
+			if code != 1 {
+				t.Errorf("cmdBuild(%v) exit = %d, want 1", tt.args, code)
+			}
+			firstLine := strings.SplitN(stderr, "\n", 2)[0]
+			wantFirstLine := "rotor build: " + tt.wantErr
+			if firstLine != wantFirstLine {
+				t.Errorf("cmdBuild(%v) first stderr line = %q, want %q", tt.args, firstLine, wantFirstLine)
+			}
+		})
+	}
 }
 
 func TestParseBuildArgsJSON(t *testing.T) {
@@ -219,6 +285,138 @@ func TestBuildModeArgs(t *testing.T) {
 				t.Errorf("parseBuildArgs(%v) = %+v", tt.args, got)
 			}
 		})
+	}
+}
+
+func TestParseBuildArgsConcurrencyControls(t *testing.T) {
+	intPtr := func(value int) *int { return &value }
+	tests := []struct {
+		name         string
+		args         []string
+		wantBuilders *int
+		wantCheckers *int
+		wantErr      string
+	}{
+		{name: "omitted", args: nil},
+		{
+			name:         "builders separated value one",
+			args:         []string{"--build", "--builders", "1"},
+			wantBuilders: intPtr(1),
+		},
+		{
+			name:         "builders equals value four",
+			args:         []string{"--build", "--builders=4"},
+			wantBuilders: intPtr(4),
+		},
+		{
+			name:         "checkers separated value one",
+			args:         []string{"--checkers", "1"},
+			wantCheckers: intPtr(1),
+		},
+		{
+			name:         "checkers equals value four",
+			args:         []string{"--checkers=4"},
+			wantCheckers: intPtr(4),
+		},
+		{
+			name:         "accepts_builders_and_checkers",
+			args:         []string{"--build", "--builders", "4", "--checkers", "2"},
+			wantBuilders: intPtr(4),
+			wantCheckers: intPtr(2),
+		},
+		{
+			name:         "builders with short build alias",
+			args:         []string{"-b", "--builders=1"},
+			wantBuilders: intPtr(1),
+		},
+		{
+			name:    "builders missing value",
+			args:    []string{"--build", "--builders"},
+			wantErr: `invalid --builders value "" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers missing value",
+			args:    []string{"--checkers"},
+			wantErr: `invalid --checkers value "" (must be a positive integer)`,
+		},
+		{
+			name:    "builders zero",
+			args:    []string{"--build", "--builders", "0"},
+			wantErr: `invalid --builders value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers zero",
+			args:    []string{"--checkers=0"},
+			wantErr: `invalid --checkers value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "builders negative",
+			args:    []string{"--build", "--builders", "-1"},
+			wantErr: `invalid --builders value "-1" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers negative",
+			args:    []string{"--checkers=-1"},
+			wantErr: `invalid --checkers value "-1" (must be a positive integer)`,
+		},
+		{
+			name:    "builders non-integer",
+			args:    []string{"--build", "--builders", "many"},
+			wantErr: `invalid --builders value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers non-integer",
+			args:    []string{"--checkers=many"},
+			wantErr: `invalid --checkers value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "rejects_builders_without_build",
+			args:    []string{"--builders", "2"},
+			wantErr: "--builders requires --build",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseBuildArgs(tt.args)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("parseBuildArgs(%v) error = %v, want %q", tt.args, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got.builders == nil) != (tt.wantBuilders == nil) {
+				t.Errorf("builders = %v, want %v", got.builders, tt.wantBuilders)
+			}
+			if got.builders != nil && *got.builders != *tt.wantBuilders {
+				t.Errorf("builders = %d, want %d", *got.builders, *tt.wantBuilders)
+			}
+			if (got.checkers == nil) != (tt.wantCheckers == nil) {
+				t.Errorf("checkers = %v, want %v", got.checkers, tt.wantCheckers)
+			}
+			if got.checkers != nil && *got.checkers != *tt.wantCheckers {
+				t.Errorf("checkers = %d, want %d", *got.checkers, *tt.wantCheckers)
+			}
+		})
+	}
+}
+
+func TestUsageIncludesConcurrencyControls(t *testing.T) {
+	var output strings.Builder
+	usage(&output)
+	for _, want := range []string{
+		"--builders <n>",
+		"default 4",
+		"only with --build",
+		"--checkers <n>",
+		"build and check",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("usage does not contain %q", want)
+		}
 	}
 }
 

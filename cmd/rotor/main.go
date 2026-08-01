@@ -135,6 +135,8 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  -p, --project <path>      project path (default \".\"): a tsconfig file, a directory")
 	fmt.Fprintln(w, "                            containing one, or any path to search upward from")
 	fmt.Fprintln(w, "  -b, --build [path]        build project references (optionally select a tsconfig path)")
+	fmt.Fprintln(w, "  --builders <n>             number of projects to build concurrently (default 4; only with --build)")
+	fmt.Fprintln(w, "  --checkers <n>             number of checkers per project (default 4; build and check)")
 	fmt.Fprintln(w, "  --emitDeclarationOnly     only emit declaration files for a solution build (requires --build)")
 	fmt.Fprintln(w, "  -w, --watch               enable watch mode")
 	fmt.Fprintln(w, "  --usePolling              use polling for watch mode (requires --watch)")
