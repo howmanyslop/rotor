@@ -459,10 +459,9 @@ return function()
 				return self:constructor(...) or self
 			end
 			function A:constructor(...)
-				local rest = { ... }
-				expect(rest[1]).to.equal(10)
-				expect(rest[2]).to.equal(20)
-				expect(rest[3]).to.equal(30)
+				expect((...)).to.equal(10)
+				expect((select(2, ...))).to.equal(20)
+				expect((select(3, ...))).to.equal(30)
 			end
 		end
 		local B
@@ -480,8 +479,7 @@ return function()
 				return self:constructor(...) or self
 			end
 			function B:constructor(...)
-				local rest = { ... }
-				super.constructor(self, unpack(rest))
+				super.constructor(self, ...)
 			end
 		end
 		expect(function()

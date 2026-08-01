@@ -16,9 +16,10 @@ import (
 )
 
 type DiagnosticFixture struct {
-	Name       string
-	Path       string
-	ExpectedID string
+	Name        string
+	Path        string
+	ExpectedIDs []string
+	Exact       bool
 }
 
 type diagnosticFixtureProjectPlan struct {
@@ -27,6 +28,11 @@ type diagnosticFixtureProjectPlan struct {
 }
 
 var skippedDiagnosticIDs = map[string]string{}
+
+var forkDiagnosticExpectations = map[string][]string{
+	"noSpreadDestructuring.1.ts": {},
+	"noSpreadDestructuring.2.ts": {"noRestSpreadingOfRobloxTypes"},
+}
 
 var installConformanceDepsOnce struct {
 	once sync.Once
@@ -49,10 +55,17 @@ func loadDiagnosticFixtures(dir string) ([]DiagnosticFixture, error) {
 		default:
 			continue
 		}
+		expectedIDs := []string{diagnosticBaseName(name)}
+		exact := false
+		if forkExpectedIDs, ok := forkDiagnosticExpectations[name]; ok {
+			expectedIDs = forkExpectedIDs
+			exact = true
+		}
 		fixtures = append(fixtures, DiagnosticFixture{
-			Name:       name,
-			Path:       filepath.Join(dir, name),
-			ExpectedID: diagnosticBaseName(name),
+			Name:        name,
+			Path:        filepath.Join(dir, name),
+			ExpectedIDs: expectedIDs,
+			Exact:       exact,
 		})
 	}
 	slices.SortFunc(fixtures, func(a, b DiagnosticFixture) int {
@@ -160,7 +173,10 @@ func ensureConformanceProjectDeps(projectDir string) error {
 }
 
 func skipReasonForDiagnosticFixture(tc DiagnosticFixture) string {
-	return skippedDiagnosticIDs[tc.ExpectedID]
+	if len(tc.ExpectedIDs) != 1 {
+		return ""
+	}
+	return skippedDiagnosticIDs[tc.ExpectedIDs[0]]
 }
 
 func diagnosticFixtureTSConfig() string {

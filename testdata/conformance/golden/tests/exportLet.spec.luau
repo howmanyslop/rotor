@@ -13,15 +13,12 @@ do
 		ClassName = "Player",
 		Name = "Validark",
 	}
-	local _binding = plr
-	local a = _binding.ClassName
+	local a = plr.ClassName
 	_container.a = a
-	local _binding_1 = plr
-	_container.b = _binding_1.ClassName
-	_container.c = _binding_1.Name
-	local _binding_2 = plr
-	_container.ClassName = _binding_2.ClassName
-	_container.Name = _binding_2.Name
+	_container.b = plr.ClassName
+	_container.c = plr.Name
+	_container.ClassName = plr.ClassName
+	_container.Name = plr.Name
 end
 return function()
 	it("should allow mutatable exports", function()

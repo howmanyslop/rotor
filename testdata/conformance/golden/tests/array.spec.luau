@@ -53,20 +53,18 @@ return function()
 		local i = 2
 		local a = arr[i + 1]
 		local b = arr[3]
-		local _binding = arr
-		local c = _binding[i + 1]
-		local _binding_1 = arr
-		local d = _binding_1[3]
+		local c = arr[i + 1]
+		local d = arr[3]
 		expect(a).to.equal(3)
 		expect(b).to.equal(3)
 		expect(c).to.equal(3)
 		expect(d).to.equal(3)
 		a = arr[i + 1]
 		b = arr[3]
-		local _binding_2 = arr
-		c = _binding_2[i + 1]
-		local _binding_3 = arr
-		d = _binding_3[3]
+		local _binding = arr
+		c = _binding[i + 1]
+		local _binding_1 = arr
+		d = _binding_1[3]
 		expect(a).to.equal(3)
 		expect(b).to.equal(3)
 		expect(c).to.equal(3)
@@ -736,10 +734,9 @@ return function()
 	end)
 	it("should unpack spread into function calls", function()
 		local function foo(...)
-			local args = { ... }
-			expect(args[1]).to.equal(1)
-			expect(args[2]).to.equal(2)
-			expect(args[3]).to.equal(3)
+			expect((...)).to.equal(1)
+			expect((select(2, ...))).to.equal(2)
+			expect((select(3, ...))).to.equal(3)
 		end
 		foo(unpack({ 1, 2, 3 }))
 	end)

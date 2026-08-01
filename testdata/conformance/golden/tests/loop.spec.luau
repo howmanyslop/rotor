@@ -534,7 +534,7 @@ return function()
 	it("should support the $range macro with a negative step", function()
 		local hit = {}
 		local sum = 10
-		for i = 9, 0, -1 or 1 do
+		for i = 9, 0, -1 do
 			hit[i] = true
 			sum -= 1
 		end

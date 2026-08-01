@@ -24,10 +24,9 @@ return function()
 			c = 2,
 			d = 3,
 		}
-		local _binding = a
-		local b = _binding.b
-		local c = _binding.c
-		local d = _binding.d
+		local b = a.b
+		local c = a.c
+		local d = a.d
 		expect(b).to.equal(1)
 		expect(c).to.equal(2)
 		expect(d).to.equal(3)
@@ -40,10 +39,9 @@ return function()
 				},
 			},
 		}
-		local _binding = a
-		local _binding_1 = _binding.b
-		local _binding_2 = _binding_1.c
-		local d = _binding_2.d
+		local _binding = a.b
+		local _binding_1 = _binding.c
+		local d = _binding_1.d
 		expect(d).to.equal(123)
 	end)
 	it("should destructure mixed objects", function()
@@ -52,12 +50,11 @@ return function()
 				c = { 8, 1, 4 },
 			},
 		}
-		local _binding = a
-		local _binding_1 = _binding.b
-		local _binding_2 = _binding_1.c
-		local eight = _binding_2[1]
-		local one = _binding_2[2]
-		local four = _binding_2[3]
+		local _binding = a.b
+		local _binding_1 = _binding.c
+		local eight = _binding_1[1]
+		local one = _binding_1[2]
+		local four = _binding_1[3]
 		expect(eight).to.equal(8)
 		expect(one).to.equal(1)
 		expect(four).to.equal(4)
@@ -74,18 +71,16 @@ return function()
 			},
 		}
 		do
-			local _binding = foo
-			local _binding_1 = _binding.a
-			local b = _binding_1.b
+			local _binding = foo.a
+			local b = _binding.b
 			if b == nil then
 				b = 5
 			end
 			expect(b).to.equal(1)
 		end
 		do
-			local _binding = bar
-			local _binding_1 = _binding.a
-			local b = _binding_1.b
+			local _binding = bar.a
+			local b = _binding.b
 			if b == nil then
 				b = 5
 			end
@@ -98,9 +93,8 @@ return function()
 				b = 123,
 			},
 		}
-		local _binding = foo
-		local _binding_1 = _binding.a
-		local z = _binding_1.b
+		local _binding = foo.a
+		local z = _binding.b
 		expect(z).to.equal(123)
 	end)
 	it("should not optimize array destructuring", function()
@@ -611,8 +605,7 @@ return function()
 	end)
 	it("should support destructuring from strings", function()
 		local str = "xyz"
-		local _binding = str
-		local _matcher = string.gmatch(_binding, utf8.charpattern)
+		local _matcher = string.gmatch(str, utf8.charpattern)
 		local a = _matcher()
 		local b = _matcher()
 		local c = _matcher()
@@ -974,8 +967,7 @@ return function()
 				x = param
 			end,
 		}
-		local _binding = a
-		local b = _binding.b
+		local b = a.b
 		b(123)
 		expect(x).to.equal(123)
 	end)

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 )
 
 type MatrixRunner struct {
@@ -153,15 +154,10 @@ func (r MatrixReport) String() string {
 }
 
 func forkRuntimeDependenciesAvailable(extractDir string) bool {
-	for _, nodeModules := range []string{
+	return slices.ContainsFunc([]string{
 		filepath.Join(extractDir, "node_modules"),
 		filepath.Join(extractDir, "roblox-ts", "node_modules"),
-	} {
-		if matrixHasForkDependencies(nodeModules) {
-			return true
-		}
-	}
-	return false
+	}, matrixHasForkDependencies)
 }
 
 func matrixHasForkDependencies(nodeModules string) bool {
@@ -244,7 +240,8 @@ func matrixResultStatus(drifts []MatrixDrift) string {
 func matrixArtifactDigests(artifacts map[string][]byte) map[string]string {
 	digests := make(map[string]string, len(artifacts))
 	for path, contents := range artifacts {
-		digests[path] = digest(contents)
+		normalizedPath, artifactDigest := matrixArtifactDigest(path, contents)
+		digests[normalizedPath] = artifactDigest
 	}
 	return digests
 }

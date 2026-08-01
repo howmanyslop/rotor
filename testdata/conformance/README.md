@@ -2,7 +2,12 @@
 
 A second differential corpus: roblox-ts's **own upstream test sources**, compiled
 by the real `rbxtsc` 3.0.0 into committed goldens that rotor's output is
-byte-compared against (`internal/conformance`). Phase 5 now has three harnesses:
+byte-compared against (`internal/conformance`). Fork-divergent fixtures use
+fork-authoritative Rotor goldens instead: `tests/array.spec.luau`,
+`tests/class.spec.luau`, `tests/destructure.spec.luau`,
+`tests/exportLet.spec.luau`, `tests/function.spec.luau`,
+`tests/loop.spec.luau`, and `tests/object.spec.luau`. Phase 5 now has three
+harnesses:
 
 - `TestDiagnosticsCorpus` compiles the vendored `excluded/diagnostics/*` files
   one by one and asserts rotor's diagnostic IDs.
@@ -80,6 +85,10 @@ powershell -File tools/oracle/conformance-oracle.ps1
 `node .\node_modules\roblox-ts\out\CLI\cli.js` directly so Bun/npm installs behave the same. It
 prefers `bun install --no-save` on first run, falls back to npm, cleans `project/out/`, compiles, and mirrors
 `out/**/*.luau` into `golden/` preserving subdirectories.)
+
+The upstream oracle must not overwrite the seven fork-divergent fixtures listed
+above. Regenerate those only from current fork-correct Rotor output after
+`TestFullForkParity` confirms the archived fork contract.
 
 ## Enabling fixtures
 
