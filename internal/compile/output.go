@@ -62,7 +62,7 @@ type BuildResult struct {
 // compiled outputs. CompileProject remains the pure library API; this is the
 // writing entry point for the CLI and future watch/incremental layers.
 func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResult, []string, error) {
-	dir, program, diags, err := newProjectProgram(projectDir, opts.TsConfigPath)
+	dir, program, diags, err := newProjectProgramWithOptions(projectDir, opts.TsConfigPath, opts)
 	if err != nil {
 		return nil, diags, err
 	}

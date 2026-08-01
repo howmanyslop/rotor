@@ -90,6 +90,10 @@ type projectContext struct {
 // upstream `--project` may name any config file, CLI/commands/build.ts
 // L31-40).
 func newProjectProgram(projectDir, tsConfigPath string) (string, *compiler.Program, []string, error) {
+	return newProjectProgramWithOptions(projectDir, tsConfigPath, ProjectOptions{})
+}
+
+func newProjectProgramWithOptions(projectDir, tsConfigPath string, opts ProjectOptions) (string, *compiler.Program, []string, error) {
 	dir, err := filepath.Abs(projectDir)
 	if err != nil {
 		return "", nil, nil, err
@@ -114,7 +118,7 @@ func newProjectProgram(projectDir, tsConfigPath string) (string, *compiler.Progr
 	// own project/LSP host uses. Safe because a build never mutates its source
 	// tree mid-pass, so cached file metadata cannot go stale.
 	fs := cachedvfs.From(SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath))
-	program, diags, err := newProjectProgramFromFS(dir, configPath, fs)
+	program, diags, err := newProjectProgramFromFSWithOptions(dir, configPath, fs, opts.Checkers)
 	if err != nil {
 		return "", nil, diags, err
 	}
@@ -447,6 +451,14 @@ type ProjectOptions struct {
 	// <projectDir>/tsconfig.json — the original CompileProject behavior.
 	TsConfigPath string
 
+	// Checkers overrides compilerOptions.checkers when set by the CLI. A nil
+	// value preserves the parsed config and upstream default behavior.
+	Checkers *int
+
+	// Builders overrides the project builder count when set by the CLI. A nil
+	// value preserves the upstream default behavior.
+	Builders *int
+
 	// RojoConfigPath is the --rojo override (createProjectData.ts L33-43):
 	// non-empty values are path.resolve'd and used verbatim; QUIRK verbatim
 	// from upstream's truthiness check, "" (including an explicit `--rojo ""`)
@@ -558,7 +570,7 @@ func CompileProject(projectDir string) (map[string]string, []string, error) {
 // project validation or per-file diagnostics, so type errors in source files
 // do not stop the runtime library from landing.
 func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[string]string, []string, error) {
-	dir, program, diags, err := newProjectProgram(projectDir, opts.TsConfigPath)
+	dir, program, diags, err := newProjectProgramWithOptions(projectDir, opts.TsConfigPath, opts)
 	if err != nil {
 		return nil, diags, err
 	}

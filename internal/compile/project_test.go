@@ -10,6 +10,7 @@ import (
 
 	"rotor/internal/includefiles"
 	"rotor/internal/transformer"
+	"rotor/tsgo/core"
 )
 
 // ----------------------------------------------------------------------------
@@ -648,6 +649,156 @@ func TestNewProjectProgramUsesMultipleCheckerGroups(t *testing.T) {
 	if len(groups) < 2 {
 		t.Fatalf("checker groups = %d, want at least 2 (source files=%d, singleThreaded=%v, options.checkers=%d)", len(groups), len(sourceFiles), program.SingleThreaded(), checkers)
 	}
+}
+
+func TestApplyCheckerOverride(t *testing.T) {
+	configuredCheckers := 1
+	cliCheckers := 3
+	options := &core.CompilerOptions{
+		Checkers:       &configuredCheckers,
+		SingleThreaded: core.TSTrue,
+	}
+
+	applyCheckerOverride(options, nil)
+	if options.Checkers == nil || *options.Checkers != configuredCheckers {
+		t.Fatalf("nil override changed checkers: got %v, want %d", options.Checkers, configuredCheckers)
+	}
+	if options.SingleThreaded != core.TSTrue {
+		t.Fatalf("nil override changed singleThreaded: got %v, want %v", options.SingleThreaded, core.TSTrue)
+	}
+
+	applyCheckerOverride(options, &cliCheckers)
+	if options.Checkers != &cliCheckers {
+		t.Fatalf("CLI override pointer = %p, want %p", options.Checkers, &cliCheckers)
+	}
+	if *options.Checkers != cliCheckers {
+		t.Fatalf("CLI override checkers = %d, want %d", *options.Checkers, cliCheckers)
+	}
+	if options.SingleThreaded != core.TSTrue {
+		t.Fatalf("CLI override changed singleThreaded: got %v, want %v", options.SingleThreaded, core.TSTrue)
+	}
+}
+
+func TestNewProjectProgramCheckerOverride(t *testing.T) {
+	cliCheckers := 3
+	cliSingleThreadedCheckers := 4
+	tests := []struct {
+		name           string
+		configOptions  string
+		opts           ProjectOptions
+		wantCheckers   *int
+		wantSingle     core.Tristate
+		wantGroupCount int
+	}{
+		{
+			name:          "nil CLI preserves configured checkers",
+			configOptions: ",\n\t\t\"checkers\": 1",
+			wantCheckers:  intPtr(1),
+		},
+		{
+			name:          "CLI overrides configured checkers",
+			configOptions: ",\n\t\t\"checkers\": 1",
+			opts:          ProjectOptions{Checkers: &cliCheckers},
+			wantCheckers:  &cliCheckers,
+		},
+		{
+			name:         "absent config and CLI leaves checkers nil",
+			wantCheckers: nil,
+		},
+		{
+			name:           "single threaded config keeps one effective checker group",
+			configOptions:  ",\n\t\t\"singleThreaded\": true",
+			opts:           ProjectOptions{Checkers: &cliSingleThreadedCheckers},
+			wantCheckers:   &cliSingleThreadedCheckers,
+			wantSingle:     core.TSTrue,
+			wantGroupCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeCheckerProject(t, tt.configOptions)
+			_, program, diags, err := newProjectProgramWithOptions(dir, "", tt.opts)
+			if err != nil {
+				t.Fatalf("newProjectProgramWithOptions: %v (diags: %v)", err, diags)
+			}
+
+			gotCheckers := program.Options().Checkers
+			if tt.wantCheckers == nil {
+				if gotCheckers != nil {
+					t.Fatalf("checkers = %d, want nil", *gotCheckers)
+				}
+			} else {
+				if gotCheckers == nil || *gotCheckers != *tt.wantCheckers {
+					t.Fatalf("checkers = %v, want %d", gotCheckers, *tt.wantCheckers)
+				}
+			}
+			if program.Options().SingleThreaded != tt.wantSingle {
+				t.Fatalf("singleThreaded = %v, want %v", program.Options().SingleThreaded, tt.wantSingle)
+			}
+			if tt.wantGroupCount != 0 {
+				groups := groupSourceFilesByChecker(context.Background(), program, projectSourceFiles(program))
+				if len(groups) != tt.wantGroupCount {
+					t.Fatalf("checker groups = %d, want %d", len(groups), tt.wantGroupCount)
+				}
+			}
+		})
+	}
+}
+
+func TestProjectOptionsForReferencedConfigPreservesCheckerOverrides(t *testing.T) {
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "tsconfig.json")
+	if err := os.WriteFile(configPath, []byte(`{"rbxts":{"type":"package"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	checkers := 3
+	builders := 2
+	entry := ProjectOptions{
+		Checkers: &checkers,
+		Builders: &builders,
+	}
+
+	got, err := ProjectOptionsForReferencedConfig(entry, configPath, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Checkers != entry.Checkers || got.Builders != entry.Builders {
+		t.Fatalf("referenced options lost CLI overrides: got checkers=%p builders=%p, want checkers=%p builders=%p", got.Checkers, got.Builders, entry.Checkers, entry.Builders)
+	}
+	if *got.Checkers != checkers || *got.Builders != builders {
+		t.Fatalf("referenced overrides = checkers %d, builders %d; want checkers %d, builders %d", *got.Checkers, *got.Builders, checkers, builders)
+	}
+}
+
+func writeCheckerProject(t *testing.T, compilerOptions string) string {
+	t.Helper()
+	dir := writeProject(t, "@scope/checker-options-fixture", "")
+	configPath := filepath.Join(dir, "tsconfig.json")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configText := string(config)
+	if compilerOptions != "" {
+		configText = strings.Replace(configText, "\n\t},\n\t\"include\"", compilerOptions+"\n\t},\n\t\"include\"", 1)
+		if configText == string(config) {
+			t.Fatal("checker project config insertion point not found")
+		}
+	}
+	if err := os.WriteFile(configPath, []byte(configText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.ts", "b.ts", "c.ts", "d.ts"} {
+		if err := os.WriteFile(filepath.Join(dir, "src", name), []byte("export {};\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func intPtr(value int) *int {
+	return &value
 }
 
 func keys(m map[string]string) []string {

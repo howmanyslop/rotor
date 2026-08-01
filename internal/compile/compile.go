@@ -67,7 +67,7 @@ func CompileFileWithOptions(projectDir, relPath string, opts ProjectOptions) (st
 
 // CompileFileDetailedWithOptions is the options-aware single-file fast path.
 func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOptions) (string, []DiagnosticInfo, error) {
-	dir, program, diags, err := newProjectProgram(projectDir, opts.TsConfigPath)
+	dir, program, diags, err := newProjectProgramWithOptions(projectDir, opts.TsConfigPath, opts)
 	if err != nil {
 		return "", stringDiagnostics(diags), err
 	}

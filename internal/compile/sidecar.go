@@ -172,7 +172,7 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	for _, file := range response.Transformed {
 		overlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
 	}
-	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, overlays)
+	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, overlays, program.Options().Checkers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -512,7 +512,7 @@ func sidecarEnv(projectDir, sidecarDir string) []string {
 	return append(env, "NODE_PATH="+nodePathValue)
 }
 
-func newProjectProgramWithOverlay(projectDir, tsConfigPath string, overlays map[string]string) (*compiler.Program, []string, error) {
+func newProjectProgramWithOverlay(projectDir, tsConfigPath string, overlays map[string]string, checkers *int) (*compiler.Program, []string, error) {
 	dir := filepath.ToSlash(projectDir)
 	if abs, err := filepath.Abs(projectDir); err == nil {
 		dir = filepath.ToSlash(abs)
@@ -538,10 +538,14 @@ func newProjectProgramWithOverlay(projectDir, tsConfigPath string, overlays map[
 			return baseFS.ReadFile(path)
 		},
 	})
-	return newProjectProgramFromFS(dir, configPath, fs)
+	return newProjectProgramFromFSWithOptions(dir, configPath, fs, checkers)
 }
 
 func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Program, []string, error) {
+	return newProjectProgramFromFSWithOptions(dir, configPath, fs, nil)
+}
+
+func newProjectProgramFromFSWithOptions(dir, configPath string, fs vfs.FS, checkers *int) (*compiler.Program, []string, error) {
 	// rotor extension: serve the synthetic $env ambient declaration from an
 	// in-memory file next to the tsconfig (see envdecl.go for the parity
 	// rationale) ...
@@ -562,6 +566,7 @@ func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Progr
 	if len(configDiags) > 0 {
 		return nil, diagnosticStrings(configDiags), errors.New("compile: tsconfig.json has errors")
 	}
+	applyCheckerOverride(parsed.CompilerOptions(), checkers)
 
 	raw := readRawEnforcedOptions(filepath.FromSlash(configPath))
 	if msg := validateCompilerOptions(parsed.CompilerOptions(), dir, raw); msg != "" {
