@@ -1044,6 +1044,9 @@ func typeRootsContain(typeRoots []string, projectPath, rbxtsModules string) bool
 		if filepath.ToSlash(filepath.Clean(resolved)) == want {
 			return true
 		}
+		if pathExists(resolved) {
+			return true
+		}
 	}
 	return false
 }

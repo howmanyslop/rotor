@@ -227,17 +227,17 @@ func AllProjectFixtures() []ProjectFixture {
 		{
 			Name: "cross-project-dts", Description: "Referenced library imports through generated and hand-authored declarations", Category: "cross-project", ExpectedExitCode: 0,
 			Files: map[string]string{
-				"package.json": fixturePackageJSON, "tsconfig.json": `{"files":[],"references":[{"path":"./lib"},{"path":"./game"}]}\n`,
-				"lib/package.json": fixturePackageJSON, "lib/tsconfig.json": `{"extends":"../tsconfig.base.json","compilerOptions":{"rootDir":"src","outDir":"out"},"include":["src"]}\n`, "tsconfig.base.json": buildBaseTSConfig, "lib/src/regular.ts": "export const regular = (): string => \"regular\";\n", "lib/src/handauth/index.d.ts": "export declare function handauth(): string;\n", "lib/src/handauth/init.luau": "return { handauth = function(): string return \"handauth\" end }\n",
-				"game/package.json": fixturePackageJSON, "game/tsconfig.json": `{"extends":"../lib/tsconfig.json","compilerOptions":{"rootDir":"src","outDir":"out"},"include":["src"],"references":[{"path":"../lib"}],"rbxts":{"rojo":"./game.project.json","type":"game"}}\n`, "game/game.project.json": `{"name":"cross-project","tree":{"$className":"DataModel","ReplicatedStorage":{"shared":{"$path":"../lib/out"},"game":{"$path":"out"}}}}\n`, "game/src/index.ts": "import { handauth } from \"../../lib/src/handauth\";\nimport { regular } from \"../../lib/src/regular\";\nexport const run = () => regular() + handauth();\n",
+				"package.json": fixturePackageJSON, "tsconfig.json": `{"files":[],"references":[{"path":"./lib"},{"path":"./game"}]}`,
+				"lib/package.json": fixturePackageJSON, "lib/tsconfig.json": `{"extends":"../tsconfig.base.json","compilerOptions":{"rootDir":"src","outDir":"out"},"include":["src"]}`, "tsconfig.base.json": buildBaseTSConfig, "lib/src/regular.ts": "export const regular = (): string => \"regular\";\n", "lib/src/handauth/index.d.ts": "export declare function handauth(): string;\n", "lib/src/handauth/init.luau": "return { handauth = function(): string return \"handauth\" end }\n",
+				"game/package.json": fixturePackageJSON, "game/tsconfig.json": `{"extends":"../lib/tsconfig.json","compilerOptions":{"rootDir":"src","outDir":"out"},"include":["src"],"references":[{"path":"../lib"}],"rbxts":{"rojo":"./game.project.json","type":"game"}}`, "game/game.project.json": `{"name":"cross-project","tree":{"$className":"DataModel","ReplicatedStorage":{"include":{"$path":"include"},"shared":{"$path":"../lib/out"},"game":{"$path":"out"}}}}`, "game/include/RuntimeLib.lua": "return {}\n", "game/src/index.ts": "import { handauth } from \"../../lib/src/handauth\";\nimport { regular } from \"../../lib/src/regular\";\nexport const run = () => regular() + handauth();\n",
 			},
 		},
 		{
 			Name: "per-project-rojo", Description: "Referenced project uses its rbxts.rojo override instead of discovery", Category: "resolver", ExpectedExitCode: 0,
 			Files: map[string]string{
-				"package.json": fixturePackageJSON, "tsconfig.json": `{"files":[],"references":[{"path":"./custom-pkg"}]}\n`, "custom-pkg/package.json": fixturePackageJSON,
-				"custom-pkg/tsconfig.json": `{"extends":"../tsconfig.base.json","compilerOptions":{"rootDir":"src","outDir":"out"},"include":["src"],"rbxts":{"rojo":"./custom.project.json"}}\n`, "tsconfig.base.json": buildBaseTSConfig,
-				"custom-pkg/custom.project.json": `{"name":"custom-pkg","tree":{"$path":"out"}}\n`, "custom-pkg/default.project.json": `{"name":"wrong-project","tree":{"$path":"does-not-exist"}}\n`, "custom-pkg/src/index.ts": basicSource,
+				"package.json": fixturePackageJSON, "tsconfig.json": `{"files":[],"references":[{"path":"./custom-pkg"}]}`, "custom-pkg/package.json": fixturePackageJSON,
+				"custom-pkg/tsconfig.json": `{"extends":"../tsconfig.base.json","compilerOptions":{"rootDir":"src","outDir":"out"},"include":["src"],"rbxts":{"rojo":"./custom.project.json"}}`, "tsconfig.base.json": buildBaseTSConfig,
+				"custom-pkg/custom.project.json": `{"name":"custom-pkg","tree":{"$path":"out"}}`, "custom-pkg/default.project.json": `{"name":"wrong-project","tree":{"$path":"does-not-exist"}}`, "custom-pkg/src/index.ts": basicSource,
 			},
 		},
 		{

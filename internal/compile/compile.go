@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 
 	"rotor/internal/luau/render"
 	"rotor/internal/transformer"
@@ -240,11 +241,8 @@ func infoFromNodeDiag(d transformer.Diagnostic) DiagnosticInfo {
 	return info
 }
 
-// infoFromTSDiag builds a located DiagnosticInfo from a tsgo diagnostic.
-// Message is d.String() exactly as before; Code stays empty (TS diagnostics had
-// no Code previously) so existing assertions are unaffected.
 func infoFromTSDiag(d *ast.Diagnostic) DiagnosticInfo {
-	info := DiagnosticInfo{Message: d.String()}
+	info := DiagnosticInfo{Code: "TS" + strconv.FormatInt(int64(d.Code()), 10), Message: d.String()}
 	if f := d.File(); f != nil {
 		info.FileName = f.FileName()
 		info.Offset = d.Pos()

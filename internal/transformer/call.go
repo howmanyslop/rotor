@@ -157,7 +157,8 @@ func shouldWrapLuaTuple(s *State, node *ast.Node, exp luau.Expression) bool {
 	}
 
 	// `foo()[n]`
-	if ast.IsElementAccessExpression(parent) && node.AsCallExpression().QuestionDotToken == nil {
+	if ast.IsElementAccessExpression(parent) && node.AsCallExpression().QuestionDotToken == nil &&
+		parent.AsElementAccessExpression().QuestionDotToken == nil {
 		return false
 	}
 

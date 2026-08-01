@@ -530,8 +530,7 @@ func TestCmdBuildMinify(t *testing.T) {
 	}
 	for p, c := range minLuau {
 		minSize += len(c)
-		// Minify strips comments, including rotor's header.
-		if strings.Contains(c, "-- Compiled with rotor") {
+		if strings.Contains(c, "-- Compiled with @isentinel/roblox-ts") {
 			t.Errorf("%s still carries the header comment (not minified)", p)
 		}
 		// Minified output must still be valid Luau.
@@ -542,7 +541,7 @@ func TestCmdBuildMinify(t *testing.T) {
 	// A normal build keeps the header comment (proves the flag is the cause).
 	keptHeader := false
 	for _, c := range normalLuau {
-		if strings.Contains(c, "-- Compiled with rotor") {
+		if strings.Contains(c, "-- Compiled with @isentinel/roblox-ts") {
 			keptHeader = true
 		}
 	}

@@ -402,9 +402,7 @@ func cmdBuild(args []string) int {
 }
 
 func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
-	// Real builds carry rotor's own header; the upstream-header default is
-	// only load-bearing for differential byte-comparison in tests.
-	transformer.HeaderComment = " Compiled with rotor v" + version
+	transformer.HeaderComment = " Compiled with @isentinel/roblox-ts v4.0.11"
 
 	start := time.Now()
 	result, msgs, err := compile.BuildProjectWithOptions(dir, projectCompileOptions(tsConfigPath, opts))
@@ -421,7 +419,7 @@ func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.Build
 }
 
 func runBuildSolutionOnce(tsConfigPath string, opts projectOptions) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
-	transformer.HeaderComment = " Compiled with rotor v" + version
+	transformer.HeaderComment = " Compiled with @isentinel/roblox-ts v4.0.11"
 	start := time.Now()
 	result, msgs, err := compile.BuildSolutionWithOptions(tsConfigPath, projectCompileOptions(tsConfigPath, opts))
 	var diags []compile.DiagnosticInfo

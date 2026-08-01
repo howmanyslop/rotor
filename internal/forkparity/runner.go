@@ -32,6 +32,13 @@ type RunResult struct {
 	Error      error
 }
 
+type RotorRun struct {
+	Binary     string
+	FixtureDir string
+	OutputDir  string
+	Args       []string
+}
+
 type commandSpec struct {
 	name string
 	args []string
@@ -54,18 +61,29 @@ func (r Runner) RunFork(ctx context.Context, fixtureDir, outDir string) (*RunRes
 
 // RunRotor compiles fixtureDir with rotorBin and captures outDir.
 func (r Runner) RunRotor(ctx context.Context, rotorBin, fixtureDir, outDir string) (*RunResult, error) {
-	if rotorBin == "" {
-		rotorBin = r.RotorBinPath
+	return r.RunRotorWithArgs(ctx, RotorRun{
+		Binary:     rotorBin,
+		FixtureDir: fixtureDir,
+		OutputDir:  outDir,
+		Args:       []string{},
+	})
+}
+
+func (r Runner) RunRotorWithArgs(ctx context.Context, run RotorRun) (*RunResult, error) {
+	if run.Binary == "" {
+		run.Binary = r.RotorBinPath
 	}
-	fixtureDir, outDir = r.paths(fixtureDir, outDir)
+	run.FixtureDir, run.OutputDir = r.paths(run.FixtureDir, run.OutputDir)
+	args := append([]string{"build"}, run.Args...)
+	args = append(args, "--project", run.FixtureDir)
 	return r.run(
 		ctx,
 		commandSpec{
-			name: rotorBin,
-			args: []string{"build", "--project", fixtureDir},
-			dir:  fixtureDir,
+			name: run.Binary,
+			args: args,
+			dir:  run.FixtureDir,
 		},
-		outDir,
+		run.OutputDir,
 	)
 }
 

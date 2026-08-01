@@ -11,6 +11,15 @@ func getSpreadDestructorForType(s *State, t *checker.Type) spreadDestructor {
 	if IsDefinitelyType(s, t, IsArrayType(s)) {
 		return spreadDestructureArray
 	}
+	if IsDefinitelyType(s, t, IsSetType(s)) {
+		return spreadDestructureSet
+	}
+	if IsDefinitelyType(s, t, IsMapType(s)) || IsSharedTableType(s, t) {
+		return spreadDestructureMap
+	}
+	if IsDefinitelyType(s, t, IsGeneratorType(s)) || IsDefinitelyType(s, t, IsObjectType) {
+		return spreadDestructureGenerator
+	}
 	return nil
 }
 
@@ -22,6 +31,75 @@ func spreadDestructureArray(s *State, parentID luau.AnyIdentifier, index int, id
 		luau.Num(1),
 		luau.NewArray(luau.NewList[luau.Expression]()),
 	))
+}
+
+func spreadDestructureSet(s *State, parentID luau.AnyIdentifier, index int, idStack []luau.AnyIdentifier) luau.Expression {
+	extracted := luau.NewList[*luau.MapField]()
+	for _, id := range idStack {
+		extracted.Push(luau.NewMapField(id, luau.Bool(true)))
+	}
+	extractedID := s.PushToVar(luau.NewMap(extracted), "extracted")
+	restID := s.PushToVar(luau.NewArray(luau.NewList[luau.Expression]()), "rest")
+	keyID := luau.TempID("k")
+	s.Prereq(luau.NewFor(
+		luau.NewList[luau.AnyIdentifier](keyID),
+		parentID,
+		luau.NewList[luau.Statement](
+			luau.NewIf(
+				luau.NewUnary("not", luau.NewComputedIndex(extractedID, keyID)),
+				luau.NewList[luau.Statement](luau.NewCallStatement(luau.NewCall(
+					luau.GlobalProperty("table", "insert"),
+					luau.NewList[luau.Expression](restID, keyID),
+				))),
+				nil,
+			),
+		),
+	))
+	return restID
+}
+
+func spreadDestructureMap(s *State, parentID luau.AnyIdentifier, index int, idStack []luau.AnyIdentifier) luau.Expression {
+	extracted := luau.NewList[*luau.MapField]()
+	for _, id := range idStack {
+		extracted.Push(luau.NewMapField(id, luau.Bool(true)))
+	}
+	extractedID := s.PushToVar(luau.NewMap(extracted), "extracted")
+	restID := s.PushToVar(luau.NewArray(luau.NewList[luau.Expression]()), "rest")
+	keyID := luau.TempID("k")
+	valueID := luau.TempID("v")
+	s.Prereq(luau.NewFor(
+		luau.NewList[luau.AnyIdentifier](keyID, valueID),
+		parentID,
+		luau.NewList[luau.Statement](
+			luau.NewIf(
+				luau.NewUnary("not", luau.NewComputedIndex(extractedID, keyID)),
+				luau.NewList[luau.Statement](luau.NewCallStatement(luau.NewCall(
+					luau.GlobalProperty("table", "insert"),
+					luau.NewList[luau.Expression](restID, luau.NewArray(luau.NewList[luau.Expression](keyID, valueID))),
+				))),
+				nil,
+			),
+		),
+	))
+	return restID
+}
+
+func spreadDestructureGenerator(s *State, parentID luau.AnyIdentifier, index int, idStack []luau.AnyIdentifier) luau.Expression {
+	restID := s.PushToVar(luau.NewArray(luau.NewList[luau.Expression]()), "rest")
+	valueID := luau.TempID("v")
+	s.Prereq(luau.NewWhile(luau.Bool(true), luau.NewList[luau.Statement](
+		luau.NewVariableDeclaration(valueID, luau.NewCall(luau.NewPropertyAccess(parentID, "next"), luau.NewList[luau.Expression]())),
+		luau.NewIf(
+			luau.NewBinary(luau.NewPropertyAccess(valueID, "done"), "==", luau.Bool(true)),
+			luau.NewList[luau.Statement](luau.NewBreak()),
+			nil,
+		),
+		luau.NewCallStatement(luau.NewCall(
+			luau.GlobalProperty("table", "insert"),
+			luau.NewList[luau.Expression](restID, luau.NewPropertyAccess(valueID, "value")),
+		)),
+	)))
+	return restID
 }
 
 func spreadDestructureObject(s *State, parentID luau.AnyIdentifier, preSpreadNames []luau.Expression) luau.Expression {
