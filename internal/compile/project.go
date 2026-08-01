@@ -483,6 +483,105 @@ type ProjectOptions struct {
 	// default (false) leaves output byte-identical to rbxtsc. Declaration
 	// (`.d.ts`) and include files are never minified.
 	MinifyOutput bool
+
+	EmitDeclarationOnly bool
+}
+
+func ProjectOptionsForReferencedConfig(entry ProjectOptions, tsConfigPath string, inheritEntryTypeAndRojo bool) (ProjectOptions, error) {
+	declared, err := ReadRbxtsOptions(tsConfigPath)
+	if err != nil {
+		return ProjectOptions{}, err
+	}
+	if declared == nil {
+		if !inheritEntryTypeAndRojo {
+			entry.Type = ""
+			entry.RojoConfigPath = ""
+		}
+		return entry, nil
+	}
+
+	entry.Type = ""
+	entry.RojoConfigPath = ""
+	if declared.IncludePath != nil {
+		entry.IncludePath = *declared.IncludePath
+	}
+	if declared.Rojo != nil {
+		entry.RojoConfigPath = *declared.Rojo
+	}
+	if declared.Type != nil {
+		entry.Type = transformer.ProjectType(*declared.Type)
+	}
+	if declared.LogTruthyChanges != nil {
+		entry.LogTruthyChanges = *declared.LogTruthyChanges
+	}
+	if declared.AllowCommentDirectives != nil {
+		entry.AllowCommentDirectives = *declared.AllowCommentDirectives
+	}
+	if declared.NoInclude != nil {
+		entry.EmitIncludeFiles = !*declared.NoInclude
+	}
+	if declared.OptimizedLoops != nil {
+		entry.NoOptimizedLoops = !*declared.OptimizedLoops
+	}
+	if declared.Luau != nil {
+		entry.LuaExtension = !*declared.Luau
+	}
+	return entry, nil
+}
+
+func BuildSolutionWithOptions(tsConfigPath string, entry ProjectOptions) (*BuildResult, []string, error) {
+	result := &BuildResult{Outputs: make(map[string]string)}
+	seen := make(map[string]struct{})
+	_, solution, err := readProjectReferencePaths(tsConfigPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := buildReferencedProjects(tsConfigPath, entry, solution, seen, result); err != nil {
+		return result, diagnosticInfoMessages(result.Diagnostics), err
+	}
+	return result, nil, nil
+}
+
+func buildReferencedProjects(tsConfigPath string, entry ProjectOptions, inheritEntryTypeAndRojo bool, seen map[string]struct{}, result *BuildResult) error {
+	configPath, err := filepath.Abs(tsConfigPath)
+	if err != nil {
+		return err
+	}
+	if _, ok := seen[configPath]; ok {
+		return fmt.Errorf("compile: circular project reference %s", configPath)
+	}
+	seen[configPath] = struct{}{}
+	defer delete(seen, configPath)
+
+	references, solution, err := readProjectReferencePaths(configPath)
+	if err != nil {
+		return err
+	}
+	for _, reference := range references {
+		options, err := ProjectOptionsForReferencedConfig(entry, reference, inheritEntryTypeAndRojo)
+		if err != nil {
+			return err
+		}
+		if err := buildReferencedProjects(reference, options, inheritEntryTypeAndRojo, seen, result); err != nil {
+			return err
+		}
+	}
+	if solution {
+		return nil
+	}
+	entry.TsConfigPath = configPath
+	built, messages, err := BuildProjectWithOptions(filepath.Dir(configPath), entry)
+	if err != nil {
+		for _, message := range messages {
+			result.Diagnostics = append(result.Diagnostics, DiagnosticInfo{Message: message})
+		}
+		return err
+	}
+	for path, text := range built.Outputs {
+		result.Outputs[path] = text
+	}
+	result.EmittedFiles = append(result.EmittedFiles, built.EmittedFiles...)
+	return nil
 }
 
 // CompileProject compiles every file of the project rooted at projectDir —
@@ -776,45 +875,85 @@ type rawEnforcedOptions struct {
 	moduleResolution    string // raw text; "" when absent or non-string
 	hasModuleResolution bool
 	types               []string // raw entries; nil when absent
-	importsNotUsed      string   // raw text; "" when absent or non-string
+	hasTypes            bool
+	importsNotUsed      string // raw text; "" when absent or non-string
 	hasImportsNotUsed   bool
 }
 
-// readRawEnforcedOptions extracts rawEnforcedOptions from the unsanitized
-// tsconfig.json text. Same root-file-only scope as SanitizeTSConfig (its
-// documented "extends" gap): an extended config carrying these options is
-// neither sanitized nor raw-validated. Unreadable/unparsable input returns the
-// zero value — tsoptions reports the parse error itself, before validation.
+// readRawEnforcedOptions merges raw values from the extends chain before
+// tsoptions sees the sanitizer's TS7 compatibility rewrites. Unreadable or
+// unparsable configs return zero values so tsoptions reports the parse error.
 func readRawEnforcedOptions(configPath string) rawEnforcedOptions {
-	var raw rawEnforcedOptions
+	return readRawEnforcedOptionsFromChain(configPath, make(map[string]struct{}))
+}
+
+func readRawEnforcedOptionsFromChain(configPath string, visited map[string]struct{}) rawEnforcedOptions {
+	normalized, err := filepath.Abs(configPath)
+	if err != nil {
+		return rawEnforcedOptions{}
+	}
+	normalized = filepath.Clean(normalized)
+	if _, ok := visited[normalized]; ok {
+		return rawEnforcedOptions{}
+	}
+	visited[normalized] = struct{}{}
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return raw
+		return rawEnforcedOptions{}
 	}
 	var root map[string]any
 	if json.Unmarshal([]byte(stripJSONC(string(data))), &root) != nil {
-		return raw
+		return rawEnforcedOptions{}
 	}
+
+	base := rawEnforcedOptions{}
+	if extends, ok := root["extends"].(string); ok {
+		parent, err := resolveExtendsPath(filepath.Dir(normalized), extends)
+		if err == nil {
+			base = readRawEnforcedOptionsFromChain(parent, visited)
+		}
+	}
+
+	current := rawEnforcedOptions{}
 	co, ok := root["compilerOptions"].(map[string]any)
 	if !ok {
-		return raw
+		return base
 	}
 	if v, ok := co["moduleResolution"]; ok {
-		raw.hasModuleResolution = true
-		raw.moduleResolution, _ = v.(string)
+		current.hasModuleResolution = true
+		current.moduleResolution, _ = v.(string)
 	}
-	if list, ok := co["types"].([]any); ok {
+	if value, present := co["types"]; present {
+		current.hasTypes = true
+		list, _ := value.([]any)
 		for _, e := range list {
 			if s, ok := e.(string); ok {
-				raw.types = append(raw.types, s)
+				current.types = append(current.types, s)
 			}
 		}
 	}
 	if v, ok := co["importsNotUsedAsValues"]; ok {
-		raw.hasImportsNotUsed = true
-		raw.importsNotUsed, _ = v.(string)
+		current.hasImportsNotUsed = true
+		current.importsNotUsed, _ = v.(string)
 	}
-	return raw
+	return mergeRawEnforcedOptions(base, current)
+}
+
+func mergeRawEnforcedOptions(base, overlay rawEnforcedOptions) rawEnforcedOptions {
+	if overlay.hasModuleResolution {
+		base.moduleResolution = overlay.moduleResolution
+		base.hasModuleResolution = true
+	}
+	if overlay.hasTypes {
+		base.types = overlay.types
+		base.hasTypes = true
+	}
+	if overlay.hasImportsNotUsed {
+		base.importsNotUsed = overlay.importsNotUsed
+		base.hasImportsNotUsed = true
+	}
+	return base
 }
 
 // validateCompilerOptions is the full port of

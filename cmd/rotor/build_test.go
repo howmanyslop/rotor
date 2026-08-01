@@ -31,8 +31,8 @@ func TestParseBuildArgs(t *testing.T) {
 
 	t.Run("usePolling without watch errors", func(t *testing.T) {
 		_, err := parseBuildArgs([]string{"--usePolling"})
-		if err == nil || !strings.Contains(err.Error(), "watch") {
-			t.Errorf("err = %v, want implies-watch error", err)
+		if err == nil || err.Error() != "Implications failed:\n usePolling -> watch" {
+			t.Errorf("err = %v, want yargs implication error", err)
 		}
 	})
 
@@ -180,6 +180,76 @@ func TestParseBuildArgsJSON(t *testing.T) {
 	}
 	if !got.jsonOut {
 		t.Error("--json not parsed")
+	}
+}
+
+func TestBuildModeArgs(t *testing.T) {
+	// Given
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+		build   bool
+		path    string
+		emit    bool
+	}{
+		{name: "short build path", args: []string{"-b", "tsconfig.solution.json"}, build: true, path: "tsconfig.solution.json"},
+		{name: "bare build", args: []string{"--build"}, build: true},
+		{name: "declaration only build", args: []string{"--build", "--emitDeclarationOnly"}, build: true, emit: true},
+		{name: "declaration only requires build", args: []string{"--emitDeclarationOnly"}, wantErr: "Implications failed:\n emitDeclarationOnly -> build"},
+		{name: "declaration watch incompatible", args: []string{"--build", "--watch", "--emitDeclarationOnly"}, wantErr: "--build --watch is incompatible with --emitDeclarationOnly (no Luau emit to incrementally watch)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			got, err := parseBuildArgs(tt.args)
+
+			// Then
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("parseBuildArgs(%v) error = %v, want %q", tt.args, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.build != tt.build || got.buildPath != tt.path || got.emitDeclarationOnly != tt.emit {
+				t.Errorf("parseBuildArgs(%v) = %+v", tt.args, got)
+			}
+		})
+	}
+}
+
+func TestBuildModeArgs_emitDeclarationOnly_skipsLuau(t *testing.T) {
+	// Given
+	dir := writeBuildableProject(t, "")
+	configPath := filepath.Join(dir, "tsconfig.json")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = []byte(strings.Replace(string(config), `"outDir": "out"`, `"declaration": true,
+		"outDir": "out"`, 1))
+	if err := os.WriteFile(configPath, config, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	_, code := captureStdout(t, func() int {
+		return cmdBuild([]string{"--build", "--emitDeclarationOnly", dir})
+	})
+
+	// Then
+	if code != 0 {
+		t.Fatalf("declaration-only build exit = %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "main.luau")); !os.IsNotExist(err) {
+		t.Errorf("declaration-only build wrote main.luau: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "main.d.ts")); err != nil {
+		t.Errorf("declaration-only build did not write main.d.ts: %v", err)
 	}
 }
 

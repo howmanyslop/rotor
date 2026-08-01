@@ -127,18 +127,17 @@ func TestReadRbxtsOptions(t *testing.T) {
 			// jsonc comment
 			"compilerOptions": { "strict": true },
 			"rbxts": {
-				"verbose": true,
 				"luau": false,
 				"type": "model", /* block */
 				"includePath": "runtime",
 			},
 		}`)
-		got := readRbxtsOptions(p)
+		got, err := readRbxtsOptionsChecked(p)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if got == nil {
 			t.Fatal("rbxts key not read")
-		}
-		if got.verbose == nil || !*got.verbose {
-			t.Error("verbose not parsed")
 		}
 		if got.luau == nil || *got.luau {
 			t.Error("luau=false not parsed")
@@ -146,7 +145,7 @@ func TestReadRbxtsOptions(t *testing.T) {
 		if got.typeName == nil || *got.typeName != "model" {
 			t.Error("type not parsed")
 		}
-		if got.includePath == nil || *got.includePath != "runtime" {
+		if got.includePath == nil || *got.includePath != filepath.Join(dir, "runtime") {
 			t.Error("includePath not parsed")
 		}
 		if got.watch != nil || got.optimizedLoops != nil {
@@ -156,21 +155,23 @@ func TestReadRbxtsOptions(t *testing.T) {
 
 	t.Run("no rbxts key returns nil", func(t *testing.T) {
 		p := write("b.json", `{"compilerOptions": {}}`)
-		if got := readRbxtsOptions(p); got != nil {
+		if got, err := readRbxtsOptionsChecked(p); err != nil || got != nil {
 			t.Errorf("got %+v, want nil", got)
 		}
 	})
 
-	t.Run("extends is not followed", func(t *testing.T) {
+	t.Run("extends inherits parent options", func(t *testing.T) {
 		write("base.json", `{"rbxts": {"verbose": true}}`)
 		p := write("child.json", `{"extends": "./base.json", "compilerOptions": {}}`)
-		if got := readRbxtsOptions(p); got != nil {
-			t.Errorf("rbxts inherited through extends: %+v (upstream reads the found file only)", got)
+		if got, err := readRbxtsOptionsChecked(p); err != nil {
+			t.Fatal(err)
+		} else if got == nil || *got != (partialProjectOptions{}) {
+			t.Errorf("CLI-only parent key should become an empty rbxts layer: %+v", got)
 		}
 	})
 
 	t.Run("unreadable returns nil", func(t *testing.T) {
-		if got := readRbxtsOptions(filepath.Join(dir, "missing.json")); got != nil {
+		if got, err := readRbxtsOptionsChecked(filepath.Join(dir, "missing.json")); err != nil || got != nil {
 			t.Errorf("got %+v, want nil", got)
 		}
 	})

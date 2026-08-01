@@ -39,7 +39,7 @@ func SanitizeFSWithConfigPath(inner vfs.FS, configPath string) vfs.FS {
 			if !ok {
 				return contents, ok
 			}
-			if isTSConfigPath(path) || (configPath != "" && path == configPath) {
+			if isTSConfigPath(path) || (configPath != "" && path == configPath) || isTSConfigContents(path, contents) {
 				return SanitizeTSConfig(contents), true
 			}
 			if isCompilerTypesDTSPath(path) {
@@ -48,6 +48,19 @@ func SanitizeFSWithConfigPath(inner vfs.FS, configPath string) vfs.FS {
 			return contents, ok
 		},
 	})
+}
+
+func isTSConfigContents(path, contents string) bool {
+	if !strings.HasSuffix(path, ".json") {
+		return false
+	}
+	var root map[string]json.RawMessage
+	if json.Unmarshal([]byte(stripJSONC(contents)), &root) != nil {
+		return false
+	}
+	_, hasCompilerOptions := root["compilerOptions"]
+	_, hasExtends := root["extends"]
+	return hasCompilerOptions || hasExtends
 }
 
 // isTSConfigPath reports whether path's basename is exactly "tsconfig.json"

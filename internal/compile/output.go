@@ -65,6 +65,17 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err != nil {
 		return nil, diags, err
 	}
+	if opts.EmitDeclarationOnly {
+		if !program.Options().GetEmitDeclarations() {
+			msg := "Option 'emitDeclarationOnly' cannot be specified without specifying option 'declaration' or option 'composite'."
+			return nil, []string{msg}, errors.New("compile: TypeScript diagnostics")
+		}
+		emitted, err := emitDeclarations(program, nil, opts.WriteOnlyChanged)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &BuildResult{Outputs: map[string]string{}, EmittedFiles: emitted}, nil, nil
+	}
 
 	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
 	sourceFiles := projectSourceFiles(program)
@@ -266,7 +277,7 @@ func loadRojoCachesPreBuild(dir string, opts ProjectOptions) *rojo.RojoResolverC
 }
 
 func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct{}, writeOnlyChanged bool) ([]string, error) {
-	if !program.Options().Declaration.IsTrue() {
+	if !program.Options().GetEmitDeclarations() {
 		return nil, nil
 	}
 
