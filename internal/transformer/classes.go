@@ -267,7 +267,8 @@ func transformImplicitClassConstructor(s *State, node *ast.Node, name luau.AnyId
 // ConstructorDeclarations (their type has construct signatures, no call
 // signatures); the `:` declaration sugar supplies self.
 func transformClassConstructor(s *State, node *ast.Node, name luau.AnyIdentifier) *luau.List[luau.Statement] {
-	parameters, statements, hasDotDotDot := transformParameters(s, node)
+	parameters, statements, hasDotDotDot, varArgsData := transformParameters(s, node)
+	restParam := registerOptimizableVarArgsForFunction(s, node, varArgsData)
 	bodyStatements := node.Body().AsBlock().Statements.Nodes
 
 	// property parameters must come after the first super() call
@@ -295,6 +296,9 @@ func transformClassConstructor(s *State, node *ast.Node, name luau.AnyIdentifier
 	statements.PushList(transformPropertyInitializers(s, node.Parent))
 
 	statements.PushList(TransformStatementList(s, node.Body(), bodyStatements[superIndex+1:], nil))
+	if restParam != nil {
+		s.unregisterOptimizableVarArgs(restParam)
+	}
 
 	return luau.NewList[luau.Statement](luau.NewMethodDeclaration(
 		name, constructorMethodName, parameters, hasDotDotDot, statements))

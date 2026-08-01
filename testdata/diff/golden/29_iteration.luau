@@ -73,38 +73,33 @@ while true do
 	print(packed[1])
 end
 -- destructuring FROM a Map: `local _k, _v = next(map[, lastK])`
-local _binding = scores
-local _k, _v = next(_binding)
-local _binding_1 = { _k, _v }
-local ka = _binding_1[1]
-local va = _binding_1[2]
-local _k_1, _v_1 = next(_binding, _k)
-local _binding_2 = { _k_1, _v_1 }
-local kb = _binding_2[1]
-local vb = _binding_2[2]
+local _k, _v = next(scores)
+local _binding = { _k, _v }
+local ka = _binding[1]
+local va = _binding[2]
+local _k_1, _v_1 = next(scores, _k)
+local _binding_1 = { _k_1, _v_1 }
+local kb = _binding_1[1]
+local vb = _binding_1[2]
 print(ka, va, kb, vb)
 -- destructuring FROM a Set: `next(set[, lastValue])` continuation
-local _binding_3 = tags
-local _value = next(_binding_3)
+local _value = next(tags)
 local firstTag = _value
-local _value_1 = next(_binding_3, _value)
+local _value_1 = next(tags, _value)
 local secondTag = _value_1
 print(firstTag, secondTag)
 -- destructuring FROM a string: gmatch matcher (hole still advances)
-local _binding_4 = word
-local _matcher = string.gmatch(_binding_4, utf8.charpattern)
+local _matcher = string.gmatch(word, utf8.charpattern)
 local c1 = _matcher()
 _matcher()
 local c3 = _matcher()
 print(c1, c3)
 -- destructuring FROM an IterableFunction: `iter()` per element
-local _binding_5 = iter
-local n1 = _binding_5()
-local n2 = _binding_5()
+local n1 = iter()
+local n2 = iter()
 print(n1, n2)
 -- destructuring FROM a generator object: `gen.next().value`
-local _binding_6 = gen
-local g1 = _binding_6.next().value
-local g2 = _binding_6.next().value
+local g1 = gen.next().value
+local g2 = gen.next().value
 print(g1, g2)
 return nil

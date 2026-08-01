@@ -140,18 +140,24 @@ func shouldWrapLuaTuple(s *State, node *ast.Node, exp luau.Expression) bool {
 	// `const [a] = foo()`
 	if ast.IsVariableDeclaration(parent) {
 		name := parent.AsVariableDeclaration().Name()
-		if name != nil && ast.IsArrayBindingPattern(name) && !arrayBindingPatternContainsHoists(s, name) {
+		if name != nil && ast.IsArrayBindingPattern(name) &&
+			!arrayBindingPatternContainsHoists(s, name) &&
+			!arrayLikeExpressionContainsSpread(name) &&
+			node.AsCallExpression().QuestionDotToken == nil {
 			return false
 		}
 	}
 
 	// `[a] = foo()`
 	if ast.IsAssignmentExpression(parent, false) && ast.IsArrayLiteralExpression(parent.AsBinaryExpression().Left) {
-		return false
+		left := parent.AsBinaryExpression().Left
+		if !arrayLikeExpressionContainsSpread(left) && node.AsCallExpression().QuestionDotToken == nil {
+			return false
+		}
 	}
 
 	// `foo()[n]`
-	if ast.IsElementAccessExpression(parent) {
+	if ast.IsElementAccessExpression(parent) && node.AsCallExpression().QuestionDotToken == nil {
 		return false
 	}
 
@@ -170,7 +176,7 @@ func shouldWrapLuaTuple(s *State, node *ast.Node, exp luau.Expression) bool {
 
 // wrapReturnIfLuaTuple ports wrapReturnIfLuaTuple.ts (L58-63).
 func wrapReturnIfLuaTuple(s *State, node *ast.Node, exp luau.Expression) luau.Expression {
-	if IsLuaTupleType(s).Check(s.GetType(node)) && shouldWrapLuaTuple(s, node, exp) {
+	if IsLuaTupleType(s).Check(s.Checker.GetNonNullableType(s.GetType(node))) && shouldWrapLuaTuple(s, node, exp) {
 		return luau.NewArray(luau.NewList[luau.Expression](exp))
 	}
 	return exp

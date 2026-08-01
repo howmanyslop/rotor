@@ -10,6 +10,9 @@ local TS = {}
 
 TS.Promise = Promise
 
+-- Marks which RuntimeLib ModuleScript produced this runtime table so that
+-- re-executions of the same module (e.g. Jest's debug.loadmodule sandboxing)
+-- are not mistaken for a second TS runtime installation.
 TS.__runtimeScript = script
 
 local function isPlugin(context)
@@ -24,7 +27,12 @@ function TS.getModule(context, scope, moduleName)
 	end
 
 	-- ensure modules have fully replicated
-	if RunService:IsRunning() and RunService:IsClient() and not isPlugin(context) and not game:IsLoaded() then
+	if
+		RunService:IsRunning()
+		and RunService:IsClient()
+		and not isPlugin(context)
+		and not game:IsLoaded()
+	then
 		game.Loaded:Wait()
 	end
 
@@ -56,7 +64,10 @@ function TS.import(context, module, ...)
 	end
 
 	if module.ClassName ~= "ModuleScript" then
-		error(OUTPUT_PREFIX .. "Failed to import! Expected ModuleScript, got " .. module.ClassName, 2)
+		error(
+			OUTPUT_PREFIX .. "Failed to import! Expected ModuleScript, got " .. module.ClassName,
+			2
+		)
 	end
 
 	currentlyLoading[context] = module
@@ -83,7 +94,10 @@ function TS.import(context, module, ...)
 				str = str .. "  ⇒ " .. currentModule.Name
 			end
 
-			error(OUTPUT_PREFIX .. "Failed to import! Detected a circular dependency chain: " .. str, 2)
+			error(
+				OUTPUT_PREFIX .. "Failed to import! Detected a circular dependency chain: " .. str,
+				2
+			)
 		end
 	end
 
@@ -95,8 +109,8 @@ function TS.import(context, module, ...)
 		then
 			error(
 				OUTPUT_PREFIX
-				.. "Invalid module access! Do you have multiple TS runtimes trying to import this? "
-				.. module:GetFullName(),
+					.. "Invalid module access! Do you have multiple TS runtimes trying to import this? "
+					.. module:GetFullName(),
 				2
 			)
 		end

@@ -19,10 +19,10 @@ import (
 // transformArrayBindingPattern ports transformArrayBindingPattern.ts
 // (L12-51): per-element accessor reads over parentID. All output goes through
 // s.Prereq (callers wrap in CaptureStatements). A rest element raises
-// noSpreadDestructuring and ABORTS the rest of the pattern. Omitted elements
-// still invoke the accessor with isOmitted=true so stateful accessors
-// advance; the array accessor's omitted call is a no-op. Defaults run before
-// nested-pattern recursion.
+// noNestedSpreadsInAssignmentPatterns and ABORTS the rest of the pattern.
+// Omitted elements still invoke the accessor with isOmitted=true so stateful
+// accessors advance; the array accessor's omitted call is a no-op. Defaults
+// run before nested-pattern recursion.
 func transformArrayBindingPattern(s *State, bindingPattern *ast.Node, parentID luau.AnyIdentifier) {
 	validateNotAnyType(s, bindingPattern)
 
@@ -35,7 +35,7 @@ func transformArrayBindingPattern(s *State, bindingPattern *ast.Node, parentID l
 		} else {
 			bindingElement := element.AsBindingElement()
 			if bindingElement.DotDotDotToken != nil {
-				s.Diags.Add(DiagNoSpreadDestructuring(element))
+				s.Diags.Add(DiagNoNestedSpreadsInAssignmentPatterns(element))
 				return
 			}
 			name := bindingElement.Name()
@@ -81,7 +81,7 @@ func transformOptimizedArrayBindingPattern(s *State, bindingPattern *ast.Node, r
 				} else {
 					bindingElement := element.AsBindingElement()
 					if bindingElement.DotDotDotToken != nil {
-						s.Diags.Add(DiagNoSpreadDestructuring(element))
+						s.Diags.Add(DiagNoNestedSpreadsInAssignmentPatterns(element))
 						return
 					}
 					name := bindingElement.Name()
@@ -124,8 +124,8 @@ func transformOptimizedArrayBindingPattern(s *State, bindingPattern *ast.Node, r
 // ArrayLiteralExpression LHS. Differences (port verbatim):
 //   - the pattern type comes from the checker's getTypeOfAssignmentPattern,
 //     NOT getType;
-//   - a SpreadElement raises noSpreadDestructuring but does NOT abort the
-//     remaining elements (binding patterns return);
+//   - a SpreadElement raises noNestedSpreadsInAssignmentPatterns but does NOT
+//     abort the remaining elements (binding patterns return);
 //   - defaults arrive as BinaryExpression elements (`a = 1`), unwrapped via
 //     skipDownwards on both sides;
 //   - targets may be identifiers OR property/element accesses
@@ -140,7 +140,7 @@ func transformArrayAssignmentPattern(s *State, assignmentPattern *ast.Node, pare
 		if ast.IsOmittedExpression(element) {
 			accessor(s, parentID, index, &idStack, true)
 		} else if ast.IsSpreadElement(element) {
-			s.Diags.Add(DiagNoSpreadDestructuring(element))
+			s.Diags.Add(DiagNoNestedSpreadsInAssignmentPatterns(element))
 		} else {
 			var initializer *ast.Node
 			if ast.IsBinaryExpression(element) {
@@ -193,7 +193,7 @@ func transformOptimizedArrayAssignmentPattern(s *State, assignmentPattern *ast.N
 			if ast.IsOmittedExpression(element) {
 				writes.Push(luau.TempID(""))
 			} else if ast.IsSpreadElement(element) {
-				s.Diags.Add(DiagNoSpreadDestructuring(element))
+				s.Diags.Add(DiagNoNestedSpreadsInAssignmentPatterns(element))
 			} else {
 				var initializer *ast.Node
 				if ast.IsBinaryExpression(element) {

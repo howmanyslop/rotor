@@ -131,6 +131,7 @@ var symbolNames = []string{
 	"ReadonlySet",
 	"ReadVoxelsArray",
 	"Set",
+	"SharedTable",
 	"String",
 	"TemplateStringsArray",
 	"WeakMap",

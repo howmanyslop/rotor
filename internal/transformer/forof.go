@@ -111,7 +111,7 @@ func transformInLineArrayBindingPattern(s *State, pattern *ast.Node, ids *luau.L
 		if isOmittedBindingElement(element) {
 			ids.Push(luau.TempID(""))
 		} else if ast.IsSpreadElement(element) {
-			s.Diags.Add(DiagNoSpreadDestructuring(element))
+			s.Diags.Add(DiagNoNestedSpreadsInAssignmentPatterns(element))
 		} else {
 			bindingElement := element.AsBindingElement()
 			id := transformBindingName(s, bindingElement.Name(), initializers)
@@ -135,7 +135,7 @@ func transformInLineArrayAssignmentPattern(s *State, assignmentPattern *ast.Node
 			if ast.IsOmittedExpression(element) {
 				ids.Push(luau.TempID(""))
 			} else if ast.IsSpreadElement(element) {
-				s.Diags.Add(DiagNoSpreadDestructuring(element))
+				s.Diags.Add(DiagNoNestedSpreadsInAssignmentPatterns(element))
 			} else {
 				var initializer *ast.Node
 				if ast.IsBinaryExpression(element) {
@@ -406,7 +406,7 @@ func getLoopBuilder(s *State, node *ast.Node, t *checker.Type) loopBuilder {
 		return buildArrayLoop
 	} else if IsDefinitelyType(s, t, IsSetType(s)) {
 		return buildSetLoop
-	} else if IsDefinitelyType(s, t, IsMapType(s)) {
+	} else if IsDefinitelyType(s, t, IsMapType(s)) || IsSharedTableType(s, t) {
 		return buildMapLoop
 	} else if IsDefinitelyType(s, t, IsStringType) {
 		return buildStringLoop
@@ -480,7 +480,7 @@ func transformForOfRangeMacro(s *State, node *ast.Node, macroCall *ast.Node) *lu
 	statements.PushList(TransformStatementList(s, forOf.Statement, getStatements(forOf.Statement), nil))
 
 	if step != nil {
-		if _, isNumberLiteral := step.(*luau.NumberLiteral); !isNumberLiteral {
+		if _, isLiteralNumber := getLiteralNumberValue(step); !isLiteralNumber {
 			step = luau.NewBinary(step, "or", luau.Num(1))
 		}
 	}

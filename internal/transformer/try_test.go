@@ -72,8 +72,7 @@ local function catchDestructure()
 	TS.try(function()
 		print("t")
 	end, function(e)
-		local _binding = e
-		local name = _binding.name
+		local name = e.name
 		print(name)
 	end)
 end

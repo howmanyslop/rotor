@@ -190,7 +190,7 @@ func getAccessorForBindingType(s *State, node *ast.Node, t *checker.Type) bindin
 		return stringAccessor
 	} else if IsDefinitelyType(s, t, IsSetType(s)) {
 		return setAccessor
-	} else if IsDefinitelyType(s, t, IsMapType(s)) {
+	} else if IsDefinitelyType(s, t, IsMapType(s)) || IsSharedTableType(s, t) {
 		return mapAccessor
 	} else if IsDefinitelyType(s, t, IsIterableFunctionLuaTupleType(s)) {
 		return iterableFunctionLuaTupleAccessor
@@ -218,6 +218,11 @@ func getAccessorForBindingType(s *State, node *ast.Node, t *checker.Type) bindin
 // literal numeric names do NOT — `{ 0: x }` over a tuple emits `parent[0]`
 // while `{ [0]: x }` emits `parent[1]` when the parent is array-typed.
 func objectAccessor(s *State, parentID luau.AnyIdentifier, t *checker.Type, name *ast.Node) luau.Expression {
+	if name.Kind == ast.KindBigIntLiteral {
+		s.Diags.Add(DiagNoBigInt(name))
+		return luau.NewNone()
+	}
+
 	addIndexDiagnostics(s, name, s.GetType(name))
 
 	if ast.IsIdentifier(name) {

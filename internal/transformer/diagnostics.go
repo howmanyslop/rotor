@@ -152,8 +152,8 @@ func DiagNoNamespaceMerging(node *ast.Node) Diagnostic {
 	return errorDiag("noNamespaceMerging", node, "Namespace merging is not supported!")
 }
 
-func DiagNoSpreadDestructuring(node *ast.Node) Diagnostic {
-	return errorDiag("noSpreadDestructuring", node, "Operator `...` is not supported for destructuring!")
+func DiagNoNestedSpreadsInAssignmentPatterns(node *ast.Node) Diagnostic {
+	return errorDiag("noNestedSpreadsInAssignmentPatterns", node, "Nesting spreads in assignment patterns is not supported!")
 }
 
 func DiagNoRestSpreadingOfRobloxTypes(node *ast.Node) Diagnostic {

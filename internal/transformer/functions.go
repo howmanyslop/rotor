@@ -46,11 +46,15 @@ func transformFunctionDeclaration(s *State, node *ast.Node) *luau.List[luau.Stat
 		name = luau.ID("default")
 	}
 
-	parameters, statements, hasDotDotDot := transformParameters(s, node)
+	parameters, statements, hasDotDotDot, varArgsData := transformParameters(s, node)
+	restParam := registerOptimizableVarArgsForFunction(s, node, varArgsData)
 	// parameter-default/destructure statements come FIRST in the body, then
 	// the transformed body. No implicit return is ever inserted: Luau
 	// functions return nil implicitly.
 	statements.PushList(TransformStatementList(s, declaration.Body, declaration.Body.AsBlock().Statements.Nodes, nil))
+	if restParam != nil {
+		s.unregisterOptimizableVarArgs(restParam)
+	}
 
 	localize := isExportDefault
 	if nameNode != nil {
@@ -102,7 +106,8 @@ func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
 		}
 	}
 
-	parameters, statements, hasDotDotDot := transformParameters(s, node)
+	parameters, statements, hasDotDotDot, varArgsData := transformParameters(s, node)
+	restParam := registerOptimizableVarArgsForFunction(s, node, varArgsData)
 
 	body := node.Body()
 	if ast.IsBlock(body) {
@@ -114,6 +119,9 @@ func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
 		})
 		statements.PushList(prereqs)
 		statements.PushList(returnStatements)
+	}
+	if restParam != nil {
+		s.unregisterOptimizableVarArgs(restParam)
 	}
 
 	isAsync := ast.HasSyntacticModifier(node, ast.ModifierFlagsAsync)
@@ -158,8 +166,12 @@ func transformMethodDeclaration(s *State, node *ast.Node, ptr *MapPointer) *luau
 		return luau.NewList[luau.Statement]()
 	}
 
-	parameters, statements, hasDotDotDot := transformParameters(s, node)
+	parameters, statements, hasDotDotDot, varArgsData := transformParameters(s, node)
+	restParam := registerOptimizableVarArgsForFunction(s, node, varArgsData)
 	statements.PushList(TransformStatementList(s, declaration.Body, declaration.Body.AsBlock().Statements.Nodes, nil))
+	if restParam != nil {
+		s.unregisterOptimizableVarArgs(restParam)
+	}
 
 	name := transformPropertyName(s, nameNode)
 

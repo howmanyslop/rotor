@@ -83,14 +83,14 @@ print(f)
 -- LuaTuple results
 local _t = tupleFn
 if _t ~= nil then
-	_t = _t()
+	_t = { _t() }
 end
 local t = _t
 print(t)
 local _self_4 = exact
 local _tm = _self_4.tupleMethod
 if _tm ~= nil then
-	_tm = _tm(_self_4)
+	_tm = { _tm(_self_4) }
 end
 local tm = _tm
 print(tm)

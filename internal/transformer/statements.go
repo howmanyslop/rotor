@@ -138,20 +138,22 @@ func transformVariableDeclaration(s *State, declaration *ast.Node) *luau.List[lu
 			array, isArray := value.(*luau.Array)
 			if luau.IsCall(value) &&
 				IsLuaTupleType(s).Check(s.GetType(decl.Initializer)) &&
-				!arrayBindingPatternContainsHoists(s, name) {
+				!arrayBindingPatternContainsHoists(s, name) &&
+				!arrayLikeExpressionContainsSpread(name) {
 				statements.PushList(transformOptimizedArrayBindingPattern(s, name, value))
 			} else if isArray && array.Members.IsNonEmpty() &&
 				// we can't localize multiple variables at the same time if any of them are hoisted
-				!arrayBindingPatternContainsHoists(s, name) {
+				!arrayBindingPatternContainsHoists(s, name) &&
+				!arrayLikeExpressionContainsSpread(name) {
 				statements.PushList(transformOptimizedArrayBindingPattern(s, name, array.Members))
 			} else {
 				statements.PushList(s.CaptureStatements(func() {
-					transformArrayBindingPattern(s, name, s.PushToVar(value, "binding"))
+					transformArrayBindingPattern(s, name, getTargetIDForBindingPattern(s, name, value))
 				}))
 			}
 		} else {
 			statements.PushList(s.CaptureStatements(func() {
-				transformObjectBindingPattern(s, name, s.PushToVar(value, "binding"))
+				transformObjectBindingPattern(s, name, getTargetIDForBindingPattern(s, name, value))
 			}))
 		}
 	}

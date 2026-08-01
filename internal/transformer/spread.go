@@ -281,7 +281,7 @@ func getAddIterableToArrayBuilder(s *State, node *ast.Node, t *checker.Type) add
 		return addStringToArray
 	} else if IsDefinitelyType(s, t, IsSetType(s)) {
 		return addSetToArray
-	} else if IsDefinitelyType(s, t, IsMapType(s)) {
+	} else if IsDefinitelyType(s, t, IsMapType(s)) || IsSharedTableType(s, t) {
 		return addMapToArray
 	} else if IsDefinitelyType(s, t, IsIterableFunctionLuaTupleType(s)) {
 		return addIterableFunctionLuaTupleToArray

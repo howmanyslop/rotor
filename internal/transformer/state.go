@@ -224,23 +224,26 @@ type State struct {
 	// module's exports table (source file symbol -> `exports`; namespaces ->
 	// their container id).
 	moduleIDBySymbol map[*ast.Symbol]luau.AnyIdentifier
+
+	declarationToOptimizableVarArgs map[*ast.Node]*VarArgsData
 }
 
 // NewState constructs the per-file transform state. program/chk/sourceFile may
 // be nil for checker-free prereq-mechanics tests (see NewTestState).
 func NewState(program *compiler.Program, chk *checker.Checker, sourceFile *ast.SourceFile, diags *DiagService, multi *MultiState) *State {
 	s := &State{
-		Program:           program,
-		Checker:           chk,
-		SourceFile:        sourceFile,
-		Diags:             diags,
-		Multi:             multi,
-		OptimizedLoops:    true, // DEFAULT_PROJECT_OPTIONS.optimizedLoops
-		getTypeCache:      make(map[*ast.Node]*checker.Type),
-		HoistsByStatement: make(map[*ast.Node][]*ast.Node),
-		IsHoisted:         make(map[*ast.Symbol]bool),
-		SymbolToID:        make(map[*ast.Symbol]*luau.TemporaryIdentifier),
-		moduleIDBySymbol:  make(map[*ast.Symbol]luau.AnyIdentifier),
+		Program:                         program,
+		Checker:                         chk,
+		SourceFile:                      sourceFile,
+		Diags:                           diags,
+		Multi:                           multi,
+		OptimizedLoops:                  true, // DEFAULT_PROJECT_OPTIONS.optimizedLoops
+		getTypeCache:                    make(map[*ast.Node]*checker.Type),
+		HoistsByStatement:               make(map[*ast.Node][]*ast.Node),
+		IsHoisted:                       make(map[*ast.Symbol]bool),
+		SymbolToID:                      make(map[*ast.Symbol]*luau.TemporaryIdentifier),
+		moduleIDBySymbol:                make(map[*ast.Symbol]luau.AnyIdentifier),
+		declarationToOptimizableVarArgs: make(map[*ast.Node]*VarArgsData),
 
 		ClassIdentifierMap:         make(map[*ast.Node]luau.AnyIdentifier),
 		classElementToObjectKeyMap: make(map[*ast.Node]luau.Expression),
@@ -628,6 +631,27 @@ func (s *State) GetModuleIDFromSymbol(moduleSymbol *ast.Symbol) luau.AnyIdentifi
 // transformExportDeclaration and transformExportAssignment.
 func (s *State) GetModuleIDFromNode(node *ast.Node) luau.AnyIdentifier {
 	return s.GetModuleIDFromSymbol(s.getModuleSymbolFromNode(node))
+}
+
+func (s *State) registerOptimizableVarArgs(declaration *ast.Node, data *VarArgsData) {
+	s.declarationToOptimizableVarArgs[declaration] = data
+}
+
+func (s *State) unregisterOptimizableVarArgs(declaration *ast.Node) {
+	delete(s.declarationToOptimizableVarArgs, declaration)
+}
+
+func (s *State) getOptimizableVarArgsData(node *ast.Node) *VarArgsData {
+	expression := SkipDownwards(node)
+	if !ast.IsIdentifier(expression) {
+		return nil
+	}
+
+	symbol := s.Checker.GetSymbolAtLocation(expression)
+	if symbol == nil || symbol.ValueDeclaration == nil {
+		return nil
+	}
+	return s.declarationToOptimizableVarArgs[symbol.ValueDeclaration]
 }
 
 // getModuleSymbolFromNode ports TransformState.getModuleSymbolFromNode: the

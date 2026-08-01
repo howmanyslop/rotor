@@ -1,7 +1,9 @@
 package includefiles
 
 import (
+	"archive/zip"
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,6 +75,48 @@ func TestRuntimeLibAllowsSameRuntimeReload(t *testing.T) {
 	}
 	if !bytes.Contains(runtimeLib, []byte("registeredBy.__runtimeScript ~= script")) {
 		t.Fatal("RuntimeLib.lua rejects modules registered by a reload of the same runtime")
+	}
+}
+
+func TestIncludeFilesMatchFork(t *testing.T) {
+	archive, err := zip.OpenReader(filepath.Join("..", "..", "roblox-ts.zip"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+
+	for _, name := range Names() {
+		var forkFile *zip.File
+		for _, file := range archive.File {
+			if file.Name == "roblox-ts/include/"+name {
+				forkFile = file
+				break
+			}
+		}
+		if forkFile == nil {
+			t.Fatalf("fork archive is missing %s", name)
+		}
+
+		reader, err := forkFile.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		forkBytes, err := io.ReadAll(reader)
+		closeErr := reader.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if closeErr != nil {
+			t.Fatal(closeErr)
+		}
+
+		embedded, err := Read(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(embedded, forkBytes) {
+			t.Errorf("%s differs from the fork archive", name)
+		}
 	}
 }
 
