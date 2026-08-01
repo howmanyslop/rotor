@@ -231,6 +231,16 @@ func transformElementAccessExpressionInner(s *State, node *ast.Node, expression 
 	addIndexDiagnostics(s, node, expType)
 
 	index, prereqs := s.Capture(func() luau.Expression { return TransformExpression(s, argumentExpression) })
+	if data := s.getOptimizableVarArgsData(elementAccess.Expression); data != nil && data.IsOptimizable {
+		s.PrereqList(prereqs)
+		if indexValue, ok := getLiteralNumberValue(index); ok && indexValue == 0 {
+			return luau.NewParenthesized(luau.NewVarArgs())
+		}
+		return luau.NewParenthesized(luau.NewCall(
+			luau.GlobalID("select"),
+			luau.NewList[luau.Expression](offsetExpr(index, 1), luau.NewVarArgs()),
+		))
+	}
 
 	if prereqs.IsNonEmpty() {
 		// hack because wrapReturnIfLuaTuple will not wrap this, but now we need to!

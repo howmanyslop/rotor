@@ -290,6 +290,27 @@ func fixVoidArgumentsForRobloxFunctions(s *State, expType *checker.Type, args []
 	}
 }
 
+func tryTransformOptimizableVarArgsSizeCall(s *State, node *ast.Node) luau.Expression {
+	call := node.AsCallExpression()
+	if !ast.IsPropertyAccessExpression(call.Expression) {
+		return nil
+	}
+
+	propertyAccess := call.Expression.AsPropertyAccessExpression()
+	if propertyAccess.Name().Text() != "size" {
+		return nil
+	}
+
+	data := s.getOptimizableVarArgsData(propertyAccess.Expression)
+	if data == nil || !data.IsOptimizable {
+		return nil
+	}
+	if data.usesLengthCache() {
+		return data.LengthID
+	}
+	return createVarArgsLengthSelect()
+}
+
 // ---------------------------------------------------------------------------
 // The three call transforms — transformCallExpression.ts
 // ---------------------------------------------------------------------------
@@ -313,6 +334,9 @@ func transformCallExpressionInner(s *State, node *ast.Node, expression luau.Expr
 			luau.NewList(append([]luau.Expression{luau.GlobalID("self")},
 				ensureTransformOrder(s, call.Arguments.Nodes)...)...),
 		)
+	}
+	if expression := tryTransformOptimizableVarArgsSizeCall(s, node); expression != nil {
+		return expression
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
@@ -360,6 +384,9 @@ func transformPropertyCallExpressionInner(s *State, node *ast.Node, expression *
 			luau.NewList(append([]luau.Expression{luau.GlobalID("self")},
 				ensureTransformOrder(s, call.Arguments.Nodes)...)...),
 		)
+	}
+	if optimized := tryTransformOptimizableVarArgsSizeCall(s, node); optimized != nil {
+		return optimized
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
@@ -434,6 +461,9 @@ func transformElementCallExpressionInner(s *State, node *ast.Node, expression *a
 			luau.NewList(append([]luau.Expression{luau.GlobalID("self")},
 				ensureTransformOrder(s, call.Arguments.Nodes)...)...),
 		)
+	}
+	if optimized := tryTransformOptimizableVarArgsSizeCall(s, node); optimized != nil {
+		return optimized
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))

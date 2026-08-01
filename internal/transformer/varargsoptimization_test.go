@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"rotor/internal/luau/render"
 	"rotor/tsgo/ast"
 	"rotor/tsgo/bundled"
 	"rotor/tsgo/compiler"
@@ -208,5 +209,112 @@ func TestTransformParametersAnalyzesRestParameter(t *testing.T) {
 	}
 	if data.SizeAccessCount != 1 {
 		t.Errorf("SizeAccessCount = %d, want 1", data.SizeAccessCount)
+	}
+}
+
+func TestVarArgsOptimizedEmit(t *testing.T) {
+	s := buildVarArgsOptimizationState(t, `declare function consume(...values: Array<number>): void;
+
+export function safeRead(index: number, ...args: Array<number>) {
+	const a = args[0];
+	const b = args[1];
+	const c = args[index];
+	return a + b + c;
+}
+
+export function safeSize(...args: Array<number>) {
+	return args.size();
+}
+
+export function safeCachedSize(...args: Array<number>) {
+	return args.size() + args.size();
+}
+
+export function safeSpread(...args: Array<number>) {
+	consume(...args);
+}
+
+export function safeForOf(...args: Array<number>) {
+	let sum = 0;
+	for (const x of args) {
+		sum += x;
+	}
+	return sum;
+}
+`)
+
+	got := render.RenderAST(TransformSourceFile(s))
+	want := `-- Compiled with roblox-ts v3.0.0
+local function safeRead(index, ...)
+	local a = (...)
+	local b = (select(2, ...))
+	local c = (select(index + 1, ...))
+	return a + b + c
+end
+local function safeSize(...)
+	return select("#", ...)
+end
+local function safeCachedSize(...)
+	local _args_length = select("#", ...)
+	return _args_length + _args_length
+end
+local function safeSpread(...)
+	consume(...)
+end
+local function safeForOf(...)
+	local sum = 0
+	for _i = 1, select("#", ...) do
+		local x = (select(_i, ...))
+		sum += x
+	end
+	return sum
+end
+return {
+	safeRead = safeRead,
+	safeSize = safeSize,
+	safeCachedSize = safeCachedSize,
+	safeSpread = safeSpread,
+	safeForOf = safeForOf,
+}
+`
+	if got != want {
+		t.Errorf("rendered output differs from the varargs fixture:\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+func TestVarArgsUnsafeFallback(t *testing.T) {
+	s := buildVarArgsOptimizationState(t, `export function unsafeNested(...args: Array<number>) {
+	return function () {
+		return args[0];
+	};
+}
+
+export function* unsafeGenerator(...args: Array<number>) {
+	yield args[0];
+}
+`)
+
+	got := render.RenderAST(TransformSourceFile(s))
+	want := `-- Compiled with roblox-ts v3.0.0
+local TS = _G[script]
+local function unsafeNested(...)
+	local args = { ... }
+	return function()
+		return args[1]
+	end
+end
+local function unsafeGenerator(...)
+	local args = { ... }
+	return TS.generator(function()
+		coroutine.yield(args[1])
+	end)
+end
+return {
+	unsafeNested = unsafeNested,
+	unsafeGenerator = unsafeGenerator,
+}
+`
+	if got != want {
+		t.Errorf("rendered output differs from the varargs fallback fixture:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }

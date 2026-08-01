@@ -143,7 +143,8 @@ func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 				return rightExp
 			}
 
-			if luau.IsCall(rightExp) && IsLuaTupleType(s).Check(s.GetType(expression.Right)) {
+			if luau.IsCall(rightExp) && IsLuaTupleType(s).Check(s.GetType(expression.Right)) &&
+				!arrayLikeExpressionContainsSpread(expression.Left) {
 				transformOptimizedArrayAssignmentPattern(s, expression.Left, rightExp)
 				if !isUsedAsStatement(node) {
 					s.Diags.Add(DiagNoLuaTupleDestructureAssignmentExpression(node))
@@ -151,7 +152,8 @@ func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 				return luau.NewNone()
 			}
 
-			if array, ok := rightExp.(*luau.Array); ok && array.Members.IsNonEmpty() && isUsedAsStatement(node) {
+			if array, ok := rightExp.(*luau.Array); ok && array.Members.IsNonEmpty() && isUsedAsStatement(node) &&
+				!arrayLikeExpressionContainsSpread(expression.Left) {
 				transformOptimizedArrayAssignmentPattern(s, expression.Left, array.Members)
 				return luau.NewNone()
 			}

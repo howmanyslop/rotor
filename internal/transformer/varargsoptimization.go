@@ -1,12 +1,28 @@
 package transformer
 
-import "rotor/tsgo/ast"
+import (
+	"rotor/internal/luau"
+	"rotor/tsgo/ast"
+)
 
 type VarArgsData struct {
 	ParameterIndex   int
 	SizeAccessCount  int
 	ForOfAccessCount int
 	IsOptimizable    bool
+	LengthID         *luau.TemporaryIdentifier
+}
+
+func (data *VarArgsData) usesLengthCache() bool {
+	return data != nil && data.IsOptimizable &&
+		data.SizeAccessCount+data.ForOfAccessCount > 1 && data.LengthID != nil
+}
+
+func createVarArgsLengthSelect() luau.Expression {
+	return luau.NewCall(
+		luau.GlobalID("select"),
+		luau.NewList[luau.Expression](luau.Str("#"), luau.NewVarArgs()),
+	)
 }
 
 func analyzeVarArgsOptimization(s *State, param *ast.Node, funcNode *ast.Node) *VarArgsData {

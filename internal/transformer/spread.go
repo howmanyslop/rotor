@@ -321,6 +321,9 @@ func transformSpreadElement(s *State, node *ast.Node) luau.Expression {
 	if arguments[len(arguments)-1] != node {
 		s.Diags.Add(DiagNoPrecedingSpreadElement(node))
 	}
+	if data := s.getOptimizableVarArgsData(spreadExpression); data != nil && data.IsOptimizable {
+		return luau.NewVarArgs()
+	}
 
 	expression := TransformExpression(s, spreadExpression)
 

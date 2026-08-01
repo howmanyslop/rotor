@@ -179,11 +179,11 @@ func transformInLineArrayAssignmentPattern(s *State, assignmentPattern *ast.Node
 var buildMapLoop = makeForLoopBuilder(func(s *State, initializer *ast.Node, exp luau.Expression, ids *luau.List[luau.AnyIdentifier], initializers *luau.List[luau.Statement]) luau.Expression {
 	if ast.IsVariableDeclarationList(initializer) {
 		name := initializer.AsVariableDeclarationList().Declarations.Nodes[0].Name()
-		if ast.IsArrayBindingPattern(name) {
+		if ast.IsArrayBindingPattern(name) && !arrayLikeExpressionContainsSpread(name) {
 			transformInLineArrayBindingPattern(s, name, ids, initializers)
 			return exp
 		}
-	} else if ast.IsArrayLiteralExpression(initializer) {
+	} else if ast.IsArrayLiteralExpression(initializer) && !arrayLikeExpressionContainsSpread(initializer) {
 		transformInLineArrayAssignmentPattern(s, initializer, ids, initializers)
 		return exp
 	}
@@ -277,10 +277,10 @@ func buildIterableFunctionLuaTupleLoop(t *checker.Type) loopBuilder {
 		if ast.IsVariableDeclarationList(initializer) {
 			// for (const [a, b] of iter())
 			name := initializer.AsVariableDeclarationList().Declarations.Nodes[0].Name()
-			if ast.IsArrayBindingPattern(name) {
+			if ast.IsArrayBindingPattern(name) && !arrayLikeExpressionContainsSpread(name) {
 				return makeIterableFunctionLuaTupleShorthand(s, name, statements, exp)
 			}
-		} else if ast.IsArrayLiteralExpression(initializer) {
+		} else if ast.IsArrayLiteralExpression(initializer) && !arrayLikeExpressionContainsSpread(initializer) {
 			// for ([a, b] of iter())
 			return makeIterableFunctionLuaTupleShorthand(s, initializer, statements, exp)
 		}
@@ -489,6 +489,60 @@ func transformForOfRangeMacro(s *State, node *ast.Node, macroCall *ast.Node) *lu
 	return result
 }
 
+func transformOptimizableVarArgsForOf(s *State, node *ast.Node, result *luau.List[luau.Statement]) *luau.List[luau.Statement] {
+	forOf := node.AsForInOrOfStatement()
+	data := s.getOptimizableVarArgsData(forOf.Expression)
+	if data == nil || !data.IsOptimizable {
+		return result
+	}
+
+	output := luau.NewList[luau.Statement]()
+	var loop *luau.ForStatement
+	result.ForEach(func(statement luau.Statement) {
+		if forStatement, ok := statement.(*luau.ForStatement); ok {
+			loop = forStatement
+			return
+		}
+		output.Push(statement)
+	})
+	if loop == nil {
+		panic("transformer: optimizable varargs for-of has no array loop")
+	}
+
+	var valueID luau.AnyIdentifier
+	if ast.IsVariableDeclarationList(forOf.Initializer) {
+		name := forOf.Initializer.AsVariableDeclarationList().Declarations.Nodes[0].Name()
+		if ast.IsIdentifier(name) {
+			valueID = luau.ID(name.Text())
+		} else {
+			valueID = luau.TempID("v")
+		}
+	} else {
+		loopIDs := loop.IDs.ToSlice()
+		if len(loopIDs) != 2 {
+			panic("transformer: optimizable varargs for-of has invalid array loop ids")
+		}
+		valueID = loopIDs[1]
+	}
+
+	indexID := luau.TempID("i")
+	loopStatements := luau.NewList[luau.Statement](luau.NewVariableDeclaration(
+		valueID,
+		luau.NewParenthesized(luau.NewCall(
+			luau.GlobalID("select"),
+			luau.NewList[luau.Expression](indexID, luau.NewVarArgs()),
+		)),
+	))
+	loopStatements.PushList(loop.Statements)
+
+	length := createVarArgsLengthSelect()
+	if data.usesLengthCache() {
+		length = data.LengthID
+	}
+	output.Push(luau.NewNumericFor(indexID, luau.Num(1), length, nil, loopStatements))
+	return output
+}
+
 // transformForOfStatement ports transformForOfStatement (L479-508). The body
 // is transformed BEFORE the loop shape is built; builders prepend initializer
 // statements.
@@ -524,5 +578,5 @@ func transformForOfStatement(s *State, node *ast.Node) *luau.List[luau.Statement
 	loopBuilder := getLoopBuilder(s, forOf.Expression, expType)
 	result.PushList(loopBuilder(s, statements, forOf.Initializer, exp))
 
-	return result
+	return transformOptimizableVarArgsForOf(s, node, result)
 }

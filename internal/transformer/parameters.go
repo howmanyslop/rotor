@@ -68,9 +68,15 @@ func transformParameters(s *State, node *ast.Node) (parameters *luau.List[luau.A
 		if parameter.DotDotDotToken != nil {
 			hasDotDotDot = true
 			varArgsData = analyzeVarArgsOptimization(s, parameterNode.AsNode(), node)
-			// local args = { ... }
-			statements.Push(luau.NewVariableDeclaration(paramID,
-				luau.NewArray(luau.NewList[luau.Expression](luau.NewVarArgs()))))
+			if varArgsData.IsOptimizable {
+				if varArgsData.SizeAccessCount+varArgsData.ForOfAccessCount > 1 {
+					varArgsData.LengthID = luau.TempID("args_length")
+					statements.Push(luau.NewVariableDeclaration(varArgsData.LengthID, createVarArgsLengthSelect()))
+				}
+			} else {
+				statements.Push(luau.NewVariableDeclaration(paramID,
+					luau.NewArray(luau.NewList[luau.Expression](luau.NewVarArgs()))))
+			}
 		} else {
 			parameters.Push(paramID)
 		}
