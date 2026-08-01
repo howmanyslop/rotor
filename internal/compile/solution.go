@@ -117,7 +117,12 @@ func BuildSolutionGraph(tsConfigPath string, entry ProjectOptions) (*SolutionGra
 }
 
 func NewSolutionCoordinator(tsConfigPath string, entry ProjectOptions) (*SolutionCoordinator, error) {
-	return NewSolutionCoordinatorWithDrainer(tsConfigPath, entry, solutionBuildDrainer{})
+	graph, err := BuildSolutionGraph(tsConfigPath, entry)
+	if err != nil {
+		return nil, err
+	}
+	drainer := &solutionBuildDrainer{importPathMap: populateCrossProjectImportPathMap(graph)}
+	return newSolutionCoordinator(graph, drainer)
 }
 
 func NewSolutionCoordinatorWithDrainer(tsConfigPath string, entry ProjectOptions, drainer SolutionProjectDrainer) (*SolutionCoordinator, error) {
@@ -128,6 +133,10 @@ func NewSolutionCoordinatorWithDrainer(tsConfigPath string, entry ProjectOptions
 	if err != nil {
 		return nil, err
 	}
+	return newSolutionCoordinator(graph, drainer)
+}
+
+func newSolutionCoordinator(graph *SolutionGraph, drainer SolutionProjectDrainer) (*SolutionCoordinator, error) {
 	states := make(map[string]SolutionProjectState, len(graph.Projects))
 	for _, project := range graph.Projects {
 		states[project.ConfigPath] = SolutionProjectState{Project: project}
@@ -179,6 +188,9 @@ func (c *SolutionCoordinator) Drain() (*BuildResult, []string, error) {
 	if firstErr != nil {
 		return result, diagnosticInfoMessages(result.Diagnostics), firstErr
 	}
+	if drainer, ok := c.drainer.(*solutionBuildDrainer); ok {
+		drainer.persist()
+	}
 	return result, nil, nil
 }
 
@@ -198,14 +210,6 @@ func (c *SolutionCoordinator) failedDependency(project SolutionProject) string {
 		}
 	}
 	return ""
-}
-
-type solutionBuildDrainer struct{}
-
-func (solutionBuildDrainer) Drain(project SolutionProject) (*BuildResult, []string, error) {
-	options := project.Options
-	options.TsConfigPath = project.ConfigPath
-	return BuildProjectWithOptions(filepath.Dir(project.ConfigPath), options)
 }
 
 func BuildSolutionWithOptions(tsConfigPath string, entry ProjectOptions) (*BuildResult, []string, error) {

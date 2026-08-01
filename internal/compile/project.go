@@ -208,7 +208,10 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 	}
 
 	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
-	importPathMap := createCrossProjectImportPathMap(program, !opts.LuaExtension)
+	importPathMap := opts.crossProjectImportPathMap
+	if importPathMap == nil {
+		importPathMap = createCrossProjectImportPathMap(program, !opts.LuaExtension)
+	}
 
 	// checkRojoConfig + checkFileName queue project-level diagnostics
 	// (compileFiles.ts L69-75); upstream flushes them only after the emit
@@ -417,6 +420,10 @@ func resolveAgainst(base, p string) string {
 type ProjectOptions struct {
 	rojoCache *rojo.RojoResolverCache
 
+	crossProjectImportPathMap map[string]string
+	pendingSolutionPersists   *[]func()
+	deferRojoCachePersist     bool
+
 	// IncludePath is the raw --includePath value; "" applies upstream's
 	// default of <projectDir>/include (createProjectData.ts L29). It feeds
 	// both the RuntimeLib.lua Rojo-path validation (compileFiles.ts L88-89)
@@ -579,6 +586,7 @@ func projectSourceFiles(program *compiler.Program) []*ast.SourceFile {
 	for _, sourceFile := range program.SourceFiles() {
 		fileName := sourceFile.FileName()
 		if sourceFile.IsDeclarationFile ||
+			program.IsSourceFromProjectReference(sourceFile.Path()) ||
 			(!strings.HasSuffix(fileName, ".ts") && !strings.HasSuffix(fileName, ".tsx")) {
 			continue
 		}

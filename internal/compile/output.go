@@ -14,6 +14,7 @@ import (
 	"rotor/internal/logservice"
 	"rotor/internal/luau/cst"
 	"rotor/internal/rojo"
+	"rotor/tsgo/ast"
 	"rotor/tsgo/compiler"
 	"rotor/tsgo/core"
 	"rotor/tsgo/vfs/osvfs"
@@ -70,7 +71,11 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			msg := "Option 'emitDeclarationOnly' cannot be specified without specifying option 'declaration' or option 'composite'."
 			return nil, []string{msg}, errors.New("compile: TypeScript diagnostics")
 		}
-		emitted, err := emitDeclarations(program, nil, opts.WriteOnlyChanged)
+		prepared, sidecarDiags, err := prepareProjectProgramForBuild(dir, program, projectSourceFiles(program))
+		if err != nil {
+			return nil, sidecarDiags, err
+		}
+		emitted, err := emitDeclarations(prepared.program, nil, opts.WriteOnlyChanged, prepared.declarations)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -146,10 +151,12 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 	}
 
-	program, selectedFiles, diags, err = prepareProjectProgramForCompile(dir, program, selectedFiles)
+	prepared, diags, err := prepareProjectProgramForBuild(dir, program, selectedFiles)
 	if err != nil {
 		return nil, diags, err
 	}
+	program = prepared.program
+	selectedFiles = prepared.sourceFiles
 
 	pctx, diags, err := newProjectContext(dir, program, opts)
 	if err != nil {
@@ -184,8 +191,22 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	// reproduces the pre-parallel behavior for A/B timing.
 	wrote := make([]bool, len(relOuts))
 	jobs := make([]func() error, len(relOuts))
+	sourceFilesByOutput := make(map[string]*ast.SourceFile, len(selectedFiles))
+	for _, sourceFile := range selectedFiles {
+		relOut := outputPathRelativeToDir(dir, pathTranslator.GetOutputPath(sourceFile.FileName()))
+		sourceFilesByOutput[relOut] = sourceFile
+	}
 	for i, relOut := range relOuts {
 		sourceMap, hasSourceMap := sourceMaps[relOut+".map"]
+		if hasSourceMap {
+			sourceFile := sourceFilesByOutput[relOut]
+			if trace := prepared.sourceTraces[normalizeSourceFilePath(sourceFile.FileName())]; trace != nil {
+				sourceMap, err = rewriteSourceMapWithTrace(sourceMap, trace)
+				if err != nil {
+					return nil, nil, err
+				}
+			}
+		}
 		jobs[i] = func() error {
 			// Defense-in-depth: output paths are derived from source/Rojo path
 			// mappings; refuse any that would escape the project directory.
@@ -216,7 +237,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		selectedPaths[normalizeSourceFilePath(sourceFile.FileName())] = struct{}{}
 	}
 
-	declFiles, err := emitDeclarations(program, selectedPaths, opts.WriteOnlyChanged)
+	declFiles, err := emitDeclarations(program, selectedPaths, opts.WriteOnlyChanged, prepared.declarations)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -252,7 +273,17 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 		wroteLockfile = true
 	}
-	copyFilesGate.Persist()
+	persist := func() {
+		if rojoCache != nil {
+			rojoCache.Persist()
+		}
+		copyFilesGate.Persist()
+	}
+	if opts.pendingSolutionPersists != nil {
+		*opts.pendingSolutionPersists = append(*opts.pendingSolutionPersists, persist)
+	} else {
+		persist()
+	}
 
 	return &BuildResult{
 		Outputs:         outputs,
@@ -271,14 +302,17 @@ func loadRojoCachesPreBuild(dir string, opts ProjectOptions) *rojo.RojoResolverC
 	if err != nil || rojoConfigPath == "" {
 		return nil
 	}
-	cache := rojo.NewRojoResolverCache(filepath.Join(filepath.FromSlash(dir), ".rotor", "cache", "rojo"), core.Version())
+	cache := rojo.NewRojoResolverCacheWithDeferredPersist(filepath.Join(filepath.FromSlash(dir), ".rotor", "cache", "rojo"), core.Version(), opts.deferRojoCachePersist)
 	cache.Load(rojoConfigPath)
 	return cache
 }
 
-func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct{}, writeOnlyChanged bool) ([]string, error) {
+func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct{}, writeOnlyChanged bool, sidecarDeclarations []sidecarOutputFile) ([]string, error) {
 	if !program.Options().GetEmitDeclarations() {
 		return nil, nil
+	}
+	if len(sidecarDeclarations) > 0 {
+		return writeSidecarDeclarations(sidecarDeclarations, writeOnlyChanged)
 	}
 
 	ctx := context.Background()
@@ -354,6 +388,35 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 	for i, write := range pending {
 		if wrote[i] {
 			emitted = append(emitted, write.path)
+		}
+	}
+	return emitted, nil
+}
+
+func writeSidecarDeclarations(declarations []sidecarOutputFile, writeOnlyChanged bool) ([]string, error) {
+	paths := make([]string, len(declarations))
+	for i, declaration := range declarations {
+		paths[i] = filepath.FromSlash(declaration.FileName)
+	}
+	if err := rejectDuplicateOutputPaths(paths); err != nil {
+		return nil, err
+	}
+	wrote := make([]bool, len(declarations))
+	jobs := make([]func() error, len(declarations))
+	for i, declaration := range declarations {
+		jobs[i] = func() error {
+			var err error
+			wrote[i], err = writeOutputFile(filepath.FromSlash(declaration.FileName), declaration.Text, writeOnlyChanged)
+			return err
+		}
+	}
+	if err := parallelize(writeWorkers(), jobs); err != nil {
+		return nil, err
+	}
+	emitted := make([]string, 0, len(declarations))
+	for i, declaration := range declarations {
+		if wrote[i] {
+			emitted = append(emitted, filepath.FromSlash(declaration.FileName))
 		}
 	}
 	return emitted, nil

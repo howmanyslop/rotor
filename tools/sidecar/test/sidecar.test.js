@@ -140,6 +140,60 @@ test("transformSourceFiles omits source files whose transformers preserve identi
   assert.deepEqual(result.transformed, []);
 });
 
+test("afterDeclarations emits only declaration output with builtin path rewrites", () => {
+  const declarationProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "rotor-sidecar-declaration-"));
+  const sourceDir = path.join(declarationProjectDir, "src");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(declarationProjectDir, "marker.js"),
+    `const ts = require(${JSON.stringify(require.resolve("typescript"))});
+module.exports = () => context => sourceFile => {
+  const marker = context.factory.createVariableStatement(undefined, context.factory.createVariableDeclarationList([
+    context.factory.createVariableDeclaration("__DECLARATION_MARKER__", undefined, undefined, context.factory.createStringLiteral("after-declarations")),
+  ], ts.NodeFlags.Const));
+  return context.factory.updateSourceFile(sourceFile, sourceFile.statements.concat([marker]));
+};
+`,
+  );
+  fs.writeFileSync(
+    path.join(declarationProjectDir, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        declaration: true,
+        module: "CommonJS",
+        moduleResolution: "Node",
+        noLib: true,
+        strict: true,
+        target: "ESNext",
+        baseUrl: ".",
+        paths: { "@alias/*": ["src/*"] },
+        rootDir: "src",
+        outDir: "out",
+        plugins: [{ transform: "./marker.js", afterDeclarations: true }],
+      },
+      include: ["src"],
+    }),
+  );
+  const mainFile = path.join(sourceDir, "main.ts");
+  fs.writeFileSync(mainFile, 'import type { Value } from "@alias/value";\nexport type Output = Value;\n');
+  fs.writeFileSync(path.join(sourceDir, "value.ts"), "export interface Value { name: string; }\n");
+
+  const session = new sidecar.SidecarProjectSession(ts, declarationProjectDir, path.join(declarationProjectDir, "tsconfig.json"));
+  const response = session.handleRequest({
+    protocol: 1,
+    projectDir: declarationProjectDir,
+    tsConfigPath: path.join(declarationProjectDir, "tsconfig.json"),
+    compileFileNames: [mainFile],
+    changedFiles: [],
+  });
+
+  assert.deepEqual(response.diagnostics, []);
+  assert.deepEqual(response.transformed, []);
+  assert.equal(response.declarations.length, 1);
+  assert.match(response.declarations[0].text, /__DECLARATION_MARKER__/);
+  assert.match(response.declarations[0].text, /from "\.\/value"/);
+});
+
 test("transformSourceFiles repairs orphaned parents between transformers", () => {
   const program = createProgram();
   const sourceFile = program.getSourceFile(sourcePath);

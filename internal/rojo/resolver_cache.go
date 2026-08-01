@@ -34,17 +34,25 @@ type resolverCacheEntry struct {
 type RojoResolverCache struct {
 	cacheDir        string
 	compilerVersion string
+	deferPersist    bool
 
-	mu sync.Mutex
-	l1 map[string]resolverCacheEntry
+	mu      sync.Mutex
+	l1      map[string]resolverCacheEntry
+	pending map[string]resolverCacheEntry
 }
 
 // NewRojoResolverCache creates a cache whose disk entries are stored in cacheDir.
 func NewRojoResolverCache(cacheDir, compilerVersion string) *RojoResolverCache {
+	return NewRojoResolverCacheWithDeferredPersist(cacheDir, compilerVersion, false)
+}
+
+func NewRojoResolverCacheWithDeferredPersist(cacheDir, compilerVersion string, deferPersist bool) *RojoResolverCache {
 	return &RojoResolverCache{
 		cacheDir:        cacheDir,
 		compilerVersion: compilerVersion,
+		deferPersist:    deferPersist,
 		l1:              make(map[string]resolverCacheEntry),
+		pending:         map[string]resolverCacheEntry{},
 	}
 }
 
@@ -70,8 +78,22 @@ func (c *RojoResolverCache) Load(rojoConfigFilePath string) *RojoResolver {
 		return resolver
 	}
 	c.l1[key] = resolverCacheEntry{Resolver: resolver, Manifest: manifest}
-	c.writeDisk(key, resolver.GetState(), manifest)
+	entry := c.l1[key]
+	if c.deferPersist {
+		c.pending[key] = entry
+	} else {
+		c.writeDisk(key, resolver.GetState(), manifest)
+	}
 	return resolver
+}
+
+func (c *RojoResolverCache) Persist() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for key, entry := range c.pending {
+		c.writeDisk(key, entry.Resolver.GetState(), entry.Manifest)
+	}
+	c.pending = map[string]resolverCacheEntry{}
 }
 
 func (c *RojoResolverCache) loadDisk(key string) (*RojoResolver, []resolverCacheManifestEntry, bool) {
@@ -83,12 +105,16 @@ func (c *RojoResolverCache) loadDisk(key string) (*RojoResolver, []resolverCache
 
 	var file resolverCacheFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		_ = os.Remove(path)
+		if !c.deferPersist {
+			_ = os.Remove(path)
+		}
 		return nil, nil, false
 	}
 	if file.Version != resolverCacheFormatVersion || file.CompilerVersion != c.compilerVersion || file.Key != key ||
 		!stateMatchesManifest(file.State, file.MtimeManifest) {
-		_ = os.Remove(path)
+		if !c.deferPersist {
+			_ = os.Remove(path)
+		}
 		return nil, nil, false
 	}
 	if !manifestStillValid(file.MtimeManifest) {
