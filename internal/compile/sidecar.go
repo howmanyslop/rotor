@@ -566,7 +566,7 @@ func newProjectProgramFromFSWithOptions(dir, configPath string, fs vfs.FS, check
 	if len(configDiags) > 0 {
 		return nil, diagnosticStrings(configDiags), errors.New("compile: tsconfig.json has errors")
 	}
-	applyCheckerOverride(parsed.CompilerOptions(), checkers)
+	ApplyCheckerOverride(parsed.CompilerOptions(), checkers)
 
 	raw := readRawEnforcedOptions(filepath.FromSlash(configPath))
 	if msg := validateCompilerOptions(parsed.CompilerOptions(), dir, raw); msg != "" {

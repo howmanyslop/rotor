@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"rotor/tsgo/checker"
 )
 
 // writeCheckableProject writes a minimal project `rotor check` can typecheck
@@ -93,4 +96,234 @@ func TestCmdCheckJSONWithDiagnostic(t *testing.T) {
 	if d.Message == "" {
 		t.Error("diagnostic message is empty")
 	}
+}
+
+func TestParseCheckArgsConcurrencyControls(t *testing.T) {
+	intPtr := func(value int) *int { return &value }
+	tests := []struct {
+		name         string
+		args         []string
+		wantProject  string
+		wantCheckers *int
+		wantErr      string
+	}{
+		{name: "omitted", args: nil, wantProject: "."},
+		{
+			name:         "separated value",
+			args:         []string{"--checkers", "3", "project"},
+			wantProject:  "project",
+			wantCheckers: intPtr(3),
+		},
+		{
+			name:         "equals value",
+			args:         []string{"--checkers=3", "project"},
+			wantProject:  "project",
+			wantCheckers: intPtr(3),
+		},
+		{
+			name:    "missing value",
+			args:    []string{"--checkers"},
+			wantErr: `invalid --checkers value "" (must be a positive integer)`,
+		},
+		{
+			name:    "non integer",
+			args:    []string{"--checkers=many"},
+			wantErr: `invalid --checkers value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "zero",
+			args:    []string{"--checkers=0"},
+			wantErr: `invalid --checkers value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "negative",
+			args:    []string{"--checkers", "-2"},
+			wantErr: `invalid --checkers value "-2" (must be a positive integer)`,
+		},
+		{
+			name:    "builders remains unknown",
+			args:    []string{"--builders", "2"},
+			wantErr: `unknown flag "--builders"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseCheckArgs(tt.args)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("parseCheckArgs(%v) error = %v, want %q", tt.args, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.project != tt.wantProject {
+				t.Errorf("project = %q, want %q", got.project, tt.wantProject)
+			}
+			if (got.checkers == nil) != (tt.wantCheckers == nil) {
+				t.Errorf("checkers = %v, want %v", got.checkers, tt.wantCheckers)
+			}
+			if got.checkers != nil && *got.checkers != *tt.wantCheckers {
+				t.Errorf("checkers = %d, want %d", *got.checkers, *tt.wantCheckers)
+			}
+		})
+	}
+}
+
+func TestCheckProgramCheckerOverride(t *testing.T) {
+	cliCheckers := 3
+	singleThreadedCheckers := 4
+	tests := []struct {
+		name          string
+		configOptions string
+		override      *int
+		wantCheckers  int
+		wantEffective int
+		wantSingle    bool
+	}{
+		{
+			name:          "config is preserved without CLI",
+			configOptions: `,"checkers": 1`,
+			wantCheckers:  1,
+			wantEffective: 1,
+		},
+		{
+			name:          "CLI overrides config",
+			configOptions: `,"checkers": 1`,
+			override:      &cliCheckers,
+			wantCheckers:  3,
+			wantEffective: 3,
+		},
+		{
+			name:          "single threaded config still wins over CLI count",
+			configOptions: `,"singleThreaded": true`,
+			override:      &singleThreadedCheckers,
+			wantCheckers:  4,
+			wantEffective: 1,
+			wantSingle:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := writeCheckerCheckProject(t, tt.configOptions)
+			configPath := filepath.ToSlash(filepath.Join(dir, "tsconfig.json"))
+			for construction := 1; construction <= 2; construction++ {
+				program, parsed, configDiags := newCheckProgram(dir, configPath, tt.override)
+				if len(configDiags) != 0 {
+					t.Fatalf("newCheckProgram diagnostics on construction %d: %v", construction, configDiags)
+				}
+				if program == nil || parsed == nil {
+					t.Fatalf("newCheckProgram construction %d returned nil program or parsed config", construction)
+				}
+				if got := parsed.CompilerOptions().Checkers; got == nil || *got != tt.wantCheckers {
+					t.Fatalf("parsed checkers on construction %d = %v, want %d", construction, got, tt.wantCheckers)
+				}
+				if got := program.Options().Checkers; got == nil || *got != tt.wantCheckers {
+					t.Fatalf("program checkers on construction %d = %v, want %d", construction, got, tt.wantCheckers)
+				}
+				if program.Options().SingleThreaded.IsTrue() != tt.wantSingle {
+					t.Fatalf("singleThreaded on construction %d = %v, want %v", construction, program.Options().SingleThreaded, tt.wantSingle)
+				}
+				var effective atomic.Int32
+				program.ForEachCheckerParallel(func(int, *checker.Checker) {
+					effective.Add(1)
+				})
+				if got := int(effective.Load()); got != tt.wantEffective {
+					t.Fatalf("effective checker count on construction %d = %d, want %d", construction, got, tt.wantEffective)
+				}
+			}
+		})
+	}
+}
+
+func TestCmdCheckCheckers(t *testing.T) {
+	dir := writeCheckerCheckProject(t, `,"checkers": 1`)
+
+	styledOutput, styledCode := captureStdout(t, func() int {
+		return cmdCheck([]string{"--checkers", "3", dir})
+	})
+	if styledCode != 0 {
+		t.Fatalf("styled check exit = %d, want 0; output:\n%s", styledCode, styledOutput)
+	}
+
+	jsonOutput, jsonCode := captureStdout(t, func() int {
+		return cmdCheck([]string{"--json", "--checkers=3", dir})
+	})
+	if jsonCode != 0 {
+		t.Fatalf("JSON check exit = %d, want 0; output:\n%s", jsonCode, jsonOutput)
+	}
+	var result jsonResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(jsonOutput)), &result); err != nil {
+		t.Fatalf("JSON check output is invalid: %v\noutput:\n%s", err, jsonOutput)
+	}
+	if !result.OK || result.Diagnostics == nil {
+		t.Fatalf("JSON check result = %+v, want clean result with non-nil diagnostics", result)
+	}
+
+	for _, tt := range []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "missing",
+			args:    []string{"--checkers"},
+			wantErr: `rotor check: invalid --checkers value "" (must be a positive integer)`,
+		},
+		{
+			name:    "zero",
+			args:    []string{"--checkers=0"},
+			wantErr: `rotor check: invalid --checkers value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "negative",
+			args:    []string{"--checkers", "-1"},
+			wantErr: `rotor check: invalid --checkers value "-1" (must be a positive integer)`,
+		},
+		{
+			name:    "non integer",
+			args:    []string{"--checkers=many"},
+			wantErr: `rotor check: invalid --checkers value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "builders unknown",
+			args:    []string{"--builders", "2"},
+			wantErr: `rotor check: unknown flag "--builders"`,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stderr, code := captureStderr(t, func() int { return cmdCheck(tt.args) })
+			if code != 1 {
+				t.Fatalf("cmdCheck(%v) exit = %d, want 1; stderr:\n%s", tt.args, code, stderr)
+			}
+			if !strings.Contains(stderr, tt.wantErr) {
+				t.Fatalf("cmdCheck(%v) stderr = %q, want substring %q", tt.args, stderr, tt.wantErr)
+			}
+		})
+	}
+}
+
+func writeCheckerCheckProject(t *testing.T, compilerOptions string) string {
+	t.Helper()
+	dir := writeCheckableProject(t, "")
+	tsconfig := `{
+	"compilerOptions": {
+		"noLib": true,
+		"strict": true,
+		"target": "ESNext",
+		"types": [],
+		"typeRoots": ["node_modules/@rbxts"],
+		"rootDir": "src",
+		"outDir": "out"` + compilerOptions + `
+	},
+	"include": ["src"]
+}`
+	mustWrite(t, filepath.Join(dir, "tsconfig.json"), tsconfig)
+	for _, name := range []string{"a.ts", "b.ts", "c.ts", "d.ts"} {
+		mustWrite(t, filepath.Join(dir, "src", name), "export {};\n")
+	}
+	return dir
 }
