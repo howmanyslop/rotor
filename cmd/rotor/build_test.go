@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -418,6 +419,127 @@ func TestUsageIncludesConcurrencyControls(t *testing.T) {
 			t.Errorf("usage does not contain %q", want)
 		}
 	}
+}
+
+func TestProjectCompileOptionsConcurrencyControls(t *testing.T) {
+	// Given
+	builders := 3
+	checkers := 3
+	opts := projectOptions{
+		builders: &builders,
+		checkers: &checkers,
+	}
+
+	// When
+	got := projectCompileOptions("tsconfig.json", opts)
+
+	// Then
+	if got.Builders != opts.builders || got.Checkers != opts.checkers {
+		t.Fatalf("concurrency pointers = builders %p/checkers %p, want %p/%p", got.Builders, got.Checkers, opts.builders, opts.checkers)
+	}
+	if *got.Builders != 3 || *got.Checkers != 3 {
+		t.Fatalf("concurrency values = builders %d/checkers %d, want 3/3", *got.Builders, *got.Checkers)
+	}
+
+	missing := projectCompileOptions("tsconfig.json", projectOptions{})
+	if missing.Builders != nil || missing.Checkers != nil {
+		t.Fatalf("missing CLI overrides = builders %v/checkers %v, want nil", missing.Builders, missing.Checkers)
+	}
+	present := projectCompileOptions("tsconfig.json", projectOptions{checkers: &checkers})
+	if present.Checkers == nil || *present.Checkers != 3 {
+		t.Fatalf("present checker override = %v, want 3", present.Checkers)
+	}
+}
+
+func TestBuildWatchConcurrencyOptions(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "tsconfig.json")
+	mustWrite(t, configPath, `{"rbxts":{"luau":false}}`)
+	parsed, err := parseBuildArgs([]string{"--build", "--watch", "--builders", "3", "--checkers", "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	reload := newBuildOptionsReload(configPath, parsed)
+	got, err := reload()
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.builders != parsed.builders || got.checkers != parsed.checkers {
+		t.Fatalf("reloaded pointers = builders %p/checkers %p, want %p/%p", got.builders, got.checkers, parsed.builders, parsed.checkers)
+	}
+	if *got.builders != 3 || *got.checkers != 2 {
+		t.Fatalf("reloaded values = builders %d/checkers %d, want 3/2", *got.builders, *got.checkers)
+	}
+	if got.luau {
+		t.Fatal("rbxts options were not re-read during reload")
+	}
+}
+
+func TestBuildSolutionPropagatesCheckers(t *testing.T) {
+	// Given
+	root, projectConfigs := writeConcurrencySolution(t)
+	tests := []struct {
+		name     string
+		checkers int
+	}{
+		{name: "CLI checker 2 reaches every referenced project", checkers: 2},
+		{name: "CLI checker 3 overrides configured checker 1", checkers: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			parsed, err := parseBuildArgs([]string{"--build", "--builders", "3", "--checkers", fmt.Sprint(tt.checkers)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := mergeProjectOptions(defaultProjectOptions, nil, &parsed.opts)
+			opts.builders = parsed.builders
+			opts.checkers = parsed.checkers
+			coordinator, err := compile.NewSolutionCoordinator(
+				filepath.Join(root, "tsconfig.json"),
+				projectCompileOptions(filepath.Join(root, "tsconfig.json"), opts),
+			)
+
+			// Then
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, configPath := range projectConfigs {
+				state, ok := coordinator.ProjectState(configPath)
+				if !ok {
+					t.Fatalf("missing referenced project state for %s", configPath)
+				}
+				if state.Project.Options.Checkers == nil || *state.Project.Options.Checkers != tt.checkers {
+					t.Fatalf("%s checkers = %v, want CLI %d", configPath, state.Project.Options.Checkers, tt.checkers)
+				}
+				if state.Project.Options.Builders == nil || *state.Project.Options.Builders != 3 {
+					t.Fatalf("%s builders = %v, want CLI 3", configPath, state.Project.Options.Builders)
+				}
+			}
+		})
+	}
+}
+
+func writeConcurrencySolution(t *testing.T) (string, []string) {
+	t.Helper()
+	root := t.TempDir()
+	configs := []string{}
+	mustWrite(t, filepath.Join(root, "tsconfig.json"), `{"files":[],"references":[{"path":"./left"},{"path":"./right"}]}`)
+	for _, name := range []string{"left", "right"} {
+		dir := filepath.Join(root, name)
+		configPath := filepath.Join(dir, "tsconfig.json")
+		configs = append(configs, configPath)
+		mustWrite(t, configPath, `{"compilerOptions":{"allowSyntheticDefaultImports":true,"composite":true,"declaration":true,"module":"CommonJS","moduleResolution":"Node","noLib":true,"moduleDetection":"force","strict":true,"target":"ESNext","types":[],"rootDir":"src","outDir":"out","checkers":1},"include":["src"]}`)
+		mustWrite(t, filepath.Join(dir, "package.json"), `{"name":"@scope/`+name+`"}`)
+		mustWrite(t, filepath.Join(dir, "src", "globals.d.ts"), noLibGlobalStubs)
+		mustWrite(t, filepath.Join(dir, "src", "main.ts"), "export {};\n")
+	}
+	return root, configs
 }
 
 func TestBuildModeArgs_emitDeclarationOnly_skipsLuau(t *testing.T) {

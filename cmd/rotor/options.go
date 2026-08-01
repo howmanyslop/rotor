@@ -32,6 +32,9 @@ type projectOptions struct {
 	minify bool
 
 	emitDeclarationOnly bool
+
+	builders *int
+	checkers *int
 }
 
 // defaultProjectOptions ports DEFAULT_PROJECT_OPTIONS (Shared/constants.ts

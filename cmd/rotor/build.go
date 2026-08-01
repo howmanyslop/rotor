@@ -345,6 +345,8 @@ func cmdBuild(args []string) int {
 	opts := mergeProjectOptions(defaultProjectOptions, rbxtsOptions, &parsed.opts)
 	opts.minify = parsed.minify // rotor extension: CLI-only, outside the rbxts merge
 	opts.emitDeclarationOnly = parsed.emitDeclarationOnly
+	opts.builders = parsed.builders
+	opts.checkers = parsed.checkers
 
 	// LogService.verbose = projectOptions.verbose === true (build.ts L132).
 	logservice.Verbose = opts.verbose
@@ -368,16 +370,7 @@ func cmdBuild(args []string) int {
 	}
 	if opts.watch {
 		if parsed.build {
-			reload := func() (projectOptions, error) {
-				declared, err := readRbxtsOptionsChecked(tsConfigPath)
-				if err != nil {
-					return projectOptions{}, err
-				}
-				next := mergeProjectOptions(defaultProjectOptions, declared, &parsed.opts)
-				next.minify = parsed.minify
-				next.emitDeclarationOnly = parsed.emitDeclarationOnly
-				return next, nil
-			}
+			reload := newBuildOptionsReload(tsConfigPath, parsed)
 			return runBuildSolutionWatch(tsConfigPath, opts, reload, watchOptions{
 				maxErrors: parsed.maxErrors, bell: parsed.bell, clearScreen: parsed.clearScreen,
 			})
@@ -420,6 +413,21 @@ func cmdBuild(args []string) int {
 	}
 	out.buildSuccess(len(result.Outputs), len(result.EmittedFiles), copiedFiles, elapsed)
 	return 0
+}
+
+func newBuildOptionsReload(tsConfigPath string, parsed *buildArgs) func() (projectOptions, error) {
+	return func() (projectOptions, error) {
+		declared, err := readRbxtsOptionsChecked(tsConfigPath)
+		if err != nil {
+			return projectOptions{}, err
+		}
+		next := mergeProjectOptions(defaultProjectOptions, declared, &parsed.opts)
+		next.minify = parsed.minify
+		next.emitDeclarationOnly = parsed.emitDeclarationOnly
+		next.builders = parsed.builders
+		next.checkers = parsed.checkers
+		return next, nil
+	}
 }
 
 func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
@@ -469,6 +477,8 @@ func projectCompileOptions(tsConfigPath string, opts projectOptions) compile.Pro
 		WriteOnlyChanged:       opts.writeOnlyChanged,
 		MinifyOutput:           opts.minify,
 		EmitDeclarationOnly:    opts.emitDeclarationOnly,
+		Builders:               opts.builders,
+		Checkers:               opts.checkers,
 	}
 }
 
