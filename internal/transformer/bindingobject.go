@@ -98,6 +98,9 @@ func transformObjectAssignmentPattern(s *State, assignmentPattern *ast.Node, par
 				s.Diags.Add(DiagNoNestedSpreadsInAssignmentPatterns(property))
 				continue
 			}
+			if !ast.IsIdentifier(expression) {
+				panic("transformer: transformObjectAssignmentPattern unexpected expression type: " + kindName(expression.Kind))
+			}
 			id := transformWritableExpression(s, expression, true)
 			s.Prereq(luau.NewAssignment(id, "=", value))
 		} else if ast.IsPropertyAssignment(property) {

@@ -24,7 +24,7 @@ func parseBindingPatternNode(t *testing.T, source string) *ast.Node {
 	return declaration.Name()
 }
 
-func TestArrayLikeExpressionContainsSpread(t *testing.T) {
+func TestRestGates(t *testing.T) {
 	tests := []struct {
 		name string
 		node *ast.Node
