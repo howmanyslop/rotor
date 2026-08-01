@@ -43,7 +43,7 @@ func TestSourceTraceMapOriginalPositionUsesPrecedingGeneratedMapping(t *testing.
 	}}
 
 	tests := []struct {
-		name string
+		name  string
 		input transformer.SourcePosition
 		want  *transformer.SourcePosition
 	}{
