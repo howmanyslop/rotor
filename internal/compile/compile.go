@@ -132,9 +132,15 @@ func transformAndRender(state *transformer.State) (text string, diags []string, 
 }
 
 func transformAndRenderDetailed(state *transformer.State) (text string, diags []DiagnosticInfo, err error) {
+	text, _, diags, err = transformAndRenderSourceMapDetailed(state, nil)
+	return text, diags, err
+}
+
+func transformAndRenderSourceMapDetailed(state *transformer.State, sourceFile *ast.SourceFile) (text, sourceMap string, diags []DiagnosticInfo, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			text = ""
+			sourceMap = ""
 			diags = nil
 			err = fmt.Errorf("internal compiler error: %v", r)
 		}
@@ -149,10 +155,14 @@ func transformAndRenderDetailed(state *transformer.State) (text string, diags []
 	if hasErrors {
 		// Upstream bails before rendering when the transformer reported
 		// errors (compileFiles.ts:176-178).
-		return "", diags, nil
+		return "", "", diags, nil
 	}
 
-	return render.RenderAST(luauAST), diags, nil
+	text = render.RenderAST(luauAST)
+	if sourceFile != nil {
+		sourceMap = state.RenderSourceMap(luauAST, sourceFile)
+	}
+	return text, sourceMap, diags, nil
 }
 
 // preEmitDiagnostics ports the per-file half of ts.getPreEmitDiagnostics

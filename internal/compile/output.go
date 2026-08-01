@@ -77,13 +77,40 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	}
 	rojoCache := loadRojoCachesPreBuild(dir, opts)
 	opts.rojoCache = rojoCache
-	cleanupOutputs(pathTranslator)
+
+	selectedFiles := sourceFiles
+	var previousManifest *incrementalManifest
+	var currentManifest *incrementalManifest
+	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
+		previousManifest, err = readIncrementalManifest(pathTranslator.BuildInfoOutputPath)
+		if err != nil {
+			return nil, nil, err
+		}
+		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, pathTranslator.BuildInfoOutputPath))
+		if err != nil {
+			return nil, nil, err
+		}
+		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
+	}
+
+	copyFilesGate := loadCopyFilesGatePreBuild(copyFilesGateInputs{
+		RootDirs:       getRootDirs(program),
+		OutDir:         pathTranslator.OutDir,
+		Declaration:    program.Options().Declaration.IsTrue(),
+		PathTranslator: pathTranslator,
+		Snapshot:       copyFilesChangedSnapshot(selectedFiles, program.Options().Incremental.IsTrue()),
+	})
+	if !copyFilesGate.SkipCleanup {
+		cleanupOutputs(pathTranslator, program.Options().SourceMap.IsTrue())
+	}
 
 	if err := maybeCopyInclude(dir, opts); err != nil {
 		return nil, nil, err
 	}
-	if err := copyNonCompiledFiles(pathTranslator, getRootDirs(program), opts.WriteOnlyChanged); err != nil {
-		return nil, nil, err
+	if !copyFilesGate.SkipCopyFiles {
+		if err := copyNonCompiledFiles(pathTranslator, getRootDirs(program), opts.WriteOnlyChanged); err != nil {
+			return nil, nil, err
+		}
 	}
 
 	// rotor extension: detect $env usage on the already-loaded source text
@@ -108,20 +135,6 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 	}
 
-	selectedFiles := sourceFiles
-	var previousManifest *incrementalManifest
-	var currentManifest *incrementalManifest
-	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
-		previousManifest, err = readIncrementalManifest(pathTranslator.BuildInfoOutputPath)
-		if err != nil {
-			return nil, nil, err
-		}
-		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, pathTranslator.BuildInfoOutputPath))
-		if err != nil {
-			return nil, nil, err
-		}
-		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
-	}
 	program, selectedFiles, diags, err = prepareProjectProgramForCompile(dir, program, selectedFiles)
 	if err != nil {
 		return nil, diags, err
@@ -131,7 +144,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err != nil {
 		return nil, diags, err
 	}
-	outputs, infos, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
+	outputs, sourceMaps, infos, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
 	if err != nil {
 		return &BuildResult{Diagnostics: infos}, diagnosticInfoMessages(infos), err
 	}
@@ -161,6 +174,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	wrote := make([]bool, len(relOuts))
 	jobs := make([]func() error, len(relOuts))
 	for i, relOut := range relOuts {
+		sourceMap, hasSourceMap := sourceMaps[relOut+".map"]
 		jobs[i] = func() error {
 			// Defense-in-depth: output paths are derived from source/Rojo path
 			// mappings; refuse any that would escape the project directory.
@@ -170,6 +184,10 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
 			w, err := writeOutputFile(absOut, outputs[relOut], opts.WriteOnlyChanged)
 			wrote[i] = w
+			if err != nil || !hasSourceMap {
+				return err
+			}
+			_, err = writeOutputFile(absOut+".map", sourceMap, opts.WriteOnlyChanged)
 			return err
 		}
 	}
@@ -198,7 +216,6 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			return nil, nil, err
 		}
 	}
-
 	// rotor extension: keep the consolidated on-disk rotor.d.ts editor companion
 	// fresh for projects that reference any macro ($env / $asset / $nameof /
 	// $keys / $file / $git / $buildTime). Editors never see the synthetic
@@ -224,6 +241,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 		wroteLockfile = true
 	}
+	copyFilesGate.Persist()
 
 	return &BuildResult{
 		Outputs:         outputs,
@@ -429,11 +447,11 @@ func maybeCopyInclude(dir string, opts ProjectOptions) error {
 	return copyErr
 }
 
-func cleanupOutputs(pathTranslator *rojo.PathTranslator) {
-	cleanupDirRecursively(pathTranslator, pathTranslator.OutDir)
+func cleanupOutputs(pathTranslator *rojo.PathTranslator, sourceMapsEnabled bool) {
+	cleanupDirRecursively(pathTranslator, pathTranslator.OutDir, sourceMapsEnabled)
 }
 
-func cleanupDirRecursively(pathTranslator *rojo.PathTranslator, dir string) {
+func cleanupDirRecursively(pathTranslator *rojo.PathTranslator, dir string, sourceMapsEnabled bool) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return
@@ -444,14 +462,14 @@ func cleanupDirRecursively(pathTranslator *rojo.PathTranslator, dir string) {
 			if entry.Name() == ".git" {
 				continue
 			}
-			cleanupDirRecursively(pathTranslator, itemPath)
+			cleanupDirRecursively(pathTranslator, itemPath, sourceMapsEnabled)
 		}
-		tryRemoveOutput(pathTranslator, itemPath)
+		tryRemoveOutput(pathTranslator, itemPath, sourceMapsEnabled)
 	}
 }
 
-func tryRemoveOutput(pathTranslator *rojo.PathTranslator, outPath string) {
-	if !isOutputFileOrphaned(pathTranslator, outPath) {
+func tryRemoveOutput(pathTranslator *rojo.PathTranslator, outPath string, sourceMapsEnabled bool) {
+	if !isOutputFileOrphanedWithSourceMaps(pathTranslator, outPath, sourceMapsEnabled) {
 		return
 	}
 	if err := os.RemoveAll(outPath); err == nil {
@@ -460,6 +478,24 @@ func tryRemoveOutput(pathTranslator *rojo.PathTranslator, outPath string) {
 }
 
 func isOutputFileOrphaned(pathTranslator *rojo.PathTranslator, outPath string) bool {
+	return isOutputFileOrphanedWithSourceMaps(pathTranslator, outPath, false)
+}
+
+func isOutputFileOrphanedWithSourceMaps(pathTranslator *rojo.PathTranslator, outPath string, sourceMapsEnabled bool) bool {
+	if protectedOutputFilenames[filepath.Base(outPath)] {
+		return false
+	}
+	if strings.HasSuffix(outPath, ".luau.map") {
+		if !sourceMapsEnabled {
+			return true
+		}
+		for _, inputPath := range pathTranslator.GetInputPaths(strings.TrimSuffix(outPath, ".map")) {
+			if _, err := os.Stat(inputPath); err == nil {
+				return false
+			}
+		}
+		return true
+	}
 	if strings.HasSuffix(outPath, ".d.ts") && !pathTranslator.Declaration {
 		return true
 	}
@@ -506,6 +542,25 @@ func copyItem(pathTranslator *rojo.PathTranslator, itemPath string, writeOnlyCha
 		return err
 	}
 	if info.IsDir() {
+		if pathContains(itemPath, pathTranslator.OutDir) {
+			entries, err := os.ReadDir(itemPath)
+			if err != nil {
+				return err
+			}
+			for _, entry := range entries {
+				if entry.Name() == "node_modules" {
+					continue
+				}
+				childPath := filepath.Join(itemPath, entry.Name())
+				if filepath.Clean(childPath) == filepath.Clean(pathTranslator.OutDir) {
+					continue
+				}
+				if err := copyItem(pathTranslator, childPath, writeOnlyChanged); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		outDir := pathTranslator.GetOutputPath(itemPath)
 		if err := os.MkdirAll(outDir, 0o755); err != nil {
 			return err
@@ -551,6 +606,14 @@ func copyItem(pathTranslator *rojo.PathTranslator, itemPath string, writeOnlyCha
 		return err
 	}
 	return os.WriteFile(dest, data, 0o644)
+}
+
+func pathContains(parent, child string) bool {
+	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func isCompilableFile(path string) bool {

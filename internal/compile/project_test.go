@@ -229,11 +229,10 @@ func TestCompileProjectObjectRestDestructuring(t *testing.T) {
 	}
 
 	want := "-- Compiled with roblox-ts v3.0.0\n" +
-		"local _binding = props\n" +
-		"local change = _binding.Change\n" +
+		"local change = props.Change\n" +
 		"local _extracted = {\n\t[\"Change\"] = true,\n}\n" +
 		"local _rest = {}\n" +
-		"for _k, _v in _binding do\n\tif not _extracted[_k] then\n\t\t_rest[_k] = _v\n\tend\nend\n" +
+		"for _k, _v in props do\n\tif not _extracted[_k] then\n\t\t_rest[_k] = _v\n\tend\nend\n" +
 		"local rest = _rest\n" +
 		"print(change, rest.Other)\n" +
 		"return nil\n"

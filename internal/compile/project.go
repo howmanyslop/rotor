@@ -526,7 +526,8 @@ func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOp
 	if err != nil {
 		return nil, stringDiagnostics(pctxDiags), err
 	}
-	return compileProjectSourceFiles(dir, program, pctx, sourceFiles, opts)
+	outputs, _, infos, err := compileProjectSourceFiles(dir, program, pctx, sourceFiles, opts)
+	return outputs, infos, err
 }
 
 func projectSourceFiles(program *compiler.Program) []*ast.SourceFile {
@@ -548,10 +549,11 @@ type checkerSourceFileGroup struct {
 }
 
 type compiledProjectSourceFile struct {
-	relOut string
-	text   string
-	diags  []DiagnosticInfo
-	err    error
+	relOut    string
+	text      string
+	sourceMap string
+	diags     []DiagnosticInfo
+	err       error
 }
 
 type precheckedProjectSourceFile struct {
@@ -559,13 +561,13 @@ type precheckedProjectSourceFile struct {
 	commentDiags []string
 }
 
-func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, []DiagnosticInfo, error) {
+func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, map[string]string, []DiagnosticInfo, error) {
 	ctx := context.Background()
 
 	// Program-level option diagnostics fail the compile before any file is
 	// transformed, mirroring CompileFile.
 	if tsDiags := program.GetProgramDiagnostics(); len(tsDiags) > 0 {
-		return nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+		return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
 
 	// compileFiles.ts L102 — note the TWO dots.
@@ -589,14 +591,14 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 
 	for _, precheck := range prechecks {
 		if len(precheck.tsDiags) > 0 {
-			return nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
+			return nil, nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
 		}
 		if len(precheck.commentDiags) > 0 {
-			return nil, stringDiagnostics(precheck.commentDiags), errors.New("compile: comment directive diagnostics")
+			return nil, nil, stringDiagnostics(precheck.commentDiags), errors.New("compile: comment directive diagnostics")
 		}
 	}
 	if tsDiags := program.GetGlobalDiagnostics(ctx); len(tsDiags) > 0 {
-		return nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+		return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
 
 	wg = core.NewWorkGroup(program.SingleThreaded() || len(groups) <= 1)
@@ -612,14 +614,18 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 	wg.RunAndWait()
 
 	outputs := make(map[string]string, len(results))
+	sourceMaps := make(map[string]string, len(results))
 	for _, result := range results {
 		if result.err != nil {
-			return nil, result.diags, result.err
+			return nil, nil, result.diags, result.err
 		}
 		outputs[result.relOut] = result.text
+		if result.sourceMap != "" {
+			sourceMaps[result.relOut+".map"] = result.sourceMap
+		}
 	}
 
-	return outputs, nil, nil
+	return outputs, sourceMaps, nil, nil
 }
 
 func compileProjectProgressLabels(sourceFiles []*ast.SourceFile) []string {
@@ -692,7 +698,15 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 		state.LogTruthyChanges = opts.LogTruthyChanges
 		state.OptimizedLoops = !opts.NoOptimizedLoops
 
-		text, diags, err := transformAndRenderDetailed(state)
+		var text string
+		var sourceMap string
+		var diags []DiagnosticInfo
+		var err error
+		if program.Options().SourceMap.IsTrue() {
+			text, sourceMap, diags, err = transformAndRenderSourceMapDetailed(state, sourceFile)
+		} else {
+			text, diags, err = transformAndRenderDetailed(state)
+		}
 		if err != nil {
 			result.err = err
 			return
@@ -710,6 +724,7 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 		}
 		result.relOut = filepath.ToSlash(relOut)
 		result.text = text
+		result.sourceMap = sourceMap
 	})
 	return result
 }

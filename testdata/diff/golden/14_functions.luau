@@ -9,9 +9,9 @@ local function greet(name, punct)
 	return "hi " .. name .. punct
 end
 local function sum(...)
-	local nums = { ... }
 	local total = 0
-	for _, n in nums do
+	for _i = 1, select("#", ...) do
+		local n = (select(_i, ...))
 		total += n
 	end
 	return total

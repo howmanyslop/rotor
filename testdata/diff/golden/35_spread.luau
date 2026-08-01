@@ -127,8 +127,7 @@ local a9 = _array_8
 print(a1, a2, a3, a4, a5, a6, a7, a8, a9)
 -- call spread
 local function takeNums(...)
-	local nums = { ... }
-	return #nums
+	return select("#", ...)
 end
 print(takeNums(unpack(arr1)))
 print(takeNums(1, unpack(arr1)))
