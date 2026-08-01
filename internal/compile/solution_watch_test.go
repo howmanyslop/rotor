@@ -14,8 +14,9 @@ func TestRojoWatchInvalidation(t *testing.T) {
 	writeSolutionConfig(t, filepath.Join(root, "app"), "tsconfig.json", []string{"../shared"}, false)
 	writeSolutionConfig(t, filepath.Join(root, "shared"), "tsconfig.json", nil, false)
 	drainer := &recordingSolutionDrainer{}
+	builders := 1
 
-	coordinator, err := NewSolutionCoordinatorWithDrainer(filepath.Join(root, "tsconfig.json"), ProjectOptions{}, drainer)
+	coordinator, err := NewSolutionCoordinatorWithDrainer(filepath.Join(root, "tsconfig.json"), ProjectOptions{Builders: &builders}, drainer)
 	if err != nil {
 		t.Fatalf("NewSolutionCoordinatorWithDrainer: %v", err)
 	}

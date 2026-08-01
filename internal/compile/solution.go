@@ -36,6 +36,7 @@ type SolutionCoordinator struct {
 	states               map[string]SolutionProjectState
 	writeRoots           map[string][]string
 	waitOnlyDependencies map[string][]string
+	builders             int
 }
 
 type solutionProjectVisit uint8
@@ -126,7 +127,7 @@ func NewSolutionCoordinator(tsConfigPath string, entry ProjectOptions) (*Solutio
 	}
 	importPathMap, metadata := populateCrossProjectMetadata(graph)
 	drainer := &solutionBuildDrainer{importPathMap: importPathMap}
-	return newSolutionCoordinator(graph, drainer, metadata)
+	return newSolutionCoordinator(graph, drainer, metadata, effectiveSolutionBuilders(entry))
 }
 
 func NewSolutionCoordinatorWithDrainer(tsConfigPath string, entry ProjectOptions, drainer SolutionProjectDrainer) (*SolutionCoordinator, error) {
@@ -138,10 +139,10 @@ func NewSolutionCoordinatorWithDrainer(tsConfigPath string, entry ProjectOptions
 		return nil, err
 	}
 	_, metadata := populateCrossProjectMetadata(graph)
-	return newSolutionCoordinator(graph, drainer, metadata)
+	return newSolutionCoordinator(graph, drainer, metadata, effectiveSolutionBuilders(entry))
 }
 
-func newSolutionCoordinator(graph *SolutionGraph, drainer SolutionProjectDrainer, metadata solutionWriteMetadata) (*SolutionCoordinator, error) {
+func newSolutionCoordinator(graph *SolutionGraph, drainer SolutionProjectDrainer, metadata solutionWriteMetadata, builders int) (*SolutionCoordinator, error) {
 	states := make(map[string]SolutionProjectState, len(graph.Projects))
 	for _, project := range graph.Projects {
 		states[project.ConfigPath] = SolutionProjectState{Project: project}
@@ -152,45 +153,100 @@ func newSolutionCoordinator(graph *SolutionGraph, drainer SolutionProjectDrainer
 		states:               states,
 		writeRoots:           metadata.writeRoots,
 		waitOnlyDependencies: metadata.waitOnlyDependencies,
+		builders:             builders,
 	}, nil
 }
 
 func (c *SolutionCoordinator) Drain() (*BuildResult, []string, error) {
 	result := &BuildResult{Outputs: map[string]string{}}
-	var firstErr error
-	for _, project := range c.graph.Projects {
-		state := c.states[project.ConfigPath]
-		if state.UpToDate {
-			continue
-		}
-		if blockedBy := c.failedDependency(project); blockedBy != "" {
-			state.BlockedBy = blockedBy
-			state.Err = fmt.Errorf("compile: project %s blocked by failed dependency %s", project.ConfigPath, blockedBy)
-			c.states[project.ConfigPath] = state
-			result.Diagnostics = append(result.Diagnostics, DiagnosticInfo{Message: state.Err.Error()})
-			if firstErr == nil {
-				firstErr = state.Err
+	indexByConfigPath := make(map[string]int, len(c.graph.Projects))
+	for index, project := range c.graph.Projects {
+		indexByConfigPath[project.ConfigPath] = index
+	}
+	tasks := make([]solutionTask, len(c.graph.Projects))
+	for index, project := range c.graph.Projects {
+		tasks[index] = solutionTask{index: index}
+		for _, reference := range project.References {
+			if predecessor, ok := indexByConfigPath[reference]; ok {
+				tasks[index].predecessors = append(tasks[index].predecessors, predecessor)
 			}
-			continue
+		}
+		for _, dependency := range c.waitOnlyDependencies[project.ConfigPath] {
+			if predecessor, ok := indexByConfigPath[dependency]; ok {
+				tasks[index].waitOnly = append(tasks[index].waitOnly, predecessor)
+			}
+		}
+	}
+
+	type drainOutcome struct {
+		skip      bool
+		blockedBy string
+		result    *BuildResult
+		messages  []string
+		err       error
+		persists  []func() error
+	}
+	outcomes := make([]drainOutcome, len(c.graph.Projects))
+	RunSolutionTasks(tasks, c.builders, func(index int) error {
+		project := c.graph.Projects[index]
+		state := c.states[project.ConfigPath]
+		outcome := &outcomes[index]
+		if state.UpToDate {
+			outcome.skip = true
+			return nil
+		}
+		for _, predecessor := range tasks[index].predecessors {
+			if outcomes[predecessor].err == nil {
+				continue
+			}
+			outcome.blockedBy = c.graph.Projects[predecessor].ConfigPath
+			outcome.err = fmt.Errorf("compile: project %s blocked by failed dependency %s", project.ConfigPath, outcome.blockedBy)
+			return outcome.err
 		}
 
 		if state.forceFullBuild {
 			project.Options.forceFullBuild = true
 		}
+		var persists []func() error
+		project.Options.pendingSolutionPersists = &persists
+		project.Options.deferRojoCachePersist = true
 		built, messages, err := c.drainer.Drain(project)
-		state.Result = built
-		if built != nil {
-			mergeSolutionBuildResult(result, project, built)
+		outcome.result = built
+		outcome.messages = messages
+		outcome.err = err
+		outcome.persists = persists
+		return err
+	})
+
+	var firstErr error
+	for index, project := range c.graph.Projects {
+		outcome := outcomes[index]
+		if outcome.skip {
+			continue
 		}
-		if err != nil {
-			state.Err = err
-			if built == nil || len(built.Diagnostics) == 0 {
-				for _, message := range messages {
-					result.Diagnostics = append(result.Diagnostics, DiagnosticInfo{Message: message})
+		if appender, ok := c.drainer.(interface{ appendPersists([]func() error) }); ok {
+			appender.appendPersists(outcome.persists)
+		}
+		state := c.states[project.ConfigPath]
+		state.Result = outcome.result
+		if outcome.result != nil {
+			mergeSolutionBuildResult(result, project, outcome.result)
+		}
+		if outcome.err != nil {
+			if outcome.blockedBy != "" {
+				state.BlockedBy = outcome.blockedBy
+				state.Err = outcome.err
+				result.Diagnostics = append(result.Diagnostics, DiagnosticInfo{Message: outcome.err.Error()})
+			} else {
+				state.Err = outcome.err
+				if outcome.result == nil || len(outcome.result.Diagnostics) == 0 {
+					for _, message := range outcome.messages {
+						result.Diagnostics = append(result.Diagnostics, DiagnosticInfo{Message: message})
+					}
 				}
 			}
 			if firstErr == nil {
-				firstErr = err
+				firstErr = outcome.err
 			}
 		} else {
 			state.BlockedBy = ""
@@ -203,7 +259,7 @@ func (c *SolutionCoordinator) Drain() (*BuildResult, []string, error) {
 	if firstErr != nil {
 		return result, diagnosticInfoMessages(result.Diagnostics), firstErr
 	}
-	if drainer, ok := c.drainer.(*solutionBuildDrainer); ok {
+	if drainer, ok := c.drainer.(interface{ persist() error }); ok {
 		if err := drainer.persist(); err != nil {
 			return result, diagnosticInfoMessages(result.Diagnostics), err
 		}
@@ -277,8 +333,18 @@ func (c *SolutionCoordinator) Reload(tsConfigPath string, entry ProjectOptions) 
 	importPathMap, metadata := populateCrossProjectMetadata(graph)
 	c.writeRoots = metadata.writeRoots
 	c.waitOnlyDependencies = metadata.waitOnlyDependencies
-	c.drainer = &solutionBuildDrainer{importPathMap: importPathMap}
+	c.builders = effectiveSolutionBuilders(entry)
+	if _, ok := c.drainer.(*solutionBuildDrainer); ok {
+		c.drainer = &solutionBuildDrainer{importPathMap: importPathMap}
+	}
 	return nil
+}
+
+func effectiveSolutionBuilders(entry ProjectOptions) int {
+	if entry.Builders == nil {
+		return 4
+	}
+	return *entry.Builders
 }
 
 func (c *SolutionCoordinator) failedDependency(project SolutionProject) string {

@@ -14,9 +14,12 @@ func (d *solutionBuildDrainer) Drain(project SolutionProject) (*BuildResult, []s
 	options := project.Options
 	options.TsConfigPath = project.ConfigPath
 	options.crossProjectImportPathMap = d.importPathMap
-	options.pendingSolutionPersists = &d.persists
 	options.deferRojoCachePersist = true
 	return BuildProjectWithOptions(filepath.Dir(project.ConfigPath), options)
+}
+
+func (d *solutionBuildDrainer) appendPersists(persists []func() error) {
+	d.persists = append(d.persists, persists...)
 }
 
 func (d *solutionBuildDrainer) persist() error {

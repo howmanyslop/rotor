@@ -6,17 +6,22 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 )
 
 type recordingSolutionDrainer struct {
+	mu      sync.Mutex
 	drained []string
 	fail    string
 }
 
 func (d *recordingSolutionDrainer) Drain(project SolutionProject) (*BuildResult, []string, error) {
+	d.mu.Lock()
 	d.drained = append(d.drained, filepath.Base(filepath.Dir(project.ConfigPath)))
-	if project.ConfigPath == d.fail {
+	fail := project.ConfigPath == d.fail
+	d.mu.Unlock()
+	if fail {
 		return &BuildResult{Diagnostics: []DiagnosticInfo{{Message: "failed project"}}}, []string{"failed project"}, errors.New("failed project")
 	}
 	return &BuildResult{Outputs: map[string]string{}}, nil, nil
@@ -50,7 +55,8 @@ func TestSolutionCoordinator(t *testing.T) {
 	writeSolutionConfig(t, filepath.Join(root, "shared"), "tsconfig.json", nil, false)
 	drainer := &recordingSolutionDrainer{}
 
-	coordinator, err := NewSolutionCoordinatorWithDrainer(filepath.Join(root, "tsconfig.json"), ProjectOptions{}, drainer)
+	builders := 1
+	coordinator, err := NewSolutionCoordinatorWithDrainer(filepath.Join(root, "tsconfig.json"), ProjectOptions{Builders: &builders}, drainer)
 	if err != nil {
 		t.Fatalf("NewSolutionCoordinatorWithDrainer: %v", err)
 	}
@@ -78,7 +84,8 @@ func TestSolutionCoordinatorBlocksDependentAfterFailure(t *testing.T) {
 	brokenConfig := filepath.Join(root, "broken", "tsconfig.json")
 	drainer := &recordingSolutionDrainer{fail: brokenConfig}
 
-	coordinator, err := NewSolutionCoordinatorWithDrainer(filepath.Join(root, "tsconfig.json"), ProjectOptions{}, drainer)
+	builders := 1
+	coordinator, err := NewSolutionCoordinatorWithDrainer(filepath.Join(root, "tsconfig.json"), ProjectOptions{Builders: &builders}, drainer)
 	if err != nil {
 		t.Fatalf("NewSolutionCoordinatorWithDrainer: %v", err)
 	}
@@ -138,7 +145,8 @@ func TestSolutionBuildOrder(t *testing.T) {
 	writeSolutionConfig(t, filepath.Join(root, "dependency"), "tsconfig.json", nil, false)
 	drainer := &recordingSolutionDrainer{}
 
-	coordinator, err := NewSolutionCoordinatorWithDrainer(filepath.Join(root, "tsconfig.json"), ProjectOptions{}, drainer)
+	builders := 1
+	coordinator, err := NewSolutionCoordinatorWithDrainer(filepath.Join(root, "tsconfig.json"), ProjectOptions{Builders: &builders}, drainer)
 	if err != nil {
 		t.Fatalf("NewSolutionCoordinatorWithDrainer: %v", err)
 	}
