@@ -494,7 +494,7 @@ when the spread expression is not itself an object literal.
 
 ### 3.2 Spread/rest in DESTRUCTURING — BANNED everywhere (oracle-proven)
 
-Upstream raises `errors.noSpreadDestructuring` = `"Operator `...` is not supported for
+Upstream raises its rest-spread rejection = `"Operator `...` is not supported for
 destructuring!"` and ABORTS that pattern's transform (early `return`) at ALL seven sites:
 
 | construct | upstream site |
@@ -1062,7 +1062,6 @@ checks). `{ ...props.event }` (button.tsx) WILL temp: property access is complex
 | noGetterSetter | `Getters and Setters are not supported!` + `More information: https://github.com/roblox-ts/roblox-ts/issues/457` | get/set accessor (class member OR object literal) — span: whole accessor |
 | noAutoAccessorModifiers | `Getters and Setters are not supported!` + `The `accessor` keyword requires generating get/set accessors` + issue 457 line | `accessor x = ...` — span: the `accessor` KEYWORD modifier |
 | noPrivateIdentifier | `Private identifiers are not supported!` | `#x` member — span: the WHOLE CLASS when raised from transformPropertyInitializers (§8 quirk), the identifier elsewhere |
-| noSpreadDestructuring | ``Operator `...` is not supported for destructuring!`` | any rest element in any binding/assignment pattern — span: the rest element |
 | noInstanceMethodCollisions | `Static methods cannot use the same name as instance methods!` | CHECKER instanceType.getProperty(name) exists for a static method — span: method |
 | noStaticMethodCollisions | `Instance methods cannot use the same name as static methods!` | CHECKER classType.getProperty(name) exists for an instance method — span: method |
 | noMacroObjectSpread | `Macro classes cannot be used in an object spread!` + suggestion `Did you mean to use an array spread? `[ ...exp ]`` | spread of macro-only class value |

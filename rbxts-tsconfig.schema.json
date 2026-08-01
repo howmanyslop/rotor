@@ -1,6 +1,4 @@
-package compile
-
-const RbxtsTsConfigSchema = `{
+{
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://raw.githubusercontent.com/uproot/rotor/master/rbxts-tsconfig.schema.json",
   "title": "roblox-ts tsconfig.json",
@@ -26,4 +24,3 @@ const RbxtsTsConfigSchema = `{
   },
   "additionalProperties": true
 }
-`

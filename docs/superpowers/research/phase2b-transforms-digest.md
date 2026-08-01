@@ -119,7 +119,7 @@ Returns `{ parameters: luau.List<AnyIdentifier>, statements: luau.List<Statement
      i.e. `...[a, b, c]: [A, B, C]` → `optimizeArraySpreadParameter` (L16–51) flattens the pattern
      elements into REAL parameters (no `...` capture):
      - OmittedExpression → push `luau.tempId()` as a parameter (placeholder).
-     - element with `dotDotDotToken` → `errors.noSpreadDestructuring`, abort the pattern (return).
+     - element with `dotDotDotToken` → upstream rest-spread rejection, abort the pattern (return).
      - Identifier name → `transformIdentifierDefined` + `validateIdentifier`, push as param;
        `element.initializer` → prereq `transformInitializer(state, paramId, init)` (§1.5).
      - Nested pattern name → `paramId = luau.tempId("param")` pushed as param; initializer first,
@@ -321,7 +321,7 @@ for (const element of bindingPattern.elements) {
     if (ts.isOmittedExpression(element)) {
         accessor(state, parentId, index, idStack, true);          // isOmitted=true: side-effect only
     } else {
-        if (element.dotDotDotToken) { errors.noSpreadDestructuring(element); return; }
+        if (element.dotDotDotToken) { upstream rest-spread rejection; return; }
         const name = element.name;
         const value = accessor(state, parentId, index, idStack, false);
         if (ts.isIdentifier(name)) {
@@ -338,7 +338,7 @@ for (const element of bindingPattern.elements) {
 }
 ```
 All output goes through `state.prereq*` (callers wrap in capturePrereqs). Rest elements
-(`...rest`) → `noSpreadDestructuring` and ABORT the rest of the pattern (return). Defaults run
+(`...rest`) → upstream rest-spread rejection and ABORT the rest of the pattern (return). Defaults run
 before nested-pattern recursion. Omitted elements still invoke the accessor with `isOmitted=true`
 so stateful accessors (string/set/map/iter) advance; the array accessor's omitted call is a no-op
 (returns an expression nobody uses, emits nothing).
@@ -346,7 +346,7 @@ so stateful accessors (string/set/map/iter) advance; the array accessor's omitte
 ### 2.3 transformObjectBindingPattern — `nodes/binding/transformObjectBindingPattern.ts` L13–48
 
 `validateNotAnyType`. Per element:
-- `dotDotDotToken` (`...rest`) → `noSpreadDestructuring`, return.
+- `dotDotDotToken` (`...rest`) → upstream rest-spread rejection, return.
 - name Identifier: `value = objectAccessor(state, parentId, state.getType(bindingPattern),
   prop ?? name)` — CHECKER (L27); `prop` is `element.propertyName` (`{ a: b }` reads `a`, declares
   `b`); `id = transformVariable(state, name, value)`; initializer → transformInitializer prereq.
@@ -403,7 +403,7 @@ literal numeric names do NOT (`{ 0: x }` over a tuple emits `parent[0]`, `{ [0]:
 Same skeleton as §2.2 but over `ts.ArrayLiteralExpression`:
 - accessor from CHECKER: `state.typeChecker.getTypeOfAssignmentPattern(assignmentPattern)` (L24)
   — NOT getType (assignment patterns need the special checker API).
-- Element forms: OmittedExpression → accessor(isOmitted). SpreadElement → `noSpreadDestructuring`
+- Element forms: OmittedExpression → accessor(isOmitted). SpreadElement → upstream rest-spread rejection
   (NOTE: does NOT return — keeps iterating, unlike binding patterns). Default unwrapping:
   ```ts
   if (ts.isBinaryExpression(element)) { initializer = skipDownwards(element.right); element = skipDownwards(element.left); }
@@ -425,7 +425,7 @@ Per property of the object literal LHS:
   `id = transformWritableExpression(state, name, property.objectAssignmentInitializer !== undefined)`;
   prereq `id = value`; `assert(luau.isAnyIdentifier(id))`; default from
   `property.objectAssignmentInitializer`.
-- SpreadAssignment → `noSpreadDestructuring`, RETURN (aborts remaining properties).
+- SpreadAssignment → upstream rest-spread rejection, RETURN (aborts remaining properties).
 - PropertyAssignment `{ a: target }` / `{ a: target = 1 }` (L43–85): default unwrapping when
   `property.initializer` is a BinaryExpression (init = left, initializer = right, both
   skipDownwards). `value = objectAccessor(..., getTypeOfAssignmentPattern, name)` (CHECKER L55).
@@ -473,7 +473,7 @@ omitted → `luau.tempId()`; identifier → validate + transformIdentifierDefine
 transformVariable, so NO export-let/hoist handling — safe because hoist-containing patterns were
 excluded and export-let only applies at module level where... it is NOT excluded; upstream relies
 on optimized patterns being local-only in practice — port verbatim); rest element →
-`noSpreadDestructuring` + abort; nested pattern → tempId("binding") + recurse (§2.2/2.3). Defaults
+upstream rest-spread rejection + abort; nested pattern → tempId("binding") + recurse (§2.2/2.3). Defaults
 via transformInitializer prereqs captured into `statements` which are emitted AFTER the single
 `local a, b, c = <rhs...>` VariableDeclaration (multi-left, multi-right).
 
@@ -509,7 +509,7 @@ Inside `ts.isAssignmentOperator(operatorKind)`:
 `transformOptimizedArrayAssignmentPattern` (L36–111) — the multi-assign form `a, b = f()`:
 collects `writes` (assignment targets), `variables` (tempIds needing `local` pre-declaration for
 nested patterns), `writesPrereqs` (target prereqs e.g. index computations). Per element: omitted →
-tempId write; spread → `noSpreadDestructuring` (continues); default unwrap as §2.6;
+tempId write; spread → upstream rest-spread rejection (continues); default unwrap as §2.6;
 identifier/element/property access → `state.capture(transformWritableExpression(element, true))`
 (prereqs → writesPrereqs), defaults captured into trailing `statements`; nested array/object
 literal → tempId pushed to BOTH variables and writes, default + recurse captured into trailing
@@ -594,7 +594,7 @@ directly over the array expression. Pattern initializers destructure inside the 
 **buildMapLoop** (L224–257): inline-destructure fast path — if initializer is a
 VariableDeclarationList whose first name is an ArrayBindingPattern →
 `transformInLineArrayBindingPattern` (L141–160): each pattern element becomes a generic-for
-binding directly (`for k, v in exp do`); omitted → tempId; spread → noSpreadDestructuring;
+binding directly (`for k, v in exp do`); omitted → tempId; spread → upstream rest-spread rejection;
 defaults via transformInitializer appended to initializers; nested patterns via
 transformBindingName. If initializer is an ArrayLiteralExpression (assignment form) →
 `transformInLineArrayAssignmentPattern` (L162–222): same idea, each slot gets
@@ -914,7 +914,6 @@ cross-file or alias-following semantics needed.
 |---|---|---|
 | noFunctionExpressionName | "Function expression names are not supported!" | transformFunctionExpression:13 |
 | noAsyncGeneratorFunctions | "Async generator functions are not supported!" | transformFunctionDeclaration:42; transformFunctionExpression:31; transformMethodDeclaration:55 |
-| noSpreadDestructuring | "Operator `...` is not supported for destructuring!" | transformParameters(optimizeArraySpreadParameter):26; transformArrayBindingPattern:27; transformObjectBindingPattern:21; transformArrayAssignmentPattern:30; transformObjectAssignmentPattern:41; transformOptimizedArrayBindingPattern (varstmt):70; transformOptimizedArrayAssignmentPattern (binary):49; transformInLineArrayBindingPattern (for-of):151; transformInLineArrayAssignmentPattern (for-of):175 |
 | noLuaTupleDestructureAssignmentExpression | "Cannot destructure LuaTuple<T> expression outside of an ExpressionStatement!" | transformBinaryExpression:157 |
 | noIterableIteration | "Iterating on Iterable<T> is not supported! You must use a more specific type." | getAccessorForBindingType:157; getLoopBuilder:430 |
 | noMacroUnion | "Macro cannot be applied to a union type!" | getLoopBuilder:433 |
@@ -927,7 +926,7 @@ cross-file or alias-following semantics needed.
 | noAny | (P2 §11.3) | validateNotAnyType at binding-pattern roots (array:17, object:18) and via addIndexDiagnostics in objectAccessor |
 
 Rotor status: ALL of the above already exist in `internal/transformer/diagnostics.go`
-(noFunctionExpressionName L159, noAsyncGeneratorFunctions L223, noSpreadDestructuring L156,
+(noFunctionExpressionName L159, noAsyncGeneratorFunctions L223, upstream rest-spread rejection,
 noLuaTupleDestructureAssignmentExpression L168, noIterableIteration L231, noMacroUnion L276,
 noAwaitForOf L219, plus the P2 set). **No new diagnostics need porting for Phase 2b.**
 
@@ -1001,7 +1000,7 @@ macro named `size` (isSizeMacro).
 `TS.TRY_CONTINUE` (break/continue-in-try). Phase 2b emits diagnostics-only or `state.TS` stubs.
 
 ### 8.4 Phase 2b diagnostic name list (complete)
-noFunctionExpressionName, noAsyncGeneratorFunctions, noSpreadDestructuring,
+noFunctionExpressionName, noAsyncGeneratorFunctions, upstream rest-spread rejection,
 noLuaTupleDestructureAssignmentExpression, noIterableIteration, noMacroUnion, noAwaitForOf,
 noVar, noPrivateIdentifier, noMixedTypeCall, expectedMethodGotFunction, expectedFunctionGotMethod,
 noInvalidIdentifier, noReservedIdentifier, noAny. All present in rotor's diagnostics.go — none new.

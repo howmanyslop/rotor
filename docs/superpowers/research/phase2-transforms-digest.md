@@ -455,7 +455,7 @@ validateNotAnyType(state, node.right);
      Entry behavior to note: RHS transformed first; empty-pattern optimizations; LuaTuple
      direct-unpack optimization (CHECKER: `isLuaTupleType(state)(state.getType(node.right))` L154)
      with `errors.noLuaTupleDestructureAssignmentExpression` when used as a non-statement;
-     `errors.noSpreadDestructuring` inside `transformOptimizedArrayAssignmentPattern` (L49).
+     the upstream rest-spread rejection inside `transformOptimizedArrayAssignmentPattern` (L49).
    - Simple/compound assignment (L186–214):
      ```ts
      const writableType = state.getType(node.left);     // CHECKER (L186)
@@ -1116,7 +1116,7 @@ sets `isHoisted`. (Switch is out of first-wave scope; port can stub to no-op unt
 
 Destructuring entry points (later): ArrayBindingPattern with LuaTuple call RHS →
 `transformOptimizedArrayBindingPattern` (L57–99; CHECKER `isLuaTupleType(state)(state.getType(
-node.initializer))` L137; `errors.noSpreadDestructuring` L70); inline-array RHS unpacks members
+node.initializer))` L137; upstream rest-spread rejection L70); inline-array RHS unpacks members
 directly (L142–147); generic path pushes RHS to `binding` temp and runs
 `transformArrayBindingPattern`/`transformObjectBindingPattern`. Empty patterns: drop or keep RHS
 via `wrapExpressionStatement` (L127–131).
@@ -1329,7 +1329,6 @@ reports for the same variable; symbol-less any accesses always report.
 | noGetterSetter | "Getters and Setters are not supported!" + issue(457) | object literal accessor |
 | noEqualsEquals | "operator `==` is not supported!" + sugg. "Use `===` instead." | binary |
 | noExclamationEquals | "operator `!=` is not supported!" + sugg. "Use `!==` instead." | binary |
-| noSpreadDestructuring | "Operator `...` is not supported for destructuring!" | destructure paths (entry only) |
 | noLuaTupleDestructureAssignmentExpression | "Cannot destructure LuaTuple<T> expression outside of an ExpressionStatement!" | binary assignment destructure |
 | noGlobalThis | "`globalThis` is not supported!" | identifier |
 | noArguments | "`arguments` is not supported!" | identifier |
@@ -1459,7 +1458,7 @@ NodeFlags.Let/Const/Namespace.
 ### 12.4 First-wave diagnostic name list (complete)
 noBigInt, noNullLiteral, noPrivateIdentifier, noRegex, noTypeOfExpression, noForInStatement,
 noLabeledStatement, noDebuggerStatement, noAny, noVar, noGetterSetter, noEqualsEquals,
-noExclamationEquals, noSpreadDestructuring, noLuaTupleDestructureAssignmentExpression,
+noExclamationEquals, upstream rest-spread rejection, noLuaTupleDestructureAssignmentExpression,
 noGlobalThis, noArguments, noPrototype, noRobloxSymbolInstanceof,
 noNonNumberStringRelationOperator, noUnaryPlus, noNonNumberUnaryMinus, noMixedTypeCall,
 noIndexWithoutCall, noInvalidIdentifier, noReservedIdentifier, noOptionalMacroCall,

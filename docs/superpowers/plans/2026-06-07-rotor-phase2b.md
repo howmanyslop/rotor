@@ -8,7 +8,7 @@
 
 **Conventions (established, not repeated per task):** TDD; byte parity or loud diagnostics — never silent wrong output; upstream quirks ported verbatim with comments; `// Phase 3:` markers for deferred branches (async/generators/macros/non-array iteration), never panics reachable from CompileFile without the recover boundary; PATH refresh for `go` in every shell; full suite + vet + gofmt before every commit; commit per task.
 
-**Out of scope (Phase 3+):** async/generator bodies (`TS.async`/`TS.generator` — emit diagnostics), macros, non-array for-of builders (Map/Set/string/generator — diagnostics; the dispatch table lands now), spread/rest destructuring (`noSpreadDestructuring` is the UPSTREAM diagnostic — port its firing positions, that's parity not deferral), classes, try/catch, imports.
+**Out of scope (Phase 3+):** async/generator bodies (`TS.async`/`TS.generator` — emit diagnostics), macros, non-array for-of builders (Map/Set/string/generator — diagnostics; the dispatch table lands now), spread/rest destructuring (the upstream rest-spread rejection is parity work, not deferral), classes, try/catch, imports.
 
 ---
 
@@ -77,7 +77,7 @@ let a = 0, b = 0;
 ({ x: a } = obj);
 print(first, second, third, head, x, renamed, z, dx, missing, a, b);
 ```
-NOTE: `...nothing` rest element → upstream raises `noSpreadDestructuring` — REMOVE that line if rbxtsc rejects the file outright (it will — diagnostics abort compilation); keep fixtures compiling clean, and cover the diagnostic in a unit test instead.
+NOTE: `...nothing` rest element → upstream raises its rest-spread rejection — REMOVE that line if rbxtsc rejects the file outright (it will — diagnostics abort compilation); keep fixtures compiling clean, and cover the diagnostic in a unit test instead.
 
 `17_forof.ts` — for-of over arrays:
 ```typescript
@@ -175,9 +175,9 @@ Commit: `"transformer: functions, arrows, parameters"`
 
 ### Task 4: Destructuring
 
-**Digest:** §2 (binding vs assignment pattern systems; the 8-entry accessor table — implement ARRAY + OBJECT accessors live, others raise Phase-3 diagnostics from the same dispatch; objectAccessor incl. computed-vs-literal-numeric +1 quirk; getTypeOfAssignmentPattern CHECKER API — find the tsgo equivalent; optimized multi-local/multi-assign paths gated by arrayBindingPatternContainsHoists; noSpreadDestructuring firing positions).
+**Digest:** §2 (binding vs assignment pattern systems; the 8-entry accessor table — implement ARRAY + OBJECT accessors live, others raise Phase-3 diagnostics from the same dispatch; objectAccessor incl. computed-vs-literal-numeric +1 quirk; getTypeOfAssignmentPattern CHECKER API — find the tsgo equivalent; optimized multi-local/multi-assign paths gated by arrayBindingPatternContainsHoists; upstream rest-spread rejection firing positions).
 
-Files: `internal/transformer/binding.go` (+ split if large: `bindingarray.go`/`bindingobject.go`). Wire: variable-declaration binding patterns (statements.go), assignment patterns (binary.go destructure branch), parameter patterns (parameters.go from Task 3). Enable `16_destructuring`. Unit tests: nested patterns, defaults with prereqs, omitted elements, the swap pattern `[a, b] = [b, a]`, noSpreadDestructuring diagnostic.
+Files: `internal/transformer/binding.go` (+ split if large: `bindingarray.go`/`bindingobject.go`). Wire: variable-declaration binding patterns (statements.go), assignment patterns (binary.go destructure branch), parameter patterns (parameters.go from Task 3). Enable `16_destructuring`. Unit tests: nested patterns, defaults with prereqs, omitted elements, and the swap pattern `[a, b] = [b, a]`.
 Commit: `"transformer: array and object destructuring"`
 
 ### Task 5: for-of (arrays)

@@ -2,7 +2,7 @@
 
 rotor is an all-in-one Roblox toolchain, written in Go. At its core is a native-speed rewrite of the [roblox-ts](https://roblox-ts.com) compiler — built on TypeScript's own native compiler — alongside a native Luau bundler, minifier, dev loop, and packer (`bundle`, `minify`, `dev`, `pack`).
 
-rotor targets `rbxtsc` compatibility: **byte-identical Luau output**, the same `@rbxts/*` npm ecosystem, and the same CLI shape, at roughly **10x the speed** on the native TypeScript compiler.
+rotor targets `rbxtsc` compatibility: upstream-parity Luau output on unaffected surfaces, the same `@rbxts/*` npm ecosystem, and the same CLI shape, at roughly **10x the speed** on the native TypeScript compiler. For fork-changed surfaces, the verified `@isentinel/roblox-ts@4.0.11` archive in `roblox-ts.zip` is the authority.
 
 - [Why](#why)
 - [How rotor stays 1:1](#how-rotor-stays-11)
@@ -26,22 +26,22 @@ The unlock is [**typescript-go**](https://github.com/microsoft/typescript-go) �
 
 Compatibility isn't a hope — it's enforced by construction:
 
-- **Differential testing**: every emitted `.luau` file is byte-compared against `rbxtsc` 3.0.0's output — 43 committed fixture goldens run on every `go test`, and a real 95-file production game compiles 95/95 byte-identical.
-- **Behavioral conformance**: roblox-ts's vendored runtime suite, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune). The in-repo corpus and harnesses (`testdata/conformance`, `internal/conformance`) are fully enabled today: all 44 upstream golden fixtures are byte-for-byte green, the full vendored diagnostics corpus passes, the Lune suite currently reports `460 passed, 0 failed, 0 skipped`, and the real `randomness` acceptance compare is byte-for-byte green when pointed at a local checkout.
+- **Differential testing**: unaffected compiler surfaces remain byte-compared against `rbxtsc` 3.0.0 output. Fork-changed surfaces are compared against the verified `@isentinel/roblox-ts@4.0.11` archive, including solution builds, watch, source maps, copy-file gating, resolver caches, and the fork's optimized emit paths.
+- **Behavioral conformance**: roblox-ts's vendored runtime suite, compiled by rotor and executed under [Lune](https://github.com/lune-org/lune). The in-repo corpus and harnesses (`testdata/conformance`, `internal/conformance`) cover both the upstream reference and the verified fork fixtures; fork-divergent goldens are kept fork-authoritative rather than presented as upstream matches.
 - **Faithful porting**: the reference sources are vendored in-repo (`reference/`), and ports are reviewed line-by-line against them — down to quirks like ECMAScript `Number::toString` formatting and temp-identifier collision naming.
 - **Same runtime**: `RuntimeLib.lua` and `Promise.lua` match the targeted roblox-ts compiler runtime.
 
-Your existing project — `tsconfig.json`, `default.project.json`, `node_modules/@rbxts/*`, transformer plugins like Flamework — is the compatibility target, unchanged.
+Your existing project — `tsconfig.json`, `default.project.json`, `node_modules/@rbxts/*`, transformer plugins like Flamework — is the compatibility target, unchanged. The compatibility oracle depends on the surface: use the fork archive for the changed surfaces above and upstream parity elsewhere.
 
 ## What works today
 
-rotor **compiles multi-file TypeScript projects to byte-identical Luau** across the full language surface: imports with Rojo-aware require chains, JSX (`@rbxts/react`), classes and decorators, async/generators, try/catch, enums and namespaces, spread, functions, closures, destructuring, the full macro tables (`Array.map`, `string.format`, `Map.get`, ...), optional chaining, Map/Set/string/generator iteration, switch, `new` — verified continuously against real `rbxtsc` output (43/43 differential fixtures; **all 95 files of a real production game compile byte-identical**, zero divergent). It also **natively typechecks and watches real rbxts projects**.
+rotor **compiles multi-file TypeScript projects with upstream or fork-authoritative parity** across the language surface: imports with Rojo-aware require chains, JSX (`@rbxts/react`), classes and decorators, async/generators, try/catch, enums and namespaces, spread, functions, closures, destructuring, the full macro tables (`Array.map`, `string.format`, `Map.get`, ...), optional chaining, Map/Set/string/generator iteration, switch, and `new`. It also **natively typechecks and watches real rbxts projects**.
 
-Anything not yet ported fails loudly with a clear "not yet supported" diagnostic — rotor **never silently emits wrong output**. Everything that compiles is byte-identical to `rbxtsc` 3.0.0.
+Anything not yet ported fails loudly with a clear "not yet supported" diagnostic — rotor **never silently emits wrong output**. On unaffected surfaces, compiled output remains byte-identical to `rbxtsc` 3.0.0; fork-changed surfaces follow the verified fork behavior instead.
 
 ### rotor extensions (superset of rbxtsc)
 
-These compile under rotor but not under rbxtsc; everything rbxtsc accepts is still byte-identical:
+These compile under rotor but not under rbxtsc. Unaffected code accepted by rbxtsc remains byte-identical; fork-changed surfaces follow the verified fork archive:
 
 - **`$getModuleTree` on folders** — rbxtsc requires the specifier to resolve as a module, so pointing it at a folder only works if the folder has an `index.ts`. rotor resolves folder specifiers directly: relative ones (`"./systems"`) against the importing file, non-relative ones against `baseUrl`/`paths` (`"shared/systems"`) and then the project root (`"src/shared/systems"`). The usual server-import/isolation guards still apply.
 - **`$env` compile-time environment macro** — a built-in replacement for the `rbxts-transform-env` plugin (no Node sidecar, no plugin install, no typings package). `$env("GAME_NAME")` inlines the variable's value as a Luau string literal (or `nil` when unset), `$env("GAME_NAME", "fallback")` inlines the value or the fallback, and `$env.GAME_NAME` / `$env["GAME_NAME"]` behave like the 1-arg call. Values resolve at compile time with priority **process environment > `.env.<NODE_ENV>` > `.env`** (files live next to your `tsconfig.json`; `NODE_ENV` itself resolves from the process env, then `.env`). The `.env` format is `KEY=VALUE` lines with `#` comments and optional single/double quotes; v1 inlines strings only. The type surface (`declare const $env: ...`) is injected automatically — no `.d.ts` needed — and names/fallbacks must be string literals so the value can be baked in (dynamic names get a clear diagnostic). For editors (which never see the injected declaration), rotor writes a single on-disk **`rotor.d.ts`** companion covering every macro (see below). If you migrate from `rbxts-transform-env`, drop the plugin from your tsconfig; its modern module-export form (`import { $env } from "rbxts-transform-env"`) still works through the plugin sidecar and never collides with the built-in global.
@@ -79,6 +79,13 @@ rotor asset <sync|list> [path] [--dry-run]
                               upload assets via Open Cloud: lockfile + typed
                               assets.luau / assets.d.ts codegen (asphalt-style),
                               or the $asset macro companion in "macro" mode
+rotor schema [--rbxts]         print the rotor.toml schema, or the separate
+                              tsconfig.json "rbxts" schema with --rbxts
+rotor clean [path] [--types] [--dry-run]
+                              remove build outputs and generated editor types
+rotor add [--dev] <pkg>...     add dependencies to package.json
+rotor migrate [path] [--force]
+                              convert legacy rotor.config.ts to rotor.toml
 rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
                               declarative Open Cloud deployment with state +
                               plan/apply diffing (mantle-style); manages place
@@ -88,7 +95,7 @@ rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
                               social links
 ```
 
-`asset` and `deploy` are configured by a typed **`rotor.config.ts`** at the project root (evaluated natively — no Node needed; `rotor init` writes the skeleton plus `rotor-config.d.ts` for editor typing) and authenticate with an Open Cloud key in `ROBLOX_API_KEY`. See the [cloud toolchain spec](docs/superpowers/specs/2026-06-12-rotor-cloud-toolchain-design.md) for the full config shape.
+`asset` and `deploy` are configured by **`rotor.toml`** at the project root and authenticate with an Open Cloud key in `ROBLOX_API_KEY`. `rotor init` writes the hosted `rotor.schema.json` directive; use `rotor migrate` for a legacy `rotor.config.ts`. See the [cloud toolchain spec](docs/superpowers/specs/2026-06-12-rotor-cloud-toolchain-design.md) for the full config shape.
 
 **Asset delivery modes** (`[assets] mode`): a project picks one way assets reach Luau, both sharing the same scan/hash/upload pipeline and `rotor-lock.json` cache.
 
@@ -114,15 +121,49 @@ A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor need
 
 ## Build options
 
-`rotor build` accepts the full rbxtsc flag surface (booleans accept `--flag`, `--flag=false`, `--no-flag`): `-p/--project`, `-w/--watch`, `--usePolling`, `--verbose`, `--noInclude`, `--logTruthyChanges`, `--writeOnlyChanged`, `--optimizedLoops`, `--type game|model|package`, `-i/--includePath`, `--rojo`, `--allowCommentDirectives`, `--luau`, plus rotor's own `--cpuprofile`. Run `rotor --help` for details.
+`rotor build` accepts the rbxtsc-compatible flag surface (booleans accept `--flag`, `--flag=false`, `--no-flag`): `-p/--project`, `-b/--build [path]`, `--emitDeclarationOnly`, `-w/--watch`, `--usePolling`, `--verbose`, `--noInclude`, `--logTruthyChanges`, `--writeOnlyChanged`, `--writeTransformedFiles` (parsed and ignored), `--optimizedLoops`, `--type game|model|package`, `-i/--includePath`, `--rojo`, `--allowCommentDirectives`, and `--luau`. Rotor adds `--cpuprofile`, `--minify`, `--max-errors`, `--json`, `--bell`, and `--no-clear`. `--emitDeclarationOnly` requires `--build`; `--build --watch` cannot be combined with declaration-only emit. Run `rotor build --help` for the rendered descriptions.
 
 Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; merge order: defaults < rbxts < command line.
 
 **rotor DX extensions** (not in rbxtsc; safe to ignore for parity):
 
-- **`--minify`** — pass every emitted `.luau`/`.lua` source through the Luau minifier (comment/whitespace stripping + `t["x"]` → `t.x`) before writing. Semantics-preserving and opt-in, so a default build stays byte-identical to rbxtsc; declaration and `include/` files are never minified.
+- **`--minify`** — pass every emitted `.luau`/`.lua` source through the Luau minifier (comment/whitespace stripping + `t["x"]` → `t.x`) before writing. It is opt-in; declaration and `include/` files are never minified.
 - **Code-frame diagnostics** — TypeScript, transformer, and macro errors render as grouped code frames (source line + caret/underline, keyword highlighting, OSC 8 file links, an `✗ N errors in M files` footer). `--max-errors <n>` caps the rendered frames (default 50; `0` = all). In watch mode the screen clears before each rebuild (opt out with `--no-clear`), a `✗ N errors` banner persists on the idle line until the next green build, and `--bell` rings the terminal on a fail↔pass transition.
 - **`--json`** — emit one machine-readable result object (version, ok, files, durationMs, diagnostics with `file`/`line`/`col`/`severity`/`message`) instead of styled output. Also available on `rotor check`.
+
+### Tsconfig schema publication
+
+The `rotor.toml` schema and the tsconfig `rbxts` schema are separate documents. `rotor schema` prints the hosted `rotor.toml` schema; `rotor schema --rbxts` prints the eight-key tsconfig extension schema. Publish the latter where your project editors can read it:
+
+```sh
+rotor schema --rbxts > rbxts-tsconfig.schema.json
+```
+
+Use `"$schema": "./rbxts-tsconfig.schema.json"` in `tsconfig.json`. The `rbxts` values merge through the `extends` chain from parent to child, path values resolve relative to the file that declares them, and command-line values win over tsconfig values. CLI-only values such as `watch`, `verbose`, and `usePolling` are warned about and ignored when placed under `rbxts`.
+
+### Project references, source maps, plugins, and build state
+
+`rotor build --build` drains project references in dependency order. A coordinator tsconfig with only `references` is not compiled as a project of its own. `--emitDeclarationOnly` applies to the solution build and cannot be watched. `--build --watch` watches the solution's tsconfig extends chain and Rojo topology, invalidating dependent projects when a referenced project changes.
+
+With `compilerOptions.sourceMap: true`, Rotor writes an adjacent `.luau.map` for each Luau output. The map's `sourcesContent` is the original pre-transformer TypeScript, and source-map files are not counted as emitted Luau files. `ROTOR_PRESERVE_DTS_MAPS=1` keeps a declaration map while its corresponding `.d.ts` source still exists.
+
+Transformer plugins remain compatible with the fork's `compilerOptions.plugins` shape and run through Rotor's Node sidecar. `before` transformers run before `after` transformers; `afterDeclarations` runs only during declaration emit. A plugin's `shouldTransformSourceFile` hook can skip a file, and plugin loading failures are build diagnostics. Plugin-configured builds require Node.js and the project's own `typescript` package.
+
+Successful builds may leave these generated or cached files. They are build state, not source files:
+
+| File or directory | Purpose |
+| --- | --- |
+| `rbxts.copyfiles.json` | `outDir` copy-files gate manifest; lets an unchanged build skip cleanup and copy work |
+| `rbxts.rojocache.json` | Fork-compatible Rojo cache name protected from cleanup; Rotor's active hashed cache is under `.rotor/cache/rojo/` |
+| `.rotor/cache/rojo/` | Rotor's hashed Rojo resolver cache directory |
+| `.luau.map` | Adjacent Luau source map when `sourceMap` is enabled |
+| `*.rbxtsc.tsbuildinfo` | Rotor incremental build state; Rotor inserts `.rbxtsc` before `.tsbuildinfo` to avoid collisions |
+
+The write-worker controls are:
+
+- `RBXTSC_WRITE_CONCURRENCY` directly overrides output-write workers and takes precedence over Rotor's setting; values are capped at 256.
+- `ROTOR_WRITE_WORKERS` is Rotor's own output-write override.
+- `UV_THREADPOOL_SIZE` supplies the fallback pool size; Rotor derives the default write-worker count as pool size x 2, capped at 256. Set it before starting a process when matching the fork's Node tuning is important.
 
 ## Production readiness
 
