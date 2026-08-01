@@ -20,7 +20,7 @@ roblox-ts is a brilliant compiler with one structural problem: it runs on the Ja
 
 You can't fix that with a syntax transpiler (SWC/esbuild-style), because roblox-ts's emit is **type-directed**: `for...of` compiles differently for an `Array` vs a `Map` vs a string, `+` becomes `+` or `..` by operand type, truthiness guards depend on whether a type can be `0` or `""`, and the entire macro system resolves through the type checker. No types, no correct Luau.
 
-The unlock is [**typescript-go**](https://github.com/microsoft/typescript-go) — Microsoft's official native port of the full TypeScript compiler (shipping as TypeScript 7), ~10x faster with parallel checking. It's the only native implementation of the *real* checker in existence. rotor ports roblox-ts's emit layer to Go on top of it.
+The unlock is [**typescript-go**](https://github.com/microsoft/typescript-go) — Microsoft's official native port of the full TypeScript compiler (shipping as TypeScript 7), ~10x faster with parallel checking and configurable concurrency controls. It's the only native implementation of the *real* checker in existence. rotor ports roblox-ts's emit layer to Go on top of it.
 
 ## How rotor stays 1:1
 
@@ -121,7 +121,7 @@ A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor need
 
 ## Build options
 
-`rotor build` accepts the rbxtsc-compatible flag surface (booleans accept `--flag`, `--flag=false`, `--no-flag`): `-p/--project`, `-b/--build [path]`, `--emitDeclarationOnly`, `-w/--watch`, `--usePolling`, `--verbose`, `--noInclude`, `--logTruthyChanges`, `--writeOnlyChanged`, `--writeTransformedFiles` (parsed and ignored), `--optimizedLoops`, `--type game|model|package`, `-i/--includePath`, `--rojo`, `--allowCommentDirectives`, and `--luau`. Rotor adds `--cpuprofile`, `--minify`, `--max-errors`, `--json`, `--bell`, and `--no-clear`. `--emitDeclarationOnly` requires `--build`; `--build --watch` cannot be combined with declaration-only emit. Run `rotor build --help` for the rendered descriptions.
+`rotor build` accepts the rbxtsc-compatible flag surface (booleans accept `--flag`, `--flag=false`, `--no-flag`): `-p/--project`, `-b/--build [path]`, `--builders <n>`, `--checkers <n>`, `--emitDeclarationOnly`, `-w/--watch`, `--usePolling`, `--verbose`, `--noInclude`, `--logTruthyChanges`, `--writeOnlyChanged`, `--writeTransformedFiles` (parsed and ignored), `--optimizedLoops`, `--type game|model|package`, `-i/--includePath`, `--rojo`, `--allowCommentDirectives`, and `--luau`. Rotor adds `--cpuprofile`, `--minify`, `--max-errors`, `--json`, `--bell`, and `--no-clear`. `--emitDeclarationOnly` requires `--build`; `--build --watch` cannot be combined with declaration-only emit. Run `rotor build --help` for the rendered descriptions.
 
 Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; merge order: defaults < rbxts < command line.
 
@@ -158,6 +158,22 @@ Successful builds may leave these generated or cached files. They are build stat
 | `.rotor/cache/rojo/` | Rotor's hashed Rojo resolver cache directory |
 | `.luau.map` | Adjacent Luau source map when `sourceMap` is enabled |
 | `*.rbxtsc.tsbuildinfo` | Rotor incremental build state; Rotor inserts `.rbxtsc` before `.tsbuildinfo` to avoid collisions |
+
+### Concurrency controls
+
+`--checkers <n>` sets the number of type-checker workers per project. The default is 4, matching TypeScript 7. It applies to `rotor build`, `rotor check`, and both watch modes. A CLI value overrides each project's `compilerOptions.checkers`; omitting the flag leaves the project's own config in place. If a project sets `compilerOptions.singleThreaded: true`, it still forces one effective checker regardless of the CLI.
+
+`--builders <n>` sets the number of project-reference builders that run concurrently during solution builds (`--build`). The default is 4; `--builders 1` makes the solution build serial. It is only valid with `--build` — passing it without `--build` is a usage error (exit 1). `rotor check` does not accept `--builders`.
+
+Both flags accept positive integers only. Missing, zero, negative, or non-integer values are usage errors.
+
+The two flags multiply: `--builders 4 --checkers 4` can run up to 16 checker workers at once, plus parsing, emit, and write work. CPU and memory use grow with the product. Find the right balance for the machine — CI runners with limited cores or memory may want smaller values.
+
+**Result guarantees.** Varying `--builders` never changes build results: dependencies always build first, and output, diagnostics, and caching stay deterministic. TypeScript 7 notes that in rare cases varying `--checkers` can surface order-dependent results. Teams that need perfectly stable diagnostics across environments may want to pin `--checkers` to a fixed value.
+
+**Real-world limits.** Even with high concurrency, some work stays serialized. Transformer-plugin sidecars run through Node and may bottleneck a project. Projects whose output or include directories overlap are serialized for safety. And the dependency graph itself bounds how many projects can build in parallel — leaf projects run first, and dependents wait.
+
+These flags control checker and builder parallelism. They are separate from the write-worker environment variables below, which only tune disk-write parallelism.
 
 The write-worker controls are:
 

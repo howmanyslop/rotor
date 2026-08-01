@@ -28,6 +28,8 @@ rotor build ./my-game -w     # parity Luau, watch mode, incremental rebuilds
 rotor doctor                 # diagnose tsconfig, @rbxts packages, plugins, Rojo, cloud setup
 ```
 
+Both `build` and `check` accept `--checkers <n>` to tune type-checker workers per project (default 4). Solution builds (`--build`) also accept `--builders <n>` for project concurrency (default 4). `rotor build --build --builders 2 --checkers 4` is a typical tuned command.
+
 Same `tsconfig.json`, same `@rbxts/*` packages, same transformer plugins (Flamework etc.), same CLI flags — plus built-in compile-time macros rbxtsc doesn't have (no plugins, no Node sidecar, fully typed):
 
 | Macro | Inlines |
@@ -167,7 +169,7 @@ Measured on real production rbxts games, with output byte-identical to `rbxtsc` 
 | Full build — 95-file production game | **355 ms** |
 | Incremental watch rebuild — same game | **180 ms** |
 
-The JS toolchain spends longer than this booting Node. The ~10× speedup is structural: rotor runs Microsoft's native, parallel TypeScript compiler ([typescript-go](https://github.com/microsoft/typescript-go)) instead of the single-threaded JS one.
+The JS toolchain spends longer than this booting Node. The ~10× speedup is structural: rotor runs Microsoft's native, parallel TypeScript compiler ([typescript-go](https://github.com/microsoft/typescript-go)) instead of the single-threaded JS one. You can tune the parallelism with `--checkers` and `--builders` (see [docs.md](docs.md#build-options)).
 
 ## Contributors
 
