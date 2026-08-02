@@ -10,6 +10,7 @@ import (
 
 	"rotor/internal/rojo"
 	"rotor/tsgo/ast"
+	"rotor/tsgo/compiler"
 	"rotor/tsgo/core"
 )
 
@@ -342,13 +343,25 @@ func loadCopyFilesGatePreBuild(inputs copyFilesGateInputs) copyFilesGateOutputs 
 	}
 }
 
-func copyFilesChangedSnapshot(selectedFiles []*ast.SourceFile, incremental bool) BuildStateSnapshot {
-	if !incremental {
-		return BuildStateSnapshot{}
+// copyFilesChangedSnapshot mirrors the fork's snapshotBuildState: it reports
+// what the build considers changed, which is what gates cleanup.
+//
+// A non-incremental build reports the whole program, never an empty set. The
+// fork always compiles through a BuilderProgram, and one built without
+// rehydrated incremental state seeds changedFilesSet with every file, so
+// cleanup only ever gets skipped when incremental state proves nothing changed.
+// Reporting an empty set here instead left cleanup gated purely on directory
+// mtimes, which cannot see a source deletion that lands within the same
+// millisecond as the previous build's pre-build walk (routine on fast
+// filesystems), leaving that source's outputs orphaned in outDir forever.
+func copyFilesChangedSnapshot(program *compiler.Program, selectedFiles []*ast.SourceFile) BuildStateSnapshot {
+	changedFiles := selectedFiles
+	if !program.Options().Incremental.IsTrue() {
+		changedFiles = program.SourceFiles()
 	}
-	selected := make(map[string]struct{}, len(selectedFiles))
-	for _, file := range selectedFiles {
-		selected[normalizeSourceFilePath(file.FileName())] = struct{}{}
+	changed := make(map[string]struct{}, len(changedFiles))
+	for _, file := range changedFiles {
+		changed[normalizeSourceFilePath(file.FileName())] = struct{}{}
 	}
-	return BuildStateSnapshot{ChangedFilePaths: selected}
+	return BuildStateSnapshot{ChangedFilePaths: changed}
 }

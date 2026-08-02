@@ -162,7 +162,18 @@ func TestSourceMapEmission(t *testing.T) {
 			}
 		}
 
-		if err := os.Remove(filepath.Join(dir, "src", "main.ts")); err != nil {
+		srcDir := filepath.Join(dir, "src")
+		srcDirInfo, err := os.Stat(srcDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(srcDir, "main.ts")); err != nil {
+			t.Fatal(err)
+		}
+		// Restore the pre-deletion directory mtime: on a fast machine both
+		// builds land inside one millisecond anyway, so the copy-files gate
+		// must not depend on the deletion being visible in mtimes.
+		if err := os.Chtimes(srcDir, srcDirInfo.ModTime(), srcDirInfo.ModTime()); err != nil {
 			t.Fatal(err)
 		}
 		if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {

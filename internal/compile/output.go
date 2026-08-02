@@ -117,7 +117,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		OutDir:         pathTranslator.OutDir,
 		Declaration:    program.Options().Declaration.IsTrue(),
 		PathTranslator: pathTranslator,
-		Snapshot:       copyFilesChangedSnapshot(selectedFiles, program.Options().Incremental.IsTrue()),
+		Snapshot:       copyFilesChangedSnapshot(program, selectedFiles),
 	})
 	if !copyFilesGate.SkipCleanup {
 		cleanupOutputs(pathTranslator, program.Options().SourceMap.IsTrue())
