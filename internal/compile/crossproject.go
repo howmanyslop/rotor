@@ -76,11 +76,6 @@ func populateCrossProjectMetadata(graph *SolutionGraph) (map[string]string, solu
 	return result, metadata
 }
 
-func populateCrossProjectImportPathMap(graph *SolutionGraph) map[string]string {
-	result, _ := populateCrossProjectMetadata(graph)
-	return result
-}
-
 func appendCanonicalWriteRoot(roots []string, path string) []string {
 	canonical := canonicalWriteRoot(path)
 	for _, root := range roots {

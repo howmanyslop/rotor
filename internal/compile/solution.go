@@ -34,7 +34,6 @@ type SolutionCoordinator struct {
 	graph                *SolutionGraph
 	drainer              SolutionProjectDrainer
 	states               map[string]SolutionProjectState
-	writeRoots           map[string][]string
 	waitOnlyDependencies map[string][]string
 	builders             int
 }
@@ -151,7 +150,6 @@ func newSolutionCoordinator(graph *SolutionGraph, drainer SolutionProjectDrainer
 		graph:                graph,
 		drainer:              drainer,
 		states:               states,
-		writeRoots:           metadata.writeRoots,
 		waitOnlyDependencies: metadata.waitOnlyDependencies,
 		builders:             builders,
 	}, nil
@@ -331,7 +329,6 @@ func (c *SolutionCoordinator) Reload(tsConfigPath string, entry ProjectOptions) 
 	c.graph = graph
 	c.states = states
 	importPathMap, metadata := populateCrossProjectMetadata(graph)
-	c.writeRoots = metadata.writeRoots
 	c.waitOnlyDependencies = metadata.waitOnlyDependencies
 	c.builders = effectiveSolutionBuilders(entry)
 	if _, ok := c.drainer.(*solutionBuildDrainer); ok {

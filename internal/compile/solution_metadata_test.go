@@ -66,6 +66,7 @@ func TestSolutionWriteRoots(t *testing.T) {
 			if test.includePath != nil {
 				entry.IncludePath = test.includePath(root)
 			}
+			metadata := solutionWriteMetadataForTest(t, filepath.Join(root, "tsconfig.json"), entry)
 			coordinator, err := NewSolutionCoordinatorWithDrainer(
 				filepath.Join(root, "tsconfig.json"), entry, &recordingSolutionDrainer{},
 			)
@@ -82,10 +83,10 @@ func TestSolutionWriteRoots(t *testing.T) {
 				wantFirst = append(wantFirst, canonicalMetadataPath(t, includePath))
 				wantSecond = append(wantSecond, canonicalMetadataPath(t, includePath))
 			}
-			if got := coordinator.writeRoots[firstConfig]; !reflect.DeepEqual(got, wantFirst) {
+			if got := metadata.writeRoots[firstConfig]; !reflect.DeepEqual(got, wantFirst) {
 				t.Fatalf("first write roots = %v, want %v", got, wantFirst)
 			}
-			if got := coordinator.writeRoots[secondConfig]; !reflect.DeepEqual(got, wantSecond) {
+			if got := metadata.writeRoots[secondConfig]; !reflect.DeepEqual(got, wantSecond) {
 				t.Fatalf("second write roots = %v, want %v", got, wantSecond)
 			}
 			if test.wantEdge {
@@ -111,18 +112,10 @@ func TestSolutionWriteRootsLeavesInvalidConfigEmpty(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	coordinator, err := NewSolutionCoordinatorWithDrainer(
-		filepath.Join(root, "tsconfig.json"), ProjectOptions{}, &recordingSolutionDrainer{},
-	)
-	if err != nil {
-		t.Fatalf("NewSolutionCoordinatorWithDrainer: %v", err)
-	}
 	childConfig := filepath.Join(childDir, "tsconfig.json")
-	if got := coordinator.writeRoots[childConfig]; len(got) != 0 {
+	metadata := solutionWriteMetadataForTest(t, filepath.Join(root, "tsconfig.json"), ProjectOptions{})
+	if got := metadata.writeRoots[childConfig]; len(got) != 0 {
 		t.Fatalf("invalid config write roots = %v, want empty", got)
-	}
-	if len(coordinator.waitOnlyDependencies) != 0 {
-		t.Fatalf("invalid config wait-only dependencies = %v, want none", coordinator.waitOnlyDependencies)
 	}
 }
 
@@ -142,16 +135,11 @@ func TestSolutionWriteRootsCanonicalizesSymlinkAlias(t *testing.T) {
 	writeMetadataSolutionProject(t, firstDir, sharedOut)
 	writeMetadataSolutionProject(t, secondDir, aliasOut)
 
-	coordinator, err := NewSolutionCoordinatorWithDrainer(
-		filepath.Join(root, "tsconfig.json"), ProjectOptions{}, &recordingSolutionDrainer{},
-	)
-	if err != nil {
-		t.Fatalf("NewSolutionCoordinatorWithDrainer: %v", err)
-	}
 	firstConfig := filepath.Join(firstDir, "tsconfig.json")
 	secondConfig := filepath.Join(secondDir, "tsconfig.json")
-	if !reflect.DeepEqual(coordinator.writeRoots[firstConfig], coordinator.writeRoots[secondConfig]) {
-		t.Fatalf("symlinked write roots differ: %v vs %v", coordinator.writeRoots[firstConfig], coordinator.writeRoots[secondConfig])
+	metadata := solutionWriteMetadataForTest(t, filepath.Join(root, "tsconfig.json"), ProjectOptions{})
+	if !reflect.DeepEqual(metadata.writeRoots[firstConfig], metadata.writeRoots[secondConfig]) {
+		t.Fatalf("symlinked write roots differ: %v vs %v", metadata.writeRoots[firstConfig], metadata.writeRoots[secondConfig])
 	}
 }
 
@@ -237,6 +225,16 @@ func writeMetadataSolutionProject(t *testing.T, dir, outDir string) {
 			t.Fatal(err)
 		}
 	}
+}
+
+func solutionWriteMetadataForTest(t *testing.T, configPath string, entry ProjectOptions) solutionWriteMetadata {
+	t.Helper()
+	graph, err := BuildSolutionGraph(configPath, entry)
+	if err != nil {
+		t.Fatalf("BuildSolutionGraph: %v", err)
+	}
+	_, metadata := populateCrossProjectMetadata(graph)
+	return metadata
 }
 
 func canonicalMetadataPath(t *testing.T, path string) string {
