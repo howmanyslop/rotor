@@ -11,3 +11,47 @@ lockfile = true
 "github:lune-org/lune" = "0.10.1"
 go = "1.26.5"
 goreleaser = "latest"
+
+[tasks."build:one-shot"]
+description = "Build a temporary rotor binary and run a one-shot (non-watch) rotor build --json against a caller-supplied external project with --checkers 1 and --checkers 4. Usage: mise run build:one-shot -- <project-dir> <tsconfig-path> (tsconfig path relative to the project dir)."
+usage = '''
+arg "<project-dir>" help="External project directory"
+arg "<tsconfig-path>" help="Path to tsconfig relative to the project directory"
+'''
+run = '''
+set -euo pipefail
+project=$usage_project_dir
+tsconfig=$usage_tsconfig_path
+[ -d "$project" ] || { echo "error: project directory not found: $project" >&2; exit 1; }
+[ -f "$project/$tsconfig" ] || { echo "error: tsconfig not found: $project/$tsconfig" >&2; exit 1; }
+bin=$(mktemp)
+trap 'rm -f "$bin"' EXIT INT TERM
+go build -o "$bin" ./cmd/rotor
+(
+  cd "$project"
+  "$bin" build --project "$tsconfig" --json --checkers 1
+  "$bin" build --project "$tsconfig" --json --checkers 4
+)
+'''
+
+[tasks."build:solution"]
+description = "Build a temporary rotor binary and run a solution (project references) rotor build --build --json against a caller-supplied external project with --builders 1 and --builders 3 at a fixed --checkers 1. Usage: mise run build:solution -- <project-dir> <tsconfig-path> (tsconfig path relative to the project dir)."
+usage = '''
+arg "<project-dir>" help="External project directory"
+arg "<tsconfig-path>" help="Path to tsconfig relative to the project directory"
+'''
+run = '''
+set -euo pipefail
+project=$usage_project_dir
+tsconfig=$usage_tsconfig_path
+[ -d "$project" ] || { echo "error: project directory not found: $project" >&2; exit 1; }
+[ -f "$project/$tsconfig" ] || { echo "error: tsconfig not found: $project/$tsconfig" >&2; exit 1; }
+bin=$(mktemp)
+trap 'rm -f "$bin"' EXIT INT TERM
+go build -o "$bin" ./cmd/rotor
+(
+  cd "$project"
+  "$bin" build --build "$tsconfig" --builders 1 --checkers 1 --json
+  "$bin" build --build "$tsconfig" --builders 3 --checkers 1 --json
+)
+'''
