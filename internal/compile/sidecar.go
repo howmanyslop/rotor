@@ -3,6 +3,7 @@ package compile
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,10 @@ import (
 	"rotor/tsgo/vfs/wrapvfs"
 )
 
+const defaultSidecarResponseTimeout = 30 * time.Second
+
+const sidecarResponseTimeoutEnv = "ROTOR_SIDECAR_TIMEOUT"
+
 type sidecarRequest struct {
 	Protocol         int                  `json:"protocol"`
 	TsConfigPath     string               `json:"tsConfigPath"`
@@ -39,8 +44,9 @@ type sidecarChangedFile struct {
 }
 
 type sidecarResponse struct {
-	Diagnostics []sidecarDiagnostic `json:"diagnostics"`
-	Transformed []sidecarOutputFile `json:"transformed"`
+	Diagnostics  []sidecarDiagnostic `json:"diagnostics"`
+	Transformed  []sidecarOutputFile `json:"transformed"`
+	Declarations []sidecarOutputFile `json:"declarations"`
 }
 
 type sidecarDiagnostic struct {
@@ -55,32 +61,67 @@ type sidecarDiagnostic struct {
 type sidecarOutputFile struct {
 	FileName string `json:"fileName"`
 	Text     string `json:"text"`
+	TraceMap string `json:"traceMap"`
+}
+
+type preparedTransformerProgram struct {
+	program      *compiler.Program
+	sourceFiles  []*ast.SourceFile
+	declarations []sidecarOutputFile
+	sourceTraces map[string]*sourceTraceMap
 }
 
 func prepareProjectProgramForCompile(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*compiler.Program, []*ast.SourceFile, []string, error) {
-	if len(sourceFiles) == 0 {
-		return program, sourceFiles, nil, nil
-	}
-	if !projectUsesTransformerPlugins(program.CommandLine()) {
-		return program, sourceFiles, nil, nil
-	}
-
-	transformedProgram, diags, err := applyTransformerSidecar(dir, program, sourceFiles)
+	prepared, diags, err := prepareTransformerProgram(dir, program, sourceFiles)
 	if err != nil {
 		return nil, nil, diags, err
 	}
-	if transformedProgram == program {
-		return program, sourceFiles, nil, nil
-	}
-
-	remapped, err := remapProgramSourceFiles(transformedProgram, sourceFiles)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return transformedProgram, remapped, nil, nil
+	return prepared.program, prepared.sourceFiles, nil, nil
 }
 
-func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*compiler.Program, []string, error) {
+func prepareProjectProgramForBuild(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*preparedTransformerProgram, []string, error) {
+	return prepareTransformerProgram(dir, program, sourceFiles)
+}
+
+func prepareTransformerProgram(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*preparedTransformerProgram, []string, error) {
+	if len(sourceFiles) == 0 {
+		return &preparedTransformerProgram{program: program, sourceFiles: sourceFiles}, nil, nil
+	}
+	if !projectUsesTransformerPlugins(program.CommandLine()) && !declarationUsesPathAliases(program) {
+		return &preparedTransformerProgram{program: program, sourceFiles: sourceFiles}, nil, nil
+	}
+
+	transformed, diags, err := applyTransformerSidecar(dir, program, sourceFiles)
+	if err != nil {
+		return nil, diags, err
+	}
+	if transformed.program == program {
+		return &preparedTransformerProgram{
+			program:      program,
+			sourceFiles:  sourceFiles,
+			declarations: transformed.declarations,
+			sourceTraces: transformed.sourceTraces,
+		}, nil, nil
+	}
+
+	remapped, err := remapProgramSourceFiles(transformed.program, sourceFiles)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &preparedTransformerProgram{
+		program:      transformed.program,
+		sourceFiles:  remapped,
+		declarations: transformed.declarations,
+		sourceTraces: transformed.sourceTraces,
+	}, nil, nil
+}
+
+func declarationUsesPathAliases(program *compiler.Program) bool {
+	options := program.Options()
+	return options.GetEmitDeclarations() && (options.BaseUrl != "" || options.Paths != nil && options.Paths.Size() > 0)
+}
+
+func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*preparedTransformerProgram, []string, error) {
 	configPath := program.Options().ConfigFilePath
 	if configPath == "" {
 		configPath = filepath.ToSlash(filepath.Join(filepath.FromSlash(dir), "tsconfig.json"))
@@ -103,8 +144,27 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	if len(errorDiags) > 0 {
 		return nil, errorDiags, errors.New("compile: transformer sidecar diagnostics")
 	}
+	sourceTraces := make(map[string]*sourceTraceMap)
+	for _, file := range response.Transformed {
+		if file.TraceMap == "" {
+			continue
+		}
+		original := program.GetSourceFile(file.FileName)
+		if original == nil {
+			return nil, nil, fmt.Errorf("compile: transformer trace source missing from program: %s", file.FileName)
+		}
+		trace, err := newSourceTraceMap(file.TraceMap, original.FileName(), original.Text())
+		if err != nil {
+			return nil, nil, err
+		}
+		sourceTraces[normalizeSourceFilePath(file.FileName)] = trace
+	}
 	if len(response.Transformed) == 0 {
-		return program, nil, nil
+		return &preparedTransformerProgram{
+			program:      program,
+			declarations: response.Declarations,
+			sourceTraces: sourceTraces,
+		}, nil, nil
 	}
 
 	overlays := make(map[string]string, len(response.Transformed))
@@ -112,7 +172,15 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	for _, file := range response.Transformed {
 		overlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
 	}
-	return newProjectProgramWithOverlay(dir, configPath, overlays)
+	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, overlays, program.Options().Checkers)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &preparedTransformerProgram{
+		program:      transformedProgram,
+		declarations: response.Declarations,
+		sourceTraces: sourceTraces,
+	}, nil, nil
 }
 
 type sidecarFileStamp struct {
@@ -227,17 +295,35 @@ func spawnSidecarSession(dir, sidecarDir string) (*sidecarSession, error) {
 	}, nil
 }
 
-func (s *sidecarSession) roundTrip(request sidecarRequest) (*sidecarResponse, error) {
-	payload, err := json.Marshal(request)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.stdin.Write(append(payload, '\n')); err != nil {
-		return nil, s.fail(err)
-	}
-	line, err := s.stdout.ReadBytes('\n')
-	if err != nil {
-		return nil, s.fail(err)
+type sidecarRoundTripResult struct {
+	line []byte
+	err  error
+}
+
+func (s *sidecarSession) roundTrip(ctx context.Context, request sidecarRequest) (*sidecarResponse, error) {
+	result := make(chan sidecarRoundTripResult, 1)
+	go func() {
+		payload, err := json.Marshal(request)
+		if err == nil {
+			_, err = s.stdin.Write(append(payload, '\n'))
+		}
+		if err != nil {
+			result <- sidecarRoundTripResult{err: err}
+			return
+		}
+		line, err := s.stdout.ReadBytes('\n')
+		result <- sidecarRoundTripResult{line: line, err: err}
+	}()
+
+	var line []byte
+	select {
+	case response := <-result:
+		if response.err != nil {
+			return nil, s.fail(response.err)
+		}
+		line = response.line
+	case <-ctx.Done():
+		return nil, s.fail(fmt.Errorf("transformer sidecar response timed out: %w", ctx.Err()))
 	}
 	var response sidecarResponse
 	if err := json.Unmarshal(bytes.TrimSpace(line), &response); err != nil {
@@ -249,9 +335,21 @@ func (s *sidecarSession) roundTrip(request sidecarRequest) (*sidecarResponse, er
 func (s *sidecarSession) fail(err error) error {
 	s.dead = true
 	if tail := s.stderr.String(); tail != "" {
-		return fmt.Errorf("transformer sidecar failed: %s", strings.TrimSpace(tail))
+		return fmt.Errorf("transformer sidecar failed: %w: %s", err, strings.TrimSpace(tail))
 	}
 	return err
+}
+
+func sidecarResponseTimeout() (time.Duration, error) {
+	configured := os.Getenv(sidecarResponseTimeoutEnv)
+	if configured == "" {
+		return defaultSidecarResponseTimeout, nil
+	}
+	timeout, err := time.ParseDuration(configured)
+	if err != nil || timeout <= 0 {
+		return 0, fmt.Errorf("invalid %s value %q", sidecarResponseTimeoutEnv, configured)
+	}
+	return timeout, nil
 }
 
 func (s *sidecarSession) close() {
@@ -299,6 +397,10 @@ func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*a
 	if err != nil {
 		return nil, err
 	}
+	timeout, err := sidecarResponseTimeout()
+	if err != nil {
+		return nil, err
+	}
 
 	key := normalizeSourceFilePath(dir) + "|" + normalizeSourceFilePath(configPath)
 	sidecarMu.Lock()
@@ -337,11 +439,16 @@ func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*a
 			request.CompileFileNames = append(request.CompileFileNames, filepath.FromSlash(sourceFile.FileName()))
 		}
 
-		response, err := session.roundTrip(request)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		response, err := session.roundTrip(ctx, request)
+		cancel()
 		session.stderr.drainTo()
 		if err != nil {
 			delete(sidecarSessions, key)
 			session.close()
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
 			if attempt == 0 {
 				continue
 			}
@@ -405,7 +512,7 @@ func sidecarEnv(projectDir, sidecarDir string) []string {
 	return append(env, "NODE_PATH="+nodePathValue)
 }
 
-func newProjectProgramWithOverlay(projectDir, tsConfigPath string, overlays map[string]string) (*compiler.Program, []string, error) {
+func newProjectProgramWithOverlay(projectDir, tsConfigPath string, overlays map[string]string, checkers *int) (*compiler.Program, []string, error) {
 	dir := filepath.ToSlash(projectDir)
 	if abs, err := filepath.Abs(projectDir); err == nil {
 		dir = filepath.ToSlash(abs)
@@ -431,10 +538,14 @@ func newProjectProgramWithOverlay(projectDir, tsConfigPath string, overlays map[
 			return baseFS.ReadFile(path)
 		},
 	})
-	return newProjectProgramFromFS(dir, configPath, fs)
+	return newProjectProgramFromFSWithOptions(dir, configPath, fs, checkers)
 }
 
 func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Program, []string, error) {
+	return newProjectProgramFromFSWithOptions(dir, configPath, fs, nil)
+}
+
+func newProjectProgramFromFSWithOptions(dir, configPath string, fs vfs.FS, checkers *int) (*compiler.Program, []string, error) {
 	// rotor extension: serve the synthetic $env ambient declaration from an
 	// in-memory file next to the tsconfig (see envdecl.go for the parity
 	// rationale) ...
@@ -455,6 +566,7 @@ func newProjectProgramFromFS(dir, configPath string, fs vfs.FS) (*compiler.Progr
 	if len(configDiags) > 0 {
 		return nil, diagnosticStrings(configDiags), errors.New("compile: tsconfig.json has errors")
 	}
+	ApplyCheckerOverride(parsed.CompilerOptions(), checkers)
 
 	raw := readRawEnforcedOptions(filepath.FromSlash(configPath))
 	if msg := validateCompilerOptions(parsed.CompilerOptions(), dir, raw); msg != "" {

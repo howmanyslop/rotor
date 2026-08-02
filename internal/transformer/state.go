@@ -1,6 +1,7 @@
 package transformer
 
 import (
+	"reflect"
 	"strings"
 
 	"rotor/internal/dotenv"
@@ -9,6 +10,7 @@ import (
 	"rotor/tsgo/ast"
 	"rotor/tsgo/checker"
 	"rotor/tsgo/compiler"
+	"rotor/tsgo/scanner"
 	"rotor/tsgo/tspath"
 )
 
@@ -126,6 +128,9 @@ type State struct {
 	// raw-text literal slicing.
 	SourceFileText string
 
+	sourcePositionMap    map[int]*SourcePosition
+	sourceEndPositionMap map[int]*SourcePosition
+
 	// UsesRuntimeLib is set ONLY by RuntimeLib (upstream TS() is the only
 	// assignment in the entire repo); gates runtime-lib import emission.
 	UsesRuntimeLib bool
@@ -224,23 +229,28 @@ type State struct {
 	// module's exports table (source file symbol -> `exports`; namespaces ->
 	// their container id).
 	moduleIDBySymbol map[*ast.Symbol]luau.AnyIdentifier
+
+	declarationToOptimizableVarArgs map[*ast.Node]*VarArgsData
 }
 
 // NewState constructs the per-file transform state. program/chk/sourceFile may
 // be nil for checker-free prereq-mechanics tests (see NewTestState).
 func NewState(program *compiler.Program, chk *checker.Checker, sourceFile *ast.SourceFile, diags *DiagService, multi *MultiState) *State {
 	s := &State{
-		Program:           program,
-		Checker:           chk,
-		SourceFile:        sourceFile,
-		Diags:             diags,
-		Multi:             multi,
-		OptimizedLoops:    true, // DEFAULT_PROJECT_OPTIONS.optimizedLoops
-		getTypeCache:      make(map[*ast.Node]*checker.Type),
-		HoistsByStatement: make(map[*ast.Node][]*ast.Node),
-		IsHoisted:         make(map[*ast.Symbol]bool),
-		SymbolToID:        make(map[*ast.Symbol]*luau.TemporaryIdentifier),
-		moduleIDBySymbol:  make(map[*ast.Symbol]luau.AnyIdentifier),
+		Program:                         program,
+		Checker:                         chk,
+		SourceFile:                      sourceFile,
+		Diags:                           diags,
+		Multi:                           multi,
+		OptimizedLoops:                  true, // DEFAULT_PROJECT_OPTIONS.optimizedLoops
+		getTypeCache:                    make(map[*ast.Node]*checker.Type),
+		HoistsByStatement:               make(map[*ast.Node][]*ast.Node),
+		IsHoisted:                       make(map[*ast.Symbol]bool),
+		SymbolToID:                      make(map[*ast.Symbol]*luau.TemporaryIdentifier),
+		moduleIDBySymbol:                make(map[*ast.Symbol]luau.AnyIdentifier),
+		declarationToOptimizableVarArgs: make(map[*ast.Node]*VarArgsData),
+		sourcePositionMap:               make(map[int]*SourcePosition),
+		sourceEndPositionMap:            make(map[int]*SourcePosition),
 
 		ClassIdentifierMap:         make(map[*ast.Node]luau.AnyIdentifier),
 		classElementToObjectKeyMap: make(map[*ast.Node]luau.Expression),
@@ -254,6 +264,61 @@ func NewState(program *compiler.Program, chk *checker.Checker, sourceFile *ast.S
 		multi.macroManager = NewMacroManager(chk)
 	}
 	return s
+}
+
+// SourcePosition is a 0-indexed Source Map v3 source coordinate. Columns use
+// UTF-16 code units, matching TypeScript and the Source Map v3 specification.
+type SourcePosition struct {
+	Line   int
+	Column int
+}
+
+func sourcePositionKey(node luau.Node) int {
+	return int(reflect.ValueOf(node).Pointer())
+}
+
+func (s *State) getOriginalSourcePosition(node *ast.Node, useEnd bool) *SourcePosition {
+	if node == nil {
+		return nil
+	}
+	sourceFile := ast.GetSourceFileOfNode(node)
+	if sourceFile == nil {
+		sourceFile = s.SourceFile
+	}
+	if sourceFile == nil {
+		return nil
+	}
+
+	position := scanner.GetTokenPosOfNode(node, sourceFile, false)
+	if useEnd {
+		position = node.End() - 1
+		if position < node.Pos() {
+			position = node.Pos()
+		}
+	}
+	line, column := scanner.GetECMALineAndUTF16CharacterOfPosition(sourceFile, position)
+	return &SourcePosition{Line: line, Column: int(column)}
+}
+
+func (s *State) setSourcePosition(node luau.Node, position *SourcePosition) {
+	if position != nil {
+		s.sourcePositionMap[sourcePositionKey(node)] = position
+	}
+}
+
+func (s *State) setSourceEndPosition(node luau.Node, position *SourcePosition) {
+	if position != nil {
+		s.sourceEndPositionMap[sourcePositionKey(node)] = position
+	}
+}
+
+func (s *State) setStatementListSourcePositions(statements *luau.List[luau.Statement], sourceNode *ast.Node) {
+	start := s.getOriginalSourcePosition(sourceNode, false)
+	end := s.getOriginalSourcePosition(sourceNode, true)
+	statements.ForEach(func(statement luau.Statement) {
+		s.setSourcePosition(statement, start)
+		s.setSourceEndPosition(statement, end)
+	})
 }
 
 // SetRojoContext installs the project-level Rojo context and project type,
@@ -529,17 +594,11 @@ func (s *State) GuessVirtualPath(fsPath string) string {
 		fsPath = parent
 		key := tspath.ToPath(fsPath, s.Program.GetCurrentDirectory(), s.Program.UseCaseSensitiveFileNames())
 		if set, ok := byRealpath.Load(key); ok {
-			// DIVERGENCE: strada's map value is an insertion-ordered array and
-			// upstream takes element [0]; tsgo stores a SyncSet whose
-			// iteration order is nondeterministic. In practice each pnpm
-			// realpath directory has exactly one symlink; for the >1 case
-			// pick the lexicographic minimum so output stays deterministic.
-			symlink := ""
-			for candidate := range set.Keys() {
-				if symlink == "" || candidate < symlink {
-					symlink = candidate
-				}
+			nodeModulesPath := ""
+			if s.Rojo != nil {
+				nodeModulesPath = s.Rojo.NodeModulesPath
 			}
+			symlink := selectSymlinkPath(set.ToSlice(), nodeModulesPath)
 			if symlink != "" {
 				// path.join(symlink, path.relative(fsPath, original)): fsPath
 				// is an ancestor of original (built by repeated dirname, same
@@ -628,6 +687,27 @@ func (s *State) GetModuleIDFromSymbol(moduleSymbol *ast.Symbol) luau.AnyIdentifi
 // transformExportDeclaration and transformExportAssignment.
 func (s *State) GetModuleIDFromNode(node *ast.Node) luau.AnyIdentifier {
 	return s.GetModuleIDFromSymbol(s.getModuleSymbolFromNode(node))
+}
+
+func (s *State) registerOptimizableVarArgs(declaration *ast.Node, data *VarArgsData) {
+	s.declarationToOptimizableVarArgs[declaration] = data
+}
+
+func (s *State) unregisterOptimizableVarArgs(declaration *ast.Node) {
+	delete(s.declarationToOptimizableVarArgs, declaration)
+}
+
+func (s *State) getOptimizableVarArgsData(node *ast.Node) *VarArgsData {
+	expression := SkipDownwards(node)
+	if !ast.IsIdentifier(expression) {
+		return nil
+	}
+
+	symbol := s.Checker.GetSymbolAtLocation(expression)
+	if symbol == nil || symbol.ValueDeclaration == nil {
+		return nil
+	}
+	return s.declarationToOptimizableVarArgs[symbol.ValueDeclaration]
 }
 
 // getModuleSymbolFromNode ports TransformState.getModuleSymbolFromNode: the

@@ -212,7 +212,11 @@ func renderSpot(b *strings.Builder, path, source string, lang Language, sp Spot,
 
 	head := sevWord + ": " + sp.Message
 	if sp.Code != "" {
-		head = sevWord + "[" + sp.Code + "]: " + sp.Message
+		if strings.HasPrefix(sp.Code, "TS") {
+			head = sevWord + " " + sp.Code + ": " + sp.Message
+		} else {
+			head = sevWord + "[" + sp.Code + "]: " + sp.Message
+		}
 	}
 	fmt.Fprintln(b, paint(head))
 

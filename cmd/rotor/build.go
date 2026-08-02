@@ -30,16 +30,21 @@ var projectTypeChoices = map[string]transformer.ProjectType{
 // CLI/commands/build.ts L62) plus a Partial<ProjectOptions> of exactly the
 // flags the user passed.
 type buildArgs struct {
-	project     string
-	opts        partialProjectOptions
-	help        bool
-	version     bool
-	jsonOut     bool   // rotor DX extension: emit a machine-readable result object
-	cpuprofile  string // rotor DX extension: write a pprof CPU profile here
-	maxErrors   int    // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
-	bell        bool   // rotor DX extension (watch): ring the bell on a fail<->pass flip
-	clearScreen bool   // rotor DX extension (watch): clear the screen before each rebuild (default true)
-	minify      bool   // rotor DX extension: minify emitted Luau before writing
+	project             string
+	opts                partialProjectOptions
+	build               bool
+	buildPath           string
+	emitDeclarationOnly bool
+	help                bool
+	version             bool
+	builders            *int
+	checkers            *int
+	jsonOut             bool   // rotor DX extension: emit a machine-readable result object
+	cpuprofile          string // rotor DX extension: write a pprof CPU profile here
+	maxErrors           int    // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
+	bell                bool   // rotor DX extension (watch): ring the bell on a fail<->pass flip
+	clearScreen         bool   // rotor DX extension (watch): clear the screen before each rebuild (default true)
+	minify              bool   // rotor DX extension: minify emitted Luau before writing
 }
 
 // parseBuildArgs parses the rbxtsc-compatible `build` flag surface
@@ -127,6 +132,10 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			res.project = takeValue()
 			projectSet = true
 			continue
+		case "build", "b":
+			res.build = true
+			res.buildPath = takeValue()
+			continue
 		case "includePath", "i":
 			v := takeValue()
 			res.opts.includePath = &v
@@ -155,6 +164,22 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			}
 			res.maxErrors = n
 			continue
+		case "builders", "checkers":
+			v := value
+			if !hasValue && i+1 < len(args) && isNumericFlagValue(args[i+1]) {
+				i++
+				v = args[i]
+			}
+			n, err := parsePositiveIntFlag(name, v)
+			if err != nil {
+				return nil, err
+			}
+			if name == "builders" {
+				res.builders = n
+			} else {
+				res.checkers = n
+			}
+			continue
 		case "json":
 			// rotor DX extension (not in rbxtsc): a plain boolean flag that
 			// swaps the styled UI for one machine-readable result object.
@@ -177,6 +202,14 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 				return nil, err
 			}
 			*target = &b
+			continue
+		}
+		if name == "emitDeclarationOnly" {
+			b, err := resolveBool(negated, hasValue, value, name)
+			if err != nil {
+				return nil, err
+			}
+			res.emitDeclarationOnly = b
 			continue
 		}
 		// rotor DX watch booleans (not part of the rbxtsc flag surface).
@@ -206,11 +239,20 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 	if positional != "" {
 		res.project = positional
 	}
+	if res.builders != nil && !res.build {
+		return nil, errors.New("--builders requires --build")
+	}
 
 	// yargs `implies: "watch"` (build.ts L68-72): --usePolling present in
 	// argv without --watch is a usage error.
 	if res.opts.usePolling != nil && res.opts.watch == nil {
-		return nil, errors.New("--usePolling requires --watch (usePolling implies watch)")
+		return nil, errors.New("Implications failed:\n usePolling -> watch")
+	}
+	if res.emitDeclarationOnly && !res.build {
+		return nil, errors.New("Implications failed:\n emitDeclarationOnly -> build")
+	}
+	if res.build && res.emitDeclarationOnly && res.opts.watch != nil && *res.opts.watch {
+		return nil, errors.New("--build --watch is incompatible with --emitDeclarationOnly (no Luau emit to incrementally watch)")
 	}
 
 	return res, nil
@@ -283,7 +325,11 @@ func cmdBuild(args []string) int {
 		defer pprof.StopCPUProfile()
 	}
 
-	tsConfigPath, err := findTsConfigPath(parsed.project)
+	projectPath := parsed.project
+	if parsed.buildPath != "" {
+		projectPath = parsed.buildPath
+	}
+	tsConfigPath, err := findTsConfigPath(projectPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
 		return 1
@@ -291,8 +337,16 @@ func cmdBuild(args []string) int {
 
 	// Merge order (build.ts L125-130): defaults < tsconfig `rbxts` key <
 	// argv. Absent CLI booleans (nil) never clobber `rbxts` values.
-	opts := mergeProjectOptions(defaultProjectOptions, readRbxtsOptions(tsConfigPath), &parsed.opts)
+	rbxtsOptions, err := readRbxtsOptionsChecked(tsConfigPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		return 1
+	}
+	opts := mergeProjectOptions(defaultProjectOptions, rbxtsOptions, &parsed.opts)
 	opts.minify = parsed.minify // rotor extension: CLI-only, outside the rbxts merge
+	opts.emitDeclarationOnly = parsed.emitDeclarationOnly
+	opts.builders = parsed.builders
+	opts.checkers = parsed.checkers
 
 	// LogService.verbose = projectOptions.verbose === true (build.ts L132).
 	logservice.Verbose = opts.verbose
@@ -305,7 +359,7 @@ func cmdBuild(args []string) int {
 	// stdout. Watch mode has no terminal "end", so it is not JSON-encoded; a
 	// one-shot build is what CI/editor integrations call with --json.
 	if parsed.jsonOut && !opts.watch {
-		return cmdBuildJSON(dir, tsConfigPath, opts)
+		return cmdBuildJSON(dir, tsConfigPath, opts, parsed.build)
 	}
 
 	out := newUI(os.Stdout)
@@ -315,6 +369,12 @@ func cmdBuild(args []string) int {
 		out.warn("--writeTransformedFiles is not supported by rotor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
 	}
 	if opts.watch {
+		if parsed.build {
+			reload := newBuildOptionsReload(tsConfigPath, parsed)
+			return runBuildSolutionWatch(tsConfigPath, opts, reload, watchOptions{
+				maxErrors: parsed.maxErrors, bell: parsed.bell, clearScreen: parsed.clearScreen,
+			})
+		}
 		return runBuildWatch(dir, tsConfigPath, opts, watchOptions{
 			maxErrors:   parsed.maxErrors,
 			bell:        parsed.bell,
@@ -328,7 +388,14 @@ func cmdBuild(args []string) int {
 		}
 	}
 
-	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
+	var result *compile.BuildResult
+	var diags []compile.DiagnosticInfo
+	var elapsed time.Duration
+	if parsed.build {
+		result, diags, elapsed, err = runBuildSolutionOnce(tsConfigPath, opts)
+	} else {
+		result, diags, elapsed, err = runBuildOnce(dir, tsConfigPath, opts)
+	}
 	if err != nil {
 		newUI(os.Stderr).buildFailure(err.Error(), diags, parsed.maxErrors)
 		return 1
@@ -340,17 +407,64 @@ func cmdBuild(args []string) int {
 	if result.WroteLockfile {
 		out.noteLine(assets.LockfileName + "  (updated — uploaded new $asset assets)")
 	}
-	out.buildSuccess(len(result.Outputs), len(result.EmittedFiles), len(result.Outputs)-len(result.EmittedFiles), elapsed)
+	copiedFiles := len(result.Outputs) - len(result.EmittedFiles)
+	if copiedFiles < 0 {
+		copiedFiles = 0
+	}
+	out.buildSuccess(len(result.Outputs), len(result.EmittedFiles), copiedFiles, elapsed)
 	return 0
 }
 
+func newBuildOptionsReload(tsConfigPath string, parsed *buildArgs) func() (projectOptions, error) {
+	return func() (projectOptions, error) {
+		declared, err := readRbxtsOptionsChecked(tsConfigPath)
+		if err != nil {
+			return projectOptions{}, err
+		}
+		next := mergeProjectOptions(defaultProjectOptions, declared, &parsed.opts)
+		next.minify = parsed.minify
+		next.emitDeclarationOnly = parsed.emitDeclarationOnly
+		next.builders = parsed.builders
+		next.checkers = parsed.checkers
+		return next, nil
+	}
+}
+
 func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
-	// Real builds carry rotor's own header; the upstream-header default is
-	// only load-bearing for differential byte-comparison in tests.
-	transformer.HeaderComment = " Compiled with rotor v" + version
+	transformer.HeaderComment = " Compiled with @isentinel/roblox-ts v4.0.11"
 
 	start := time.Now()
-	result, msgs, err := compile.BuildProjectWithOptions(dir, compile.ProjectOptions{
+	result, msgs, err := compile.BuildProjectWithOptions(dir, projectCompileOptions(tsConfigPath, opts))
+	var diags []compile.DiagnosticInfo
+	if result != nil {
+		diags = result.Diagnostics
+	}
+	if len(diags) == 0 && len(msgs) > 0 { // config/validation errors have no source span
+		for _, m := range msgs {
+			diags = append(diags, compile.DiagnosticInfo{Message: m})
+		}
+	}
+	return result, diags, time.Since(start), err
+}
+
+func runBuildSolutionOnce(tsConfigPath string, opts projectOptions) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
+	transformer.HeaderComment = " Compiled with @isentinel/roblox-ts v4.0.11"
+	start := time.Now()
+	result, msgs, err := compile.BuildSolutionWithOptions(tsConfigPath, projectCompileOptions(tsConfigPath, opts))
+	var diags []compile.DiagnosticInfo
+	if result != nil {
+		diags = result.Diagnostics
+	}
+	if len(diags) == 0 && len(msgs) > 0 {
+		for _, message := range msgs {
+			diags = append(diags, compile.DiagnosticInfo{Message: message})
+		}
+	}
+	return result, diags, time.Since(start), err
+}
+
+func projectCompileOptions(tsConfigPath string, opts projectOptions) compile.ProjectOptions {
+	return compile.ProjectOptions{
 		TsConfigPath:           tsConfigPath,
 		IncludePath:            opts.includePath,
 		EmitIncludeFiles:       !opts.noInclude,
@@ -362,17 +476,10 @@ func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.Build
 		LuaExtension:           !opts.luau,
 		WriteOnlyChanged:       opts.writeOnlyChanged,
 		MinifyOutput:           opts.minify,
-	})
-	var diags []compile.DiagnosticInfo
-	if result != nil {
-		diags = result.Diagnostics
+		EmitDeclarationOnly:    opts.emitDeclarationOnly,
+		Builders:               opts.builders,
+		Checkers:               opts.checkers,
 	}
-	if len(diags) == 0 && len(msgs) > 0 { // config/validation errors have no source span
-		for _, m := range msgs {
-			diags = append(diags, compile.DiagnosticInfo{Message: m})
-		}
-	}
-	return result, diags, time.Since(start), err
 }
 
 // jsonDiagnostic is one entry in the --json diagnostics array. file/line/col
@@ -411,8 +518,16 @@ func writeJSONResult(w io.Writer, res jsonResult) {
 // cmdBuildJSON runs a one-shot build and prints a single jsonResult object
 // instead of the styled UI. Exit code is unchanged from the styled path: 1 on
 // any build error, 0 otherwise.
-func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions) int {
-	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
+func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions, solution bool) int {
+	var result *compile.BuildResult
+	var diags []compile.DiagnosticInfo
+	var elapsed time.Duration
+	var err error
+	if solution {
+		result, diags, elapsed, err = runBuildSolutionOnce(tsConfigPath, opts)
+	} else {
+		result, diags, elapsed, err = runBuildOnce(dir, tsConfigPath, opts)
+	}
 	res := jsonResult{
 		Version:    version,
 		OK:         err == nil,

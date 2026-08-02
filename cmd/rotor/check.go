@@ -22,41 +22,78 @@ import (
 	"rotor/tsgo/vfs/osvfs"
 )
 
-func cmdCheck(args []string) int {
-	watch := false
-	jsonOut := false
-	path := ""
-	for _, a := range args {
+type checkArgs struct {
+	project  string
+	watch    bool
+	jsonOut  bool
+	checkers *int
+	help     bool
+}
+
+func parseCheckArgs(args []string) (*checkArgs, error) {
+	res := &checkArgs{project: "."}
+	positional := false
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		switch a {
 		case "-w", "--watch":
-			watch = true
+			res.watch = true
+			continue
 		case "--json":
-			// rotor DX extension: emit one machine-readable result object.
-			jsonOut = true
+			res.jsonOut = true
+			continue
 		case "-h", "--help":
-			usage(os.Stdout)
-			return 0
-		default:
-			if strings.HasPrefix(a, "-") {
-				fmt.Fprintf(os.Stderr, "rotor check: unknown flag %q\n\n", a)
-				usage(os.Stderr)
-				return 1 // usage errors exit 1 (rbxtsc parity; see main.go)
-			}
-			if path != "" {
-				fmt.Fprintf(os.Stderr, "rotor check: unexpected extra argument %q\n\n", a)
-				usage(os.Stderr)
-				return 1
-			}
-			path = a
+			res.help = true
+			return res, nil
 		}
+
+		if !strings.HasPrefix(a, "-") {
+			if positional {
+				return nil, fmt.Errorf("unexpected extra argument %q", a)
+			}
+			res.project = a
+			positional = true
+			continue
+		}
+
+		name := strings.TrimLeft(a, "-")
+		value, hasValue := "", false
+		if eq := strings.IndexByte(name, '='); eq >= 0 {
+			value, name = name[eq+1:], name[:eq]
+			hasValue = true
+		}
+		if name == "checkers" {
+			if !hasValue && i+1 < len(args) && isNumericFlagValue(args[i+1]) {
+				i++
+				value = args[i]
+			}
+			n, err := parsePositiveIntFlag(name, value)
+			if err != nil {
+				return nil, err
+			}
+			res.checkers = n
+			continue
+		}
+		return nil, fmt.Errorf("unknown flag %q", a)
 	}
-	if path == "" {
-		path = "."
+	return res, nil
+}
+
+func cmdCheck(args []string) int {
+	parsed, err := parseCheckArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rotor check: %v\n\n", err)
+		usage(os.Stderr)
+		return 1 // usage errors exit 1 (rbxtsc parity; see main.go)
+	}
+	if parsed.help {
+		usage(os.Stdout)
+		return 0
 	}
 
-	dir, err := filepath.Abs(path)
+	dir, err := filepath.Abs(parsed.project)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor check: cannot resolve path %q: %v\n", path, err)
+		fmt.Fprintf(os.Stderr, "rotor check: cannot resolve path %q: %v\n", parsed.project, err)
 		return 1
 	}
 	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
@@ -81,16 +118,16 @@ func cmdCheck(args []string) int {
 
 	// --json: suppress styled chrome and emit exactly one result object on
 	// stdout (watch has no terminal "end", so it stays styled).
-	if jsonOut && !watch {
-		return cmdCheckJSON(dir)
+	if parsed.jsonOut && !parsed.watch {
+		return cmdCheckJSON(dir, parsed.checkers)
 	}
 
 	newUI(os.Stdout).banner(filepath.Base(dir))
 
-	if watch {
-		return runWatch(dir, os.Stdout)
+	if parsed.watch {
+		return runWatch(dir, os.Stdout, parsed.checkers)
 	}
-	res := runCheck(dir, os.Stdout)
+	res := runCheck(dir, os.Stdout, parsed.checkers)
 	if res.errorCount > 0 {
 		return 1
 	}
@@ -100,8 +137,8 @@ func cmdCheck(args []string) int {
 // cmdCheckJSON runs a one-shot check and prints a single jsonResult object
 // (shared with `rotor build --json`) built from the structured diagnostics.
 // Exit code is unchanged: 1 when any error diagnostic is present, else 0.
-func cmdCheckJSON(dir string) int {
-	res := runCheckCollect(dir)
+func cmdCheckJSON(dir string, checkers *int) int {
+	res := runCheckCollect(dir, checkers)
 	out := jsonResult{
 		Version:     version,
 		OK:          res.errorCount == 0,
@@ -138,11 +175,26 @@ type checkCore struct {
 	watchFiles []string
 }
 
+func newCheckProgram(dir, configPath string, checkers *int) (*compiler.Program, *tsoptions.ParsedCommandLine, []*ast.Diagnostic) {
+	slashDir := filepath.ToSlash(dir)
+	fs := cachedvfs.From(compile.SanitizeFS(bundled.WrapFS(osvfs.FS())))
+	host := compiler.NewCompilerHost(slashDir, fs, bundled.LibPath(), nil, nil)
+	parsed, configDiags := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, host, nil)
+	if parsed == nil {
+		return nil, nil, configDiags
+	}
+	compile.ApplyCheckerOverride(parsed.CompilerOptions(), checkers)
+	return compiler.NewProgram(compiler.ProgramOptions{
+		Host:   host,
+		Config: parsed,
+	}), parsed, configDiags
+}
+
 // runCheckCore builds a fresh program for the project in dir and returns its
 // (sorted, deduplicated) diagnostics without rendering anything — the common
 // core of the styled runCheck and the JSON runCheckCollect, so both observe
 // identical diagnostics. The rotor-env.d.ts refresh still happens here (silent).
-func runCheckCore(dir string) checkCore {
+func runCheckCore(dir string, checkers *int) checkCore {
 	start := time.Now()
 	slashDir := filepath.ToSlash(dir)
 
@@ -154,19 +206,16 @@ func runCheckCore(dir string) checkCore {
 	// this check: module resolution re-stats overlapping node_modules paths
 	// once per file, and a check never mutates its source tree. Same wrapper
 	// tsgo's project host uses; see compile.newProjectProgram.
-	fs := cachedvfs.From(compile.SanitizeFS(bundled.WrapFS(osvfs.FS())))
-	host := compiler.NewCompilerHost(slashDir, fs, bundled.LibPath(), nil, nil)
-
 	formatOpts := &diagnosticwriter.FormattingOptions{
 		NewLine: "\n",
 		ComparePathsOptions: tspath.ComparePathsOptions{
 			CurrentDirectory:          slashDir,
-			UseCaseSensitiveFileNames: fs.UseCaseSensitiveFileNames(),
+			UseCaseSensitiveFileNames: osvfs.FS().UseCaseSensitiveFileNames(),
 		},
 	}
 
 	configPath := slashDir + "/tsconfig.json"
-	parsed, configDiags := tsoptions.GetParsedCommandLineOfConfigFile(configPath, nil, nil, host, nil)
+	program, parsed, configDiags := newCheckProgram(dir, configPath, checkers)
 	if parsed == nil {
 		// Unreadable/unparsable config: report what we have and stop.
 		return checkCore{
@@ -177,11 +226,6 @@ func runCheckCore(dir string) checkCore {
 		}
 	}
 	formatOpts.Locale = parsed.Locale()
-
-	program := compiler.NewProgram(compiler.ProgramOptions{
-		Host:   host,
-		Config: parsed,
-	})
 
 	// Same collection order as tsgo's own CLI: config parse, syntactic,
 	// program (options), global, then semantic diagnostics. Semantic checking
@@ -219,8 +263,8 @@ func runCheckCore(dir string) checkCore {
 
 // runCheck builds a fresh program for the project in dir, prints all
 // diagnostics plus a summary line, and reports the file list to watch.
-func runCheck(dir string, out io.Writer) checkResult {
-	core := runCheckCore(dir)
+func runCheck(dir string, out io.Writer, checkers *int) checkResult {
+	core := runCheckCore(dir, checkers)
 	writeDiagnostics(out, core.diags, core.formatOpts)
 	res := checkResult{
 		fileCount:  core.fileCount,
@@ -235,8 +279,8 @@ func runCheck(dir string, out io.Writer) checkResult {
 // runCheckCollect is runCheck's JSON sibling: it builds the same program and
 // diagnostics but renders nothing, returning a checkResult whose jsonDiags
 // carries the structured (file, line, col, severity, message) entries.
-func runCheckCollect(dir string) checkResult {
-	core := runCheckCore(dir)
+func runCheckCollect(dir string, checkers *int) checkResult {
+	core := runCheckCore(dir, checkers)
 	return checkResult{
 		fileCount:  core.fileCount,
 		errorCount: countErrors(core.diags),

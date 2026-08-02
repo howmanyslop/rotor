@@ -1,0 +1,1 @@
+require("./sidecar.test.js");

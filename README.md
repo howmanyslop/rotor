@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT license"></a>
 </p>
 
-rotor is an all-in-one Roblox toolchain, written in Go. At its core is a native rewrite of the [roblox-ts](https://roblox-ts.com) compiler built on [typescript-go](https://github.com/microsoft/typescript-go) — a drop-in `rbxtsc` replacement with **byte-identical Luau output** — plus a native Luau toolchain and Open Cloud asset + deployment pipelines, all in one binary.
+rotor is an all-in-one Roblox toolchain, written in Go. At its core is a native rewrite of the [roblox-ts](https://roblox-ts.com) compiler built on [typescript-go](https://github.com/microsoft/typescript-go) — a drop-in `rbxtsc` replacement with upstream-parity Luau output, plus a native Luau toolchain and Open Cloud asset + deployment pipelines, all in one binary.
 
 ```sh
 bun add -d @rotor-rbx/rotor    # or: npm i -D @rotor-rbx/rotor — see Install for more ways
@@ -24,9 +24,11 @@ bun add -d @rotor-rbx/rotor    # or: npm i -D @rotor-rbx/rotor — see Install f
 
 ```sh
 rotor check ./my-game -w     # native full-strictness typecheck: 222 files in 161 ms
-rotor build ./my-game -w     # byte-identical Luau, watch mode, incremental rebuilds
+rotor build ./my-game -w     # parity Luau, watch mode, incremental rebuilds
 rotor doctor                 # diagnose tsconfig, @rbxts packages, plugins, Rojo, cloud setup
 ```
+
+Both `build` and `check` accept `--checkers <n>` to tune type-checker workers per project (default 4). Solution builds (`--build`) also accept `--builders <n>` for project concurrency (default 4). `rotor build --build --builders 2 --checkers 4` is a typical tuned command.
 
 Same `tsconfig.json`, same `@rbxts/*` packages, same transformer plugins (Flamework etc.), same CLI flags — plus built-in compile-time macros rbxtsc doesn't have (no plugins, no Node sidecar, fully typed):
 
@@ -39,6 +41,18 @@ Same `tsconfig.json`, same `@rbxts/*` packages, same transformer plugins (Flamew
 | `$file("data.json")` | a file's contents as a Luau value (JSON→table, text→string) |
 | `$git("sha"\|"branch"\|"tag"\|"dirty")` · `$buildTime()` | build/VCS stamps |
 | `$getModuleTree("shared/systems")` | a folder's module tree (no `index.ts` required) |
+
+### Compatibility boundary
+
+The verified `@isentinel/roblox-ts@4.0.11` fork archive in `roblox-ts.zip` is authoritative for fork-changed surfaces: varargs optimization, object-rest direct access, the `rbxts` option cascade, `.luau.map` source maps, the copy-files gate, the Rojo resolver cache, solution builds, and solution watch. Rotor keeps upstream parity for unaffected compiler behavior. Do not use the older `reference/roblox-ts` tree as the authority for those changed surfaces.
+
+For the tsconfig extension schema, publish the Rotor copy once at the repository or project location you want editors to use:
+
+```sh
+rotor schema --rbxts > rbxts-tsconfig.schema.json
+```
+
+Then point `tsconfig.json` at that file with its top-level `"$schema"` field. This is separate from `rotor.schema.json`, which describes `rotor.toml`.
 
 **Luau toolchain** — works on any Rojo project, no rbxts required:
 
@@ -99,7 +113,7 @@ type = "discord"
 - **`rotor deploy`** is infrastructure-as-code: it diffs the config against per-environment state (`.rotor/deploy/<env>.json`), shows a plan, and applies only the drift — place file publishing + place settings, experience settings, badges and game passes (icons upload automatically first, shared icons dedupe), experience icon + thumbnails, developer products, and social links. Deletes require `--allow-deletes`.
 - Auth is an Open Cloud key in **`ROBLOX_API_KEY`** (scopes: Assets R/W, Legacy Assets manage — used to unwrap image uploads to their Image id, Universe Places W, Universe R/W). `rotor doctor` checks your config and key setup.
 
-Full config shape, every command flag, and all the macros: [docs.md](docs.md).
+Full config shape, every command flag, generated build-state file, environment variable, and all the macros: [docs.md](docs.md).
 
 ## Install
 
@@ -147,7 +161,7 @@ go build ./cmd/rotor
 
 ## Benchmarks
 
-Measured on real production rbxts games, with output byte-identical to `rbxtsc` 3.0.0:
+Measured on real production rbxts games, with output byte-identical to `rbxtsc` 3.0.0 on the unaffected benchmark surfaces:
 
 | Workload | rotor |
 |----------|------:|
@@ -155,7 +169,7 @@ Measured on real production rbxts games, with output byte-identical to `rbxtsc` 
 | Full build — 95-file production game | **355 ms** |
 | Incremental watch rebuild — same game | **180 ms** |
 
-The JS toolchain spends longer than this booting Node. The ~10× speedup is structural: rotor runs Microsoft's native, parallel TypeScript compiler ([typescript-go](https://github.com/microsoft/typescript-go)) instead of the single-threaded JS one.
+The JS toolchain spends longer than this booting Node. The ~10× speedup is structural: rotor runs Microsoft's native, parallel TypeScript compiler ([typescript-go](https://github.com/microsoft/typescript-go)) instead of the single-threaded JS one. You can tune the parallelism with `--checkers` and `--builders` (see [docs.md](docs.md#build-options)).
 
 ## Contributors
 

@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -39,10 +40,10 @@ func TestBuildProjectOutputPipeline(t *testing.T) {
 		t.Fatal(err)
 	}
 	for path, text := range map[string]string{
-		filepath.Join(outDir, "stale.luau"):         "-- stale\n",
-		filepath.Join(outDir, "nested", "old.json"): "{}\n",
-		filepath.Join(outDir, ".git", "keep"):       "keep\n",
-		filepath.Join(outDir, "cache.tsbuildinfo"):  "{}\n",
+		filepath.Join(outDir, "stale.luau"):               "-- stale\n",
+		filepath.Join(outDir, "nested", "old.json"):       "{}\n",
+		filepath.Join(outDir, ".git", "keep"):             "keep\n",
+		filepath.Join(outDir, "cache.rbxtsc.tsbuildinfo"): "{}\n",
 	} {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			t.Fatal(err)
@@ -80,11 +81,179 @@ func TestBuildProjectOutputPipeline(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "out", ".git", "keep")); err != nil {
 		t.Fatalf(".git sentinel missing: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "out", "cache.tsbuildinfo")); err != nil {
+	if _, err := os.Stat(filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")); err != nil {
 		t.Fatalf("build info missing: %v", err)
 	}
 	if len(result.EmittedFiles) != 1 || filepath.Base(result.EmittedFiles[0]) != "main.luau" {
 		t.Fatalf("EmittedFiles = %v, want only compiled main.luau", result.EmittedFiles)
+	}
+}
+
+func TestSourceMapEmission(t *testing.T) {
+	t.Run("enabled emits a V3 map and removes it with its source", func(t *testing.T) {
+		dir := writeProject(t, "@scope/source-map-fixture", "")
+		source := "export const answer = 42;\n"
+		if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		tsconfigPath := filepath.Join(dir, "tsconfig.json")
+		tsconfig, err := os.ReadFile(tsconfigPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tsconfigWithSourceMap := strings.Replace(string(tsconfig), `"outDir": "out"`, `"outDir": "out", "sourceMap": true`, 1)
+		if err := os.WriteFile(tsconfigPath, []byte(tsconfigWithSourceMap), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		result, diags, err := BuildProjectWithOptions(dir, ProjectOptions{})
+		if err != nil {
+			t.Fatalf("build: %v (diags: %v)", err, diags)
+		}
+
+		mapPath := filepath.Join(dir, "out", "main.luau.map")
+		mapBytes, err := os.ReadFile(mapPath)
+		if err != nil {
+			t.Fatalf("read emitted source map: %v", err)
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(mapBytes, &fields); err != nil {
+			t.Fatalf("unmarshal source map fields: %v", err)
+		}
+		if len(fields) != 5 {
+			t.Fatalf("source map fields = %v, want exactly version, file, sources, sourcesContent, mappings", fields)
+		}
+		for _, field := range []string{"version", "file", "sources", "sourcesContent", "mappings"} {
+			if _, ok := fields[field]; !ok {
+				t.Errorf("source map missing %q field", field)
+			}
+		}
+
+		var sourceMap struct {
+			Version        int      `json:"version"`
+			File           string   `json:"file"`
+			Sources        []string `json:"sources"`
+			SourcesContent []string `json:"sourcesContent"`
+			Mappings       string   `json:"mappings"`
+		}
+		if err := json.Unmarshal(mapBytes, &sourceMap); err != nil {
+			t.Fatalf("unmarshal source map: %v", err)
+		}
+		wantSource := filepath.ToSlash(filepath.Join(dir, "src", "main.ts"))
+		if sourceMap.Version != 3 {
+			t.Errorf("version = %d, want 3", sourceMap.Version)
+		}
+		if sourceMap.File != strings.TrimSuffix(wantSource, ".ts")+".luau" {
+			t.Errorf("file = %q, want %q", sourceMap.File, strings.TrimSuffix(wantSource, ".ts")+".luau")
+		}
+		if len(sourceMap.Sources) != 1 || sourceMap.Sources[0] != wantSource {
+			t.Errorf("sources = %v, want [%s]", sourceMap.Sources, wantSource)
+		}
+		if len(sourceMap.SourcesContent) != 1 || sourceMap.SourcesContent[0] != source {
+			t.Errorf("sourcesContent = %v, want original source", sourceMap.SourcesContent)
+		}
+		if sourceMap.Mappings == "" {
+			t.Error("mappings is empty")
+		}
+		for _, emitted := range result.EmittedFiles {
+			if strings.HasSuffix(emitted, ".map") {
+				t.Errorf("EmittedFiles includes source map %q", emitted)
+			}
+		}
+
+		srcDir := filepath.Join(dir, "src")
+		srcDirInfo, err := os.Stat(srcDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Remove(filepath.Join(srcDir, "main.ts")); err != nil {
+			t.Fatal(err)
+		}
+		// Restore the pre-deletion directory mtime: on a fast machine both
+		// builds land inside one millisecond anyway, so the copy-files gate
+		// must not depend on the deletion being visible in mtimes.
+		if err := os.Chtimes(srcDir, srcDirInfo.ModTime(), srcDirInfo.ModTime()); err != nil {
+			t.Fatal(err)
+		}
+		if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+			t.Fatalf("build after source removal: %v (diags: %v)", err, diags)
+		}
+		if _, err := os.Stat(mapPath); !os.IsNotExist(err) {
+			t.Fatalf("orphaned source map err = %v, want not-exist", err)
+		}
+	})
+
+	t.Run("disabled does not emit a map", func(t *testing.T) {
+		dir := writeProject(t, "@scope/source-map-disabled-fixture", "")
+		if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+			t.Fatalf("build: %v (diags: %v)", err, diags)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "out", "main.luau.map")); !os.IsNotExist(err) {
+			t.Fatalf("source map with sourceMap disabled err = %v, want not-exist", err)
+		}
+	})
+}
+
+func TestRbxtscBuildInfoPath(t *testing.T) {
+	dir := writeProject(t, "@scope/rbxtsc-build-info-fixture", "")
+	enableIncrementalBuilds(t, dir)
+
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("BuildProjectWithOptions: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")); err != nil {
+		t.Fatalf("suffixed build info missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "cache.tsbuildinfo")); !os.IsNotExist(err) {
+		t.Fatalf("unsuffixed build info err = %v, want not-exist", err)
+	}
+}
+
+func TestBuildInfoFailureRollback(t *testing.T) {
+	dir := writeProject(t, "@scope/build-info-rollback-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+
+	buildInfoPath := filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")
+	prior, err := os.ReadFile(buildInfoPath)
+	if err != nil {
+		t.Fatalf("read prior build info: %v", err)
+	}
+	outputPath := filepath.Join(dir, "out", "main.luau")
+	if err := os.Remove(outputPath); err != nil {
+		t.Fatalf("remove output: %v", err)
+	}
+	if err := os.Mkdir(outputPath, 0o755); err != nil {
+		t.Fatalf("make output directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte("export const value = 2;\n"), 0o644); err != nil {
+		t.Fatalf("change source: %v", err)
+	}
+
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err == nil {
+		t.Fatal("expected emit failure")
+	}
+	after, err := os.ReadFile(buildInfoPath)
+	if err != nil {
+		t.Fatalf("read rolled-back build info: %v", err)
+	}
+	if string(after) != string(prior) {
+		t.Fatalf("build info changed after failed emit: got %q, want %q", after, prior)
+	}
+}
+
+func TestDuplicateOutputGuard(t *testing.T) {
+	dir := t.TempDir()
+	first := filepath.Join(dir, "out", "same.luau")
+	second := filepath.Join(dir, "out", ".", "same.luau")
+	if err := rejectDuplicateOutputPaths([]string{first, second}); err == nil {
+		t.Fatal("expected duplicate output error")
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out")); !os.IsNotExist(err) {
+		t.Fatalf("output directory err = %v, want not-exist", err)
 	}
 }
 

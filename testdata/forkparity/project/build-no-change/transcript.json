@@ -1,0 +1,30 @@
+{
+  "description": "Composite rebuild that emits no changed files",
+  "category": "build-mode",
+  "expectedExitCode": 0,
+  "artifactChecks": {
+    "requireLuau": true,
+    "requireSourceMap": false,
+    "expectedWriteTrace": []
+  },
+  "invocations": [
+    {
+      "name": "initial-build",
+      "arguments": [
+        "build",
+        "--project",
+        ".",
+        "--build"
+      ]
+    },
+    {
+      "name": "no-change-rebuild",
+      "arguments": [
+        "build",
+        "--project",
+        ".",
+        "--build"
+      ]
+    }
+  ]
+}

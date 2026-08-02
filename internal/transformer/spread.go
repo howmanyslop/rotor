@@ -281,7 +281,7 @@ func getAddIterableToArrayBuilder(s *State, node *ast.Node, t *checker.Type) add
 		return addStringToArray
 	} else if IsDefinitelyType(s, t, IsSetType(s)) {
 		return addSetToArray
-	} else if IsDefinitelyType(s, t, IsMapType(s)) {
+	} else if IsDefinitelyType(s, t, IsMapType(s)) || IsSharedTableType(s, t) {
 		return addMapToArray
 	} else if IsDefinitelyType(s, t, IsIterableFunctionLuaTupleType(s)) {
 		return addIterableFunctionLuaTupleToArray
@@ -320,6 +320,9 @@ func transformSpreadElement(s *State, node *ast.Node) luau.Expression {
 	arguments := parent.Arguments()
 	if arguments[len(arguments)-1] != node {
 		s.Diags.Add(DiagNoPrecedingSpreadElement(node))
+	}
+	if data := s.getOptimizableVarArgsData(spreadExpression); data != nil && data.IsOptimizable {
+		return luau.NewVarArgs()
 	}
 
 	expression := TransformExpression(s, spreadExpression)

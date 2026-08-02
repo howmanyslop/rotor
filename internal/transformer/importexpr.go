@@ -139,15 +139,15 @@ func findRelativeRbxPath(moduleOutPath string, pkgRojoResolvers []*rojo.RojoReso
 
 func getPathsWithScope(resolver *rojo.RojoResolver, moduleScope string) []string {
 	results := make(map[string]struct{})
+	paths := make([]string, 0)
 	for _, partition := range resolver.GetPartitions() {
 		normalized := filepath.Clean(partition.FsPath)
 		if strings.HasSuffix(normalized, moduleScope) && !strings.Contains(normalized, nodeModules) {
-			results[normalized] = struct{}{}
+			if _, exists := results[normalized]; !exists {
+				results[normalized] = struct{}{}
+				paths = append(paths, normalized)
+			}
 		}
-	}
-	paths := make([]string, 0, len(results))
-	for path := range results {
-		paths = append(paths, path)
 	}
 	return paths
 }
@@ -331,12 +331,22 @@ func getImportPartsImpl(s *State, sourceFile *ast.SourceFile, moduleSpecifier *a
 		virtualPath = guessed
 	}
 
-	if isInsideNodeModules(virtualPath) {
-		mappedPath := virtualPath
-		key := rojo.CanonicalFileName(virtualPath, s.Rojo.UseCaseSensitiveFileNames)
-		if mapped, ok := s.Rojo.NodeModulesPathMapping[key]; ok {
+	mappedPath := virtualPath
+	hasMappedPath := false
+	key := rojo.CanonicalFileName(virtualPath, s.Rojo.UseCaseSensitiveFileNames)
+	if mapped, ok := s.Rojo.NodeModulesPathMapping[key]; ok {
+		mappedPath = mapped
+		hasMappedPath = true
+	}
+	if !hasMappedPath {
+		realKey := rojo.CanonicalFileName(moduleFile.FileName(), s.Rojo.UseCaseSensitiveFileNames)
+		if mapped, ok := s.Rojo.NodeModulesPathMapping[realKey]; ok {
 			mappedPath = mapped
+			hasMappedPath = true
 		}
+	}
+
+	if isInsideNodeModules(virtualPath) || hasMappedPath {
 		moduleOutPath := s.Rojo.PathTranslator.GetImportPath(mappedPath, true /* isNodeModule */)
 		return getNodeModulesImportParts(s, sourceFile, moduleSpecifier, moduleOutPath)
 	}

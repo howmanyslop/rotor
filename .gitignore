@@ -17,6 +17,9 @@ testdata/transformers/project/node_modules/
 testdata/transformers/project/out/
 testdata/transformers/project/include/
 testdata/transformers/project/flamework.build
+
+# Per-project resolver/cache state written by rotor builds
+.rotor/
 .agents/skills/agent-ci/
 .agents/skills/golang-code-style/
 .agents/skills/golang-continuous-integration/

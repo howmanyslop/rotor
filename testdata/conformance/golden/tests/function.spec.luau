@@ -70,9 +70,9 @@ return function()
 	end)
 	it("should support variadic arguments", function()
 		local function addAll(...)
-			local n = { ... }
 			local sum = 0
-			for _, value in n do
+			for _i = 1, select("#", ...) do
+				local value = (select(_i, ...))
 				sum += value
 			end
 			return sum
@@ -256,8 +256,7 @@ return function()
 				return if n == n and n > 0 then n else 0
 			end,
 		}
-		local _binding = obj
-		local saferNum = _binding.saferNum
+		local saferNum = obj.saferNum
 		expect(saferNum(5)).to.equal(5)
 	end)
 	it("should optimize array spread paramters", function()

@@ -1,0 +1,14 @@
+{
+  "fixtures": [
+    "build-basic",
+    "build-declarations",
+    "build-no-change",
+    "cross-project-dts",
+    "per-project-rojo",
+    "transformer-declarations",
+    "transformer-ordering",
+    "transformer-sourcemap",
+    "diagnostics",
+    "duplicate-output"
+  ]
+}

@@ -79,7 +79,8 @@ do
 			local metatable = getmetatable(anything)
 
 			if type(metatable) == "table" then
-				return rawget(anything, "error") ~= nil and type(rawget(metatable, "extend")) == "function"
+				return rawget(anything, "error") ~= nil
+					and type(rawget(metatable, "extend")) == "function"
 			end
 		end
 
@@ -778,7 +779,10 @@ function Promise.race(promises)
 	assert(type(promises) == "table", string.format(ERROR_NON_LIST, "Promise.race"))
 
 	for i, promise in pairs(promises) do
-		assert(Promise.is(promise), string.format(ERROR_NON_PROMISE_IN_LIST, "Promise.race", tostring(i)))
+		assert(
+			Promise.is(promise),
+			string.format(ERROR_NON_PROMISE_IN_LIST, "Promise.race", tostring(i))
+		)
 	end
 
 	return Promise._new(debug.traceback(nil, 2), function(resolve, reject, onCancel)
@@ -1245,8 +1249,14 @@ function Promise.prototype:_andThen(traceback, successHandler, failureHandler)
 				-- These are guaranteed to exist because the cancellation handler is guaranteed to only
 				-- be called at most once
 				if self._status == Promise.Status.Started then
-					table.remove(self._queuedResolve, table.find(self._queuedResolve, successCallback))
-					table.remove(self._queuedReject, table.find(self._queuedReject, failureCallback))
+					table.remove(
+						self._queuedResolve,
+						table.find(self._queuedResolve, successCallback)
+					)
+					table.remove(
+						self._queuedReject,
+						table.find(self._queuedReject, failureCallback)
+					)
 				end
 			end)
 		elseif self._status == Promise.Status.Resolved then
@@ -1281,8 +1291,14 @@ end
 	@return Promise<...any>
 ]=]
 function Promise.prototype:andThen(successHandler, failureHandler)
-	assert(successHandler == nil or isCallable(successHandler), string.format(ERROR_NON_FUNCTION, "Promise:andThen"))
-	assert(failureHandler == nil or isCallable(failureHandler), string.format(ERROR_NON_FUNCTION, "Promise:andThen"))
+	assert(
+		successHandler == nil or isCallable(successHandler),
+		string.format(ERROR_NON_FUNCTION, "Promise:andThen")
+	)
+	assert(
+		failureHandler == nil or isCallable(failureHandler),
+		string.format(ERROR_NON_FUNCTION, "Promise:andThen")
+	)
 
 	return self:_andThen(debug.traceback(nil, 2), successHandler, failureHandler)
 end
@@ -1308,7 +1324,10 @@ end
 	@return Promise<...any>
 ]=]
 function Promise.prototype:catch(failureHandler)
-	assert(failureHandler == nil or isCallable(failureHandler), string.format(ERROR_NON_FUNCTION, "Promise:catch"))
+	assert(
+		failureHandler == nil or isCallable(failureHandler),
+		string.format(ERROR_NON_FUNCTION, "Promise:catch")
+	)
 	return self:_andThen(debug.traceback(nil, 2), nil, failureHandler)
 end
 
@@ -1557,7 +1576,10 @@ end
 	@return Promise<...any>
 ]=]
 function Promise.prototype:finally(finallyHandler)
-	assert(finallyHandler == nil or isCallable(finallyHandler), string.format(ERROR_NON_FUNCTION, "Promise:finally"))
+	assert(
+		finallyHandler == nil or isCallable(finallyHandler),
+		string.format(ERROR_NON_FUNCTION, "Promise:finally")
+	)
 	return self:_finally(debug.traceback(nil, 2), finallyHandler)
 end
 
@@ -1737,7 +1759,8 @@ function Promise.prototype:_resolve(...)
 		-- Without this warning, arguments sometimes mysteriously disappear
 		if select("#", ...) > 1 then
 			local message = string.format(
-				"When returning a Promise from andThen, extra arguments are " .. "discarded! See:\n\n%s",
+				"When returning a Promise from andThen, extra arguments are "
+					.. "discarded! See:\n\n%s",
 				self._source
 			)
 			warn(message)
@@ -1826,7 +1849,8 @@ function Promise.prototype:_reject(...)
 			end
 
 			-- Build a reasonable message
-			local message = string.format("Unhandled Promise rejection:\n\n%s\n\n%s", err, self._source)
+			local message =
+				string.format("Unhandled Promise rejection:\n\n%s\n\n%s", err, self._source)
 
 			for _, callback in ipairs(Promise._unhandledRejectionCallbacks) do
 				task.spawn(callback, self, unpack(self._values, 1, self._valuesLength))

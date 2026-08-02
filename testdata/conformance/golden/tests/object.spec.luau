@@ -30,20 +30,18 @@ return function()
 		local i = 2
 		local a = obj[i]
 		local b = obj[2]
-		local _binding = obj
-		local c = _binding[i]
-		local _binding_1 = obj
-		local d = _binding_1[2]
+		local c = obj[i]
+		local d = obj[2]
 		expect(a).to.equal(1)
 		expect(b).to.equal(1)
 		expect(c).to.equal(1)
 		expect(d).to.equal(1)
 		a = obj[i]
 		b = obj[2]
-		local _binding_2 = obj
-		c = _binding_2[i]
-		local _binding_3 = obj
-		d = _binding_3[2]
+		local _binding = obj
+		c = _binding[i]
+		local _binding_1 = obj
+		d = _binding_1[2]
 		expect(a).to.equal(1)
 		expect(b).to.equal(1)
 		expect(c).to.equal(1)

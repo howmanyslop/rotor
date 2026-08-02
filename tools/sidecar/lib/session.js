@@ -11,6 +11,7 @@ const {
   getPluginConfigs,
   wrapTransformersWithParentFix,
 } = require("./plugins");
+const { createDeclarationTransformers } = require("./declarations");
 
 function createParseHost(session, ts) {
   return {
@@ -59,7 +60,7 @@ class SidecarProjectSession {
     this.ts = ts;
     this.projectDir = normalizePath(projectDir);
     this.tsConfigPath = normalizePath(tsConfigPath);
-    this.documentRegistry = ts.createDocumentRegistry();
+    this.documentRegistry = ts.createDocumentRegistry(ts.sys.useCaseSensitiveFileNames);
     this.overrides = new Map();
     this.actualPaths = new Map();
     this.versions = new Map();
@@ -109,6 +110,9 @@ class SidecarProjectSession {
   updateFile(fileName, text) {
     const actualPath = this.rememberFile(fileName);
     const canonical = this.canonicalize(actualPath);
+    if (this.overrides.get(canonical) === text) {
+      return actualPath;
+    }
     this.overrides.set(canonical, text);
     this.versions.set(canonical, (this.versions.get(canonical) ?? 0) + 1);
     this.projectVersion += 1;
@@ -178,15 +182,12 @@ class SidecarProjectSession {
 
   transformSourceFiles(program, sourceFiles, transforms) {
     const transformerList = wrapTransformersWithParentFix(this.ts, flattenIntoTransformers(transforms));
-    const printer = this.ts.createPrinter();
+    const printer = this.ts.createPrinter({ removeComments: program.getCompilerOptions().removeComments });
 
     if (transformerList.length === 0) {
       return {
         diagnostics: [],
-        transformed: sourceFiles.map((sourceFile) => ({
-          fileName: sourceFile.fileName,
-          text: printer.printFile(sourceFile),
-        })),
+        transformed: [],
       };
     }
 
@@ -211,10 +212,10 @@ class SidecarProjectSession {
       return {
         diagnostics: (result.diagnostics ?? []).map((diagnostic) => toProtocolDiagnostic(this.ts, diagnostic)),
         transformed: result.transformed
-          .filter((node) => this.ts.isSourceFile(node))
+          .filter((node) => this.ts.isSourceFile(node) && !sourceFiles.includes(node))
           .map((sourceFile) => ({
             fileName: sourceFile.fileName,
-            text: printer.printFile(sourceFile),
+            ...printSourceFileWithTraceMap(this.ts, printer, sourceFile, program.getCompilerOptions()),
           })),
       };
     } finally {
@@ -222,6 +223,31 @@ class SidecarProjectSession {
         result.dispose();
       }
     }
+  }
+
+  emitDeclarationFiles(program, sourceFiles, transforms) {
+    if (!program.getCompilerOptions().declaration || sourceFiles.length === 0) {
+      return { diagnostics: [], declarations: [] };
+    }
+
+    const declarations = [];
+    const afterDeclarations = [
+      ...wrapTransformersWithParentFix(this.ts, transforms.afterDeclarations),
+      ...createDeclarationTransformers(this.ts, program),
+    ];
+    const customTransformers = { afterDeclarations };
+    const diagnostics = [];
+    for (const sourceFile of sourceFiles) {
+      const result = program.emit(
+        sourceFile,
+        (fileName, text) => declarations.push({ fileName, text }),
+        undefined,
+        true,
+        customTransformers,
+      );
+      diagnostics.push(...(result.diagnostics ?? []).map((diagnostic) => toProtocolDiagnostic(this.ts, diagnostic)));
+    }
+    return { diagnostics, declarations };
   }
 
   handleRequest(request) {
@@ -262,17 +288,40 @@ class SidecarProjectSession {
       }
 
       const transformResult = this.transformSourceFiles(program, sourceFiles, transforms);
+      const declarationResult = this.emitDeclarationFiles(program, sourceFiles, transforms);
       return {
-        diagnostics: [...diagnostics, ...transformResult.diagnostics],
+        diagnostics: [...diagnostics, ...transformResult.diagnostics, ...declarationResult.diagnostics],
         transformed: transformResult.transformed,
+        declarations: declarationResult.declarations,
       };
     } catch (error) {
       return {
         diagnostics: [createInternalDiagnostic(error)],
         transformed: [],
+        declarations: [],
       };
     }
   }
+}
+
+function printSourceFileWithTraceMap(ts, printer, sourceFile, compilerOptions) {
+  if (!compilerOptions.sourceMap) {
+    return { text: printer.printFile(sourceFile) };
+  }
+
+  const writer = ts.createTextWriter("\n");
+  const generator = ts.createSourceMapGenerator(
+    {
+      getCurrentDirectory: () => "",
+      getCanonicalFileName: (fileName) => fileName,
+    },
+    sourceFile.fileName,
+    "",
+    "",
+    {},
+  );
+  printer.writeFile(sourceFile, writer, generator);
+  return { text: writer.getText(), traceMap: JSON.stringify(generator.toJSON()) };
 }
 
 function validateRequest(request) {

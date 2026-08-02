@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -31,6 +30,11 @@ type projectOptions struct {
 	// .luau/.lua source through the Luau minifier before writing. Set from
 	// --minify; never merged from the rbxts tsconfig key.
 	minify bool
+
+	emitDeclarationOnly bool
+
+	builders *int
+	checkers *int
 }
 
 // defaultProjectOptions ports DEFAULT_PROJECT_OPTIONS (Shared/constants.ts
@@ -141,52 +145,24 @@ func findTsConfigPath(projectArg string) (string, error) {
 	}
 }
 
-// readRbxtsOptions ports getTsConfigProjectOptions (CLI/commands/build.ts
-// L22-29): read the FOUND tsconfig file raw (QUIRK verbatim: a RAW
-// single-file read — `extends` is NOT followed for the `rbxts` key), parse as
-// JSONC (ts.parseConfigFileTextToJson accepts comments/trailing commas), and
-// return the top-level `rbxts` key — an undocumented way to persist any
-// Partial<ProjectOptions> in tsconfig.json. Unreadable or unparsable input
-// returns nil, like upstream's undefined.
 func readRbxtsOptions(tsConfigPath string) *partialProjectOptions {
-	data, err := os.ReadFile(tsConfigPath)
-	if err != nil {
-		return nil
+	options, _ := readRbxtsOptionsChecked(tsConfigPath)
+	return options
+}
+
+func readRbxtsOptionsChecked(tsConfigPath string) (*partialProjectOptions, error) {
+	r, err := compile.ReadRbxtsOptions(tsConfigPath)
+	if err != nil || r == nil {
+		return nil, err
 	}
-	var root struct {
-		Rbxts *struct {
-			IncludePath            *string `json:"includePath"`
-			Rojo                   *string `json:"rojo"`
-			Type                   *string `json:"type"`
-			Watch                  *bool   `json:"watch"`
-			UsePolling             *bool   `json:"usePolling"`
-			Verbose                *bool   `json:"verbose"`
-			NoInclude              *bool   `json:"noInclude"`
-			LogTruthyChanges       *bool   `json:"logTruthyChanges"`
-			WriteOnlyChanged       *bool   `json:"writeOnlyChanged"`
-			WriteTransformedFiles  *bool   `json:"writeTransformedFiles"`
-			OptimizedLoops         *bool   `json:"optimizedLoops"`
-			AllowCommentDirectives *bool   `json:"allowCommentDirectives"`
-			Luau                   *bool   `json:"luau"`
-		} `json:"rbxts"`
-	}
-	if json.Unmarshal([]byte(compile.StripJSONC(string(data))), &root) != nil || root.Rbxts == nil {
-		return nil
-	}
-	r := root.Rbxts
 	return &partialProjectOptions{
 		includePath:            r.IncludePath,
 		rojo:                   r.Rojo,
 		typeName:               r.Type,
-		watch:                  r.Watch,
-		usePolling:             r.UsePolling,
-		verbose:                r.Verbose,
 		noInclude:              r.NoInclude,
 		logTruthyChanges:       r.LogTruthyChanges,
-		writeOnlyChanged:       r.WriteOnlyChanged,
-		writeTransformedFiles:  r.WriteTransformedFiles,
 		optimizedLoops:         r.OptimizedLoops,
 		allowCommentDirectives: r.AllowCommentDirectives,
 		luau:                   r.Luau,
-	}
+	}, nil
 }

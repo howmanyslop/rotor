@@ -1,0 +1,20 @@
+{
+  "description": "Index and init sources cannot emit to the same Luau output path",
+  "category": "output",
+  "expectedExitCode": 1,
+  "expectedStderr": "duplicate output path detected",
+  "artifactChecks": {
+    "requireLuau": false,
+    "requireSourceMap": false
+  },
+  "invocations": [
+    {
+      "name": "build",
+      "arguments": [
+        "build",
+        "--project",
+        "."
+      ]
+    }
+  ]
+}

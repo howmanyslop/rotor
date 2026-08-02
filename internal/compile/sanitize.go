@@ -3,6 +3,7 @@ package compile
 import (
 	"encoding/json"
 	"path"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -14,15 +15,7 @@ import (
 // "tsconfig.json" returns sanitized config text (see SanitizeTSConfig), and
 // any ReadFile of an @rbxts/compiler-types .d.ts returns text with the
 // Iterable interfaces rewritten to tsgo's expected arity (see
-// RewriteIterableArity). The wrapper is general: it applies to every
-// tsconfig.json the compiler host touches (the project's own config plus
-// anything reached via "extends").
-//
-// Known gap (load-bearing for the baseUrl rewrite): only files NAMED
-// "tsconfig.json" are intercepted, so an `"extends": "./tsconfig.base.json"`
-// carrying baseUrl (or any other removed option) is not sanitized and tsgo
-// still hard-errors on it. Acceptable for now — rbxts projects keep these
-// options in the root tsconfig.json.
+// RewriteIterableArity).
 func SanitizeFS(inner vfs.FS) vfs.FS {
 	return SanitizeFSWithConfigPath(inner, "")
 }
@@ -30,16 +23,26 @@ func SanitizeFS(inner vfs.FS) vfs.FS {
 // SanitizeFSWithConfigPath is SanitizeFS that additionally sanitizes the
 // exact (slash-separated, absolute) config file path — needed when
 // `--project` points at a config file NOT named tsconfig.json (upstream
-// findTsConfigPath accepts any file path, CLI/commands/build.ts L31-40).
-// An empty configPath adds nothing.
+// findTsConfigPath accepts any file path, CLI/commands/build.ts L31-40) and
+// every config file in its resolved extends chain. An empty configPath adds
+// nothing.
 func SanitizeFSWithConfigPath(inner vfs.FS, configPath string) vfs.FS {
+	chainPaths := make(map[string]struct{})
+	if configPath != "" {
+		_, paths, _ := ReadRbxtsOptionsWithChain(configPath)
+		for _, chainPath := range paths {
+			chainPaths[filepath.ToSlash(chainPath)] = struct{}{}
+		}
+	}
+
 	return wrapvfs.Wrap(inner, wrapvfs.Replacements{
 		ReadFile: func(path string) (string, bool) {
 			contents, ok := inner.ReadFile(path)
 			if !ok {
 				return contents, ok
 			}
-			if isTSConfigPath(path) || (configPath != "" && path == configPath) {
+			_, inExtendsChain := chainPaths[path]
+			if isTSConfigPath(path) || (configPath != "" && path == configPath) || inExtendsChain {
 				return SanitizeTSConfig(contents), true
 			}
 			if isCompilerTypesDTSPath(path) {

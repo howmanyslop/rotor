@@ -49,6 +49,24 @@ jobs:
           # real-package transformer test must run here, never skip.
           ROTOR_REQUIRE_TRANSFORMERS_FIXTURE: "1"
 
+  race:
+    runs-on: blacksmith-16vcpu-ubuntu-2404
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up rotor toolchain
+        uses: ./.github/actions/setup
+
+      - name: Race detector
+        run: go test -race -shuffle=on -count=1 ./internal/logservice ./internal/compile ./cmd/rotor
+        env:
+          # The setup action installs testdata/transformers/project, so the
+          # real-package transformer test must run here, never skip.
+          ROTOR_REQUIRE_TRANSFORMERS_FIXTURE: "1"
+
   vuln:
     runs-on: blacksmith-4vcpu-ubuntu-2404
 

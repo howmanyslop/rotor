@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "allowSyntheticDefaultImports": true,
+    "composite": true,
+    "declaration": true,
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "moduleResolution": "Bundler",
+    "noLib": true,
+    "outDir": "out",
+    "plugins": [{ "transform": "./insert-statement-transformer.js" }],
+    "rootDir": "src",
+    "sourceMap": true,
+    "strict": true,
+    "target": "ESNext",
+    "types": ["compiler-types"],
+    "typeRoots": ["node_modules/@rbxts"]
+  },
+  "include": ["src"]
+}

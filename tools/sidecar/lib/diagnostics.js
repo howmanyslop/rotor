@@ -35,9 +35,9 @@ function createProtocolDiagnostic(category, code, message, file, start, length) 
 function createPluginNotFoundDiagnostic(transformName, error) {
   const reason = error instanceof Error ? error.message : String(error);
   return createProtocolDiagnostic(
-    "warning",
+    "error",
     "transformer-not-found",
-    `Transformer \`${transformName}\` was not found!\nMore info: ${reason}\nDid you forget to install the package?`,
+    `Transformer \`${transformName}\` failed to load!\nMore info: ${reason}\nSuggestion: Did you forget to install the package, or to build it?`,
   );
 }
 

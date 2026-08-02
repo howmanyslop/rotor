@@ -1,0 +1,23 @@
+{
+  "description": "Referenced project uses its rbxts.rojo override instead of discovery",
+  "category": "resolver",
+  "expectedExitCode": 0,
+  "artifactChecks": {
+    "requireLuau": true,
+    "requiredComponents": [
+      ".rotor/cache/rojo/"
+    ],
+    "requireSourceMap": false
+  },
+  "invocations": [
+    {
+      "name": "build",
+      "arguments": [
+        "build",
+        "--project",
+        ".",
+        "--build"
+      ]
+    }
+  ]
+}

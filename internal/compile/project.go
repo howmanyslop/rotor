@@ -90,6 +90,10 @@ type projectContext struct {
 // upstream `--project` may name any config file, CLI/commands/build.ts
 // L31-40).
 func newProjectProgram(projectDir, tsConfigPath string) (string, *compiler.Program, []string, error) {
+	return newProjectProgramWithOptions(projectDir, tsConfigPath, ProjectOptions{})
+}
+
+func newProjectProgramWithOptions(projectDir, tsConfigPath string, opts ProjectOptions) (string, *compiler.Program, []string, error) {
 	dir, err := filepath.Abs(projectDir)
 	if err != nil {
 		return "", nil, nil, err
@@ -114,7 +118,7 @@ func newProjectProgram(projectDir, tsConfigPath string) (string, *compiler.Progr
 	// own project/LSP host uses. Safe because a build never mutates its source
 	// tree mid-pass, so cached file metadata cannot go stale.
 	fs := cachedvfs.From(SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath))
-	program, diags, err := newProjectProgramFromFS(dir, configPath, fs)
+	program, diags, err := newProjectProgramFromFSWithOptions(dir, configPath, fs, opts.Checkers)
 	if err != nil {
 		return "", nil, diags, err
 	}
@@ -182,29 +186,22 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 		return nil, nil, err
 	}
 
-	// createProjectData.ts L33-43: a truthy --rojo overrides discovery
-	// (path.resolve'd); QUIRK: `--rojo ""` (empty string) falls through to
-	// auto-discovery, whose warnings go to LogService.warn (they never fail a
-	// compile upstream).
-	var rojoConfigPath string
-	if opts.RojoConfigPath != "" {
-		abs, err := filepath.Abs(filepath.FromSlash(opts.RojoConfigPath))
-		if err != nil {
-			return nil, nil, err
-		}
-		rojoConfigPath = abs
-	} else {
-		var rojoWarnings []string
-		rojoConfigPath, rojoWarnings = rojo.FindRojoConfigFilePath(filepath.FromSlash(dir))
-		for _, warning := range rojoWarnings {
-			logservice.Warn(warning)
-		}
+	rojoConfigPath, rojoWarnings, err := resolveRojoConfigPath(dir, opts.RojoConfigPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, warning := range rojoWarnings {
+		logservice.Warn(warning)
 	}
 
 	// compileFiles.ts L61-63.
 	var rojoResolver *rojo.RojoResolver
 	if rojoConfigPath != "" {
-		rojoResolver = rojo.FromPath(rojoConfigPath)
+		if opts.rojoCache != nil {
+			rojoResolver = opts.rojoCache.Load(rojoConfigPath)
+		} else {
+			rojoResolver = rojo.FromPath(rojoConfigPath)
+		}
 	} else {
 		rojoResolver = rojo.Synthetic(filepath.FromSlash(outDir))
 	}
@@ -215,7 +212,10 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 	}
 
 	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
-	importPathMap := createCrossProjectImportPathMap(program, !opts.LuaExtension)
+	importPathMap := opts.crossProjectImportPathMap
+	if importPathMap == nil {
+		importPathMap = createCrossProjectImportPathMap(program, !opts.LuaExtension)
+	}
 
 	// checkRojoConfig + checkFileName queue project-level diagnostics
 	// (compileFiles.ts L69-75); upstream flushes them only after the emit
@@ -299,13 +299,25 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 			ProjectPath:       filepath.FromSlash(dir),
 
 			PkgRojoResolvers:          pkgRojoResolvers,
-			NodeModulesPathMapping:    createNodeModulesPathMapping(typeRoots, useCaseSensitiveFileNames),
+			NodeModulesPathMapping:    createNodeModulesPathMapping(typeRoots, useCaseSensitiveFileNames, options.CustomConditions),
 			NodeModulesPath:           nodeModulesPath,
 			TypeRoots:                 typeRoots,
 			UseCaseSensitiveFileNames: useCaseSensitiveFileNames,
 			ImportPathMap:             importPathMap,
 		},
 	}, nil, nil
+}
+
+func resolveRojoConfigPath(dir, configuredPath string) (string, []string, error) {
+	if configuredPath == "" {
+		path, warnings := rojo.FindRojoConfigFilePath(filepath.FromSlash(dir))
+		return path, warnings, nil
+	}
+	abs, err := filepath.Abs(filepath.FromSlash(configuredPath))
+	if err != nil {
+		return "", nil, err
+	}
+	return abs, nil, nil
 }
 
 func createCrossProjectImportPathMap(program *compiler.Program, useLuauExtension bool) map[string]string {
@@ -395,51 +407,6 @@ func newAssetResolver(projectDir string) *assetresolve.Resolver {
 	})
 }
 
-// createNodeModulesPathMapping ports
-// Project/functions/createNodeModulesPathMapping.ts: for each package under
-// each typeRoot, map the canonical resolved types/typings entry (.d.ts) to
-// the resolved main entry (the shipped .lua) — only when main is present.
-func createNodeModulesPathMapping(typeRoots []string, useCaseSensitiveFileNames bool) map[string]string {
-	mapping := make(map[string]string)
-	for _, typeRoot := range typeRoots {
-		scopePath := filepath.FromSlash(typeRoot)
-		entries, err := os.ReadDir(scopePath)
-		if err != nil {
-			continue // fs.pathExistsSync guard
-		}
-		for _, entry := range entries {
-			pkgPath := filepath.Join(scopePath, entry.Name())
-			// realPathExistsSync: os.ReadFile follows symlinks; a missing or
-			// unreadable package.json just skips the package.
-			data, err := os.ReadFile(filepath.Join(pkgPath, "package.json"))
-			if err != nil {
-				continue
-			}
-			var pkg struct {
-				Main    string `json:"main"`
-				Typings string `json:"typings"`
-				Types   string `json:"types"`
-			}
-			if json.Unmarshal(data, &pkg) != nil {
-				continue
-			}
-			// both "types" and "typings" are valid
-			typesPath := pkg.Types
-			if typesPath == "" {
-				typesPath = pkg.Typings
-			}
-			if typesPath == "" {
-				typesPath = "index.d.ts"
-			}
-			if pkg.Main != "" {
-				key := rojo.CanonicalFileName(resolveAgainst(pkgPath, typesPath), useCaseSensitiveFileNames)
-				mapping[key] = resolveAgainst(pkgPath, pkg.Main)
-			}
-		}
-	}
-	return mapping
-}
-
 // resolveAgainst mirrors Node path.resolve(base, p) for the two-argument
 // case used above.
 func resolveAgainst(base, p string) string {
@@ -455,6 +422,12 @@ func resolveAgainst(base, p string) string {
 // without any include emission, preserving the original CompileProject
 // behavior (pure: nothing but the returned map is produced).
 type ProjectOptions struct {
+	rojoCache *rojo.RojoResolverCache
+
+	crossProjectImportPathMap map[string]string
+	pendingSolutionPersists   *[]func() error
+	deferRojoCachePersist     bool
+
 	// IncludePath is the raw --includePath value; "" applies upstream's
 	// default of <projectDir>/include (createProjectData.ts L29). It feeds
 	// both the RuntimeLib.lua Rojo-path validation (compileFiles.ts L88-89)
@@ -477,6 +450,14 @@ type ProjectOptions struct {
 	// resolve to any file path, CLI/commands/build.ts L31-40). "" means
 	// <projectDir>/tsconfig.json — the original CompileProject behavior.
 	TsConfigPath string
+
+	// Checkers overrides compilerOptions.checkers when set by the CLI. A nil
+	// value preserves the parsed config and upstream default behavior.
+	Checkers *int
+
+	// Builders overrides the project builder count when set by the CLI. A nil
+	// value preserves the upstream default behavior.
+	Builders *int
 
 	// RojoConfigPath is the --rojo override (createProjectData.ts L33-43):
 	// non-empty values are path.resolve'd and used verbatim; QUIRK verbatim
@@ -521,6 +502,52 @@ type ProjectOptions struct {
 	// default (false) leaves output byte-identical to rbxtsc. Declaration
 	// (`.d.ts`) and include files are never minified.
 	MinifyOutput bool
+
+	EmitDeclarationOnly bool
+
+	forceFullBuild bool
+}
+
+func ProjectOptionsForReferencedConfig(entry ProjectOptions, tsConfigPath string, inheritEntryTypeAndRojo bool) (ProjectOptions, error) {
+	declared, err := ReadRbxtsOptions(tsConfigPath)
+	if err != nil {
+		return ProjectOptions{}, err
+	}
+	if declared == nil {
+		if !inheritEntryTypeAndRojo {
+			entry.Type = ""
+			entry.RojoConfigPath = ""
+		}
+		return entry, nil
+	}
+
+	entry.Type = ""
+	entry.RojoConfigPath = ""
+	if declared.IncludePath != nil {
+		entry.IncludePath = *declared.IncludePath
+	}
+	if declared.Rojo != nil {
+		entry.RojoConfigPath = *declared.Rojo
+	}
+	if declared.Type != nil {
+		entry.Type = transformer.ProjectType(*declared.Type)
+	}
+	if declared.LogTruthyChanges != nil {
+		entry.LogTruthyChanges = *declared.LogTruthyChanges
+	}
+	if declared.AllowCommentDirectives != nil {
+		entry.AllowCommentDirectives = *declared.AllowCommentDirectives
+	}
+	if declared.NoInclude != nil {
+		entry.EmitIncludeFiles = !*declared.NoInclude
+	}
+	if declared.OptimizedLoops != nil {
+		entry.NoOptimizedLoops = !*declared.OptimizedLoops
+	}
+	if declared.Luau != nil {
+		entry.LuaExtension = !*declared.Luau
+	}
+	return entry, nil
 }
 
 // CompileProject compiles every file of the project rooted at projectDir —
@@ -543,7 +570,7 @@ func CompileProject(projectDir string) (map[string]string, []string, error) {
 // project validation or per-file diagnostics, so type errors in source files
 // do not stop the runtime library from landing.
 func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[string]string, []string, error) {
-	dir, program, diags, err := newProjectProgram(projectDir, opts.TsConfigPath)
+	dir, program, diags, err := newProjectProgramWithOptions(projectDir, opts.TsConfigPath, opts)
 	if err != nil {
 		return nil, diags, err
 	}
@@ -564,7 +591,8 @@ func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOp
 	if err != nil {
 		return nil, stringDiagnostics(pctxDiags), err
 	}
-	return compileProjectSourceFiles(dir, program, pctx, sourceFiles, opts)
+	outputs, _, infos, err := compileProjectSourceFiles(dir, program, pctx, sourceFiles, opts)
+	return outputs, infos, err
 }
 
 func projectSourceFiles(program *compiler.Program) []*ast.SourceFile {
@@ -572,6 +600,7 @@ func projectSourceFiles(program *compiler.Program) []*ast.SourceFile {
 	for _, sourceFile := range program.SourceFiles() {
 		fileName := sourceFile.FileName()
 		if sourceFile.IsDeclarationFile ||
+			program.IsSourceFromProjectReference(sourceFile.Path()) ||
 			(!strings.HasSuffix(fileName, ".ts") && !strings.HasSuffix(fileName, ".tsx")) {
 			continue
 		}
@@ -586,10 +615,11 @@ type checkerSourceFileGroup struct {
 }
 
 type compiledProjectSourceFile struct {
-	relOut string
-	text   string
-	diags  []DiagnosticInfo
-	err    error
+	relOut    string
+	text      string
+	sourceMap string
+	diags     []DiagnosticInfo
+	err       error
 }
 
 type precheckedProjectSourceFile struct {
@@ -597,13 +627,13 @@ type precheckedProjectSourceFile struct {
 	commentDiags []string
 }
 
-func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, []DiagnosticInfo, error) {
+func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, map[string]string, []DiagnosticInfo, error) {
 	ctx := context.Background()
 
 	// Program-level option diagnostics fail the compile before any file is
 	// transformed, mirroring CompileFile.
 	if tsDiags := program.GetProgramDiagnostics(); len(tsDiags) > 0 {
-		return nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+		return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
 
 	// compileFiles.ts L102 — note the TWO dots.
@@ -627,14 +657,14 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 
 	for _, precheck := range prechecks {
 		if len(precheck.tsDiags) > 0 {
-			return nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
+			return nil, nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
 		}
 		if len(precheck.commentDiags) > 0 {
-			return nil, stringDiagnostics(precheck.commentDiags), errors.New("compile: comment directive diagnostics")
+			return nil, nil, stringDiagnostics(precheck.commentDiags), errors.New("compile: comment directive diagnostics")
 		}
 	}
 	if tsDiags := program.GetGlobalDiagnostics(ctx); len(tsDiags) > 0 {
-		return nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+		return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 	}
 
 	wg = core.NewWorkGroup(program.SingleThreaded() || len(groups) <= 1)
@@ -650,14 +680,18 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 	wg.RunAndWait()
 
 	outputs := make(map[string]string, len(results))
+	sourceMaps := make(map[string]string, len(results))
 	for _, result := range results {
 		if result.err != nil {
-			return nil, result.diags, result.err
+			return nil, nil, result.diags, result.err
 		}
 		outputs[result.relOut] = result.text
+		if result.sourceMap != "" {
+			sourceMaps[result.relOut+".map"] = result.sourceMap
+		}
 	}
 
-	return outputs, nil, nil
+	return outputs, sourceMaps, nil, nil
 }
 
 func compileProjectProgressLabels(sourceFiles []*ast.SourceFile) []string {
@@ -730,7 +764,15 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 		state.LogTruthyChanges = opts.LogTruthyChanges
 		state.OptimizedLoops = !opts.NoOptimizedLoops
 
-		text, diags, err := transformAndRenderDetailed(state)
+		var text string
+		var sourceMap string
+		var diags []DiagnosticInfo
+		var err error
+		if program.Options().SourceMap.IsTrue() {
+			text, sourceMap, diags, err = transformAndRenderSourceMapDetailed(state, sourceFile)
+		} else {
+			text, diags, err = transformAndRenderDetailed(state)
+		}
 		if err != nil {
 			result.err = err
 			return
@@ -748,6 +790,7 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 		}
 		result.relOut = filepath.ToSlash(relOut)
 		result.text = text
+		result.sourceMap = sourceMap
 	})
 	return result
 }
@@ -799,45 +842,85 @@ type rawEnforcedOptions struct {
 	moduleResolution    string // raw text; "" when absent or non-string
 	hasModuleResolution bool
 	types               []string // raw entries; nil when absent
-	importsNotUsed      string   // raw text; "" when absent or non-string
+	hasTypes            bool
+	importsNotUsed      string // raw text; "" when absent or non-string
 	hasImportsNotUsed   bool
 }
 
-// readRawEnforcedOptions extracts rawEnforcedOptions from the unsanitized
-// tsconfig.json text. Same root-file-only scope as SanitizeTSConfig (its
-// documented "extends" gap): an extended config carrying these options is
-// neither sanitized nor raw-validated. Unreadable/unparsable input returns the
-// zero value — tsoptions reports the parse error itself, before validation.
+// readRawEnforcedOptions merges raw values from the extends chain before
+// tsoptions sees the sanitizer's TS7 compatibility rewrites. Unreadable or
+// unparsable configs return zero values so tsoptions reports the parse error.
 func readRawEnforcedOptions(configPath string) rawEnforcedOptions {
-	var raw rawEnforcedOptions
+	return readRawEnforcedOptionsFromChain(configPath, make(map[string]struct{}))
+}
+
+func readRawEnforcedOptionsFromChain(configPath string, visited map[string]struct{}) rawEnforcedOptions {
+	normalized, err := filepath.Abs(configPath)
+	if err != nil {
+		return rawEnforcedOptions{}
+	}
+	normalized = filepath.Clean(normalized)
+	if _, ok := visited[normalized]; ok {
+		return rawEnforcedOptions{}
+	}
+	visited[normalized] = struct{}{}
+
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return raw
+		return rawEnforcedOptions{}
 	}
 	var root map[string]any
 	if json.Unmarshal([]byte(stripJSONC(string(data))), &root) != nil {
-		return raw
+		return rawEnforcedOptions{}
 	}
+
+	base := rawEnforcedOptions{}
+	if extends, ok := root["extends"].(string); ok {
+		parent, err := resolveExtendsPath(filepath.Dir(normalized), extends)
+		if err == nil {
+			base = readRawEnforcedOptionsFromChain(parent, visited)
+		}
+	}
+
+	current := rawEnforcedOptions{}
 	co, ok := root["compilerOptions"].(map[string]any)
 	if !ok {
-		return raw
+		return base
 	}
 	if v, ok := co["moduleResolution"]; ok {
-		raw.hasModuleResolution = true
-		raw.moduleResolution, _ = v.(string)
+		current.hasModuleResolution = true
+		current.moduleResolution, _ = v.(string)
 	}
-	if list, ok := co["types"].([]any); ok {
+	if value, present := co["types"]; present {
+		current.hasTypes = true
+		list, _ := value.([]any)
 		for _, e := range list {
 			if s, ok := e.(string); ok {
-				raw.types = append(raw.types, s)
+				current.types = append(current.types, s)
 			}
 		}
 	}
 	if v, ok := co["importsNotUsedAsValues"]; ok {
-		raw.hasImportsNotUsed = true
-		raw.importsNotUsed, _ = v.(string)
+		current.hasImportsNotUsed = true
+		current.importsNotUsed, _ = v.(string)
 	}
-	return raw
+	return mergeRawEnforcedOptions(base, current)
+}
+
+func mergeRawEnforcedOptions(base, overlay rawEnforcedOptions) rawEnforcedOptions {
+	if overlay.hasModuleResolution {
+		base.moduleResolution = overlay.moduleResolution
+		base.hasModuleResolution = true
+	}
+	if overlay.hasTypes {
+		base.types = overlay.types
+		base.hasTypes = true
+	}
+	if overlay.hasImportsNotUsed {
+		base.importsNotUsed = overlay.importsNotUsed
+		base.hasImportsNotUsed = true
+	}
+	return base
 }
 
 // validateCompilerOptions is the full port of
@@ -971,6 +1054,9 @@ func typeRootsContain(typeRoots []string, projectPath, rbxtsModules string) bool
 	for _, typeRoot := range typeRoots {
 		resolved := resolveAgainst(filepath.FromSlash(projectPath), filepath.FromSlash(typeRoot))
 		if filepath.ToSlash(filepath.Clean(resolved)) == want {
+			return true
+		}
+		if pathExists(resolved) {
 			return true
 		}
 	}

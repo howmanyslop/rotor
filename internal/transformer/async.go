@@ -71,12 +71,38 @@ func transformYieldExpression(s *State, node *ast.Node) luau.Expression {
 	return luau.NewCall(coroutineYield(), luau.NewList[luau.Expression](expression))
 }
 
-// wrapStatementsAsGenerator ports util/wrapStatementsAsGenerator.ts (L5-17) —
-// the ENTIRE util: the (already fully transformed) body is swapped for
-// `return TS.generator(function() <body> end)`. The OUTER function keeps the
-// original parameters; the inner wrapper function takes none.
+func isVarArgsPackingStatement(statement luau.Statement) bool {
+	declaration, ok := statement.(*luau.VariableDeclaration)
+	if !ok {
+		return false
+	}
+	array, ok := declaration.Right.(*luau.Array)
+	if !ok {
+		return false
+	}
+	members := array.Members.ToSlice()
+	if len(members) != 1 {
+		return false
+	}
+	_, ok = members[0].(*luau.VarArgsLiteral)
+	return ok
+}
+
 func wrapStatementsAsGenerator(s *State, node *ast.Node, statements *luau.List[luau.Statement]) *luau.List[luau.Statement] {
-	return luau.NewList[luau.Statement](
-		luau.NewReturn(luau.NewCall(s.RuntimeLib(node, "generator"), luau.NewList[luau.Expression](
-			luau.NewFunctionExpression(luau.NewList[luau.AnyIdentifier](), false, statements)))))
+	outerStatements := luau.NewList[luau.Statement]()
+	generatorStatements := luau.NewList[luau.Statement]()
+	statements.ForEach(func(statement luau.Statement) {
+		if isVarArgsPackingStatement(statement) {
+			outerStatements.Push(statement)
+			return
+		}
+		generatorStatements.Push(statement)
+	})
+	outerStatements.Push(luau.NewReturn(luau.NewCall(
+		s.RuntimeLib(node, "generator"),
+		luau.NewList[luau.Expression](
+			luau.NewFunctionExpression(luau.NewList[luau.AnyIdentifier](), false, generatorStatements),
+		),
+	)))
+	return outerStatements
 }

@@ -105,7 +105,93 @@ test("createTransformerList instantiates checker and compilerOptions factories",
     result.diagnostics,
     [],
   );
-  assert.match(result.transformed[0].text, /checker:options:start/);
+  assert.match(result.transformed[0].text, /options:checker:start/);
+});
+
+test("createTransformerList reports a non-function export as an error", () => {
+  const program = createProgram();
+  const { diagnostics } = sidecar.createTransformerList(ts, program, [
+    {
+      transform: "./plugins/prefix-string-named.js",
+      import: "missingTransformer",
+    },
+  ], projectDir);
+
+  assert.equal(diagnostics.length, 1);
+  assert.equal(diagnostics[0].category, "error");
+  assert.equal(diagnostics[0].code, "transformer-not-found");
+  assert.match(diagnostics[0].message, /Transformer `\.\/plugins\/prefix-string-named\.js` failed to load!/);
+  assert.match(diagnostics[0].message, /factory not a function/);
+  assert.match(diagnostics[0].message, /Suggestion: Did you forget to install the package, or to build it\?/);
+});
+
+test("transformSourceFiles omits source files whose transformers preserve identity", () => {
+  const program = createProgram();
+  const sourceFile = program.getSourceFile(sourcePath);
+  assert.ok(sourceFile, "expected source file");
+
+  const result = sidecar.transformSourceFiles(ts, program, [sourceFile], {
+    before: [() => (file) => file],
+    after: [],
+    afterDeclarations: [],
+  });
+
+  assert.deepEqual(result.diagnostics, []);
+  assert.deepEqual(result.transformed, []);
+});
+
+test("afterDeclarations emits only declaration output with builtin path rewrites", () => {
+  const declarationProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "rotor-sidecar-declaration-"));
+  const sourceDir = path.join(declarationProjectDir, "src");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(declarationProjectDir, "marker.js"),
+    `const ts = require(${JSON.stringify(require.resolve("typescript"))});
+module.exports = () => context => sourceFile => {
+  const marker = context.factory.createVariableStatement(undefined, context.factory.createVariableDeclarationList([
+    context.factory.createVariableDeclaration("__DECLARATION_MARKER__", undefined, undefined, context.factory.createStringLiteral("after-declarations")),
+  ], ts.NodeFlags.Const));
+  return context.factory.updateSourceFile(sourceFile, sourceFile.statements.concat([marker]));
+};
+`,
+  );
+  fs.writeFileSync(
+    path.join(declarationProjectDir, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        declaration: true,
+        module: "CommonJS",
+        moduleResolution: "Node",
+        noLib: true,
+        strict: true,
+        target: "ESNext",
+        baseUrl: ".",
+        paths: { "@alias/*": ["src/*"] },
+        rootDir: "src",
+        outDir: "out",
+        plugins: [{ transform: "./marker.js", afterDeclarations: true }],
+      },
+      include: ["src"],
+    }),
+  );
+  const mainFile = path.join(sourceDir, "main.ts");
+  fs.writeFileSync(mainFile, 'import type { Value } from "@alias/value";\nexport type Output = Value;\n');
+  fs.writeFileSync(path.join(sourceDir, "value.ts"), "export interface Value { name: string; }\n");
+
+  const session = new sidecar.SidecarProjectSession(ts, declarationProjectDir, path.join(declarationProjectDir, "tsconfig.json"));
+  const response = session.handleRequest({
+    protocol: 1,
+    projectDir: declarationProjectDir,
+    tsConfigPath: path.join(declarationProjectDir, "tsconfig.json"),
+    compileFileNames: [mainFile],
+    changedFiles: [],
+  });
+
+  assert.deepEqual(response.diagnostics, []);
+  assert.deepEqual(response.transformed, []);
+  assert.equal(response.declarations.length, 1);
+  assert.match(response.declarations[0].text, /__DECLARATION_MARKER__/);
+  assert.match(response.declarations[0].text, /from "\.\/value"/);
 });
 
 test("transformSourceFiles repairs orphaned parents between transformers", () => {
@@ -143,7 +229,7 @@ test("transformSourceFiles repairs orphaned parents between transformers", () =>
   assert.match(result.transformed[0].text, /synthetic/);
 });
 
-test("main.js serves protocol v1 requests and reuses overlay updates", async () => {
+test("main.js runs before then after, excludes afterDeclarations, and reuses overlay updates", async () => {
   const child = spawn(process.execPath, [mainPath], {
     cwd: path.resolve(__dirname, ".."),
     stdio: ["pipe", "pipe", "pipe"],
@@ -167,7 +253,7 @@ test("main.js serves protocol v1 requests and reuses overlay updates", async () 
     const firstResponse = await firstResponsePromise;
     assert.deepEqual(firstResponse.diagnostics, []);
     assert.equal(firstResponse.transformed.length, 1);
-    assert.match(firstResponse.transformed[0].text, /afterDeclarations:before:after:start/);
+    assert.match(firstResponse.transformed[0].text, /after:before:start/);
 
     const secondResponsePromise = readProtocolLine(child.stdout);
     child.stdin.write(`${JSON.stringify({
@@ -186,13 +272,99 @@ test("main.js serves protocol v1 requests and reuses overlay updates", async () 
     const secondResponse = await secondResponsePromise;
     assert.deepEqual(secondResponse.diagnostics, []);
     assert.equal(secondResponse.transformed.length, 1);
-    assert.match(secondResponse.transformed[0].text, /afterDeclarations:before:after:memory/);
+    assert.match(secondResponse.transformed[0].text, /after:before:memory/);
   } finally {
     child.stdin.end();
     await new Promise((resolve) => child.once("exit", resolve));
   }
 
   assert.deepEqual(stderr, []);
+});
+
+test("main.js honors shouldTransformSourceFile and omits skipped source files", () => {
+  const hookProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "rotor-sidecar-hook-"));
+  const sourceDir = path.join(hookProjectDir, "src");
+  fs.mkdirSync(sourceDir, { recursive: true });
+
+  fs.writeFileSync(
+    path.join(hookProjectDir, "selective-plugin.js"),
+    `const ts = require(${JSON.stringify(require.resolve("typescript"))});
+
+function prefix(prefix) {
+  return (context) => {
+    const visit = (node) => {
+      if (ts.isStringLiteral(node)) {
+        return ts.factory.createStringLiteral(prefix + ":" + node.text);
+      }
+      return ts.visitEachChild(node, visit, context);
+    };
+    return (sourceFile) => ts.visitNode(sourceFile, visit);
+  };
+}
+
+module.exports = function () {
+  return {
+    before: prefix("before"),
+    after: prefix("after"),
+    afterDeclarations: prefix("afterDeclarations"),
+  };
+};
+
+module.exports.shouldTransformSourceFile = function (sourceFile, program, config) {
+  if (!program.getTypeChecker() || config.transform !== "./selective-plugin.js") {
+    throw new Error("missing source-file hook inputs");
+  }
+  return sourceFile.fileName.endsWith("selected.ts");
+};
+`,
+  );
+  fs.writeFileSync(
+    path.join(hookProjectDir, "no-hooks-plugin.js"),
+    `module.exports = function () { return {}; };
+module.exports.shouldTransformSourceFile = true;
+`,
+  );
+  fs.writeFileSync(
+    path.join(hookProjectDir, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        module: "CommonJS",
+        moduleResolution: "Node",
+        noLib: true,
+        moduleDetection: "force",
+        target: "ESNext",
+        types: [],
+        rootDir: "src",
+        outDir: "out",
+        plugins: [{ transform: "./selective-plugin.js" }, { transform: "./no-hooks-plugin.js" }],
+      },
+      include: ["src"],
+    }),
+  );
+  const selectedPath = path.join(sourceDir, "selected.ts");
+  const skippedPath = path.join(sourceDir, "skipped.ts");
+  fs.writeFileSync(selectedPath, 'export const phase = "selected";\n');
+  fs.writeFileSync(skippedPath, 'export const phase = "skipped";\n');
+
+  const result = spawnSync(process.execPath, [mainPath], {
+    input: `${JSON.stringify({
+      protocol: 1,
+      projectDir: hookProjectDir,
+      tsConfigPath: path.join(hookProjectDir, "tsconfig.json"),
+      compileFileNames: [selectedPath, skippedPath],
+      changedFiles: [],
+    })}\n`,
+    encoding: "utf8",
+    cwd: hookProjectDir,
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  const response = JSON.parse(result.stdout.trim());
+  assert.deepEqual(response.diagnostics, []);
+  assert.equal(response.transformed.length, 1);
+  assert.equal(response.transformed[0].fileName, selectedPath);
+  assert.match(response.transformed[0].text, /after:before:selected/);
+  assert.doesNotMatch(response.transformed[0].text, /afterDeclarations/);
 });
 
 test("main.js keeps plugin console.log off the protocol stream", () => {

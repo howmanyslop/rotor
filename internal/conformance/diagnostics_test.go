@@ -27,12 +27,18 @@ func TestDiagnosticsCorpus(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if tc.Exact {
+				if !slices.Equal(got, tc.ExpectedIDs) {
+					t.Fatalf("got diagnostics %v, want %v", got, tc.ExpectedIDs)
+				}
+				return
+			}
 			if len(got) == 0 {
-				t.Fatalf("expected diagnostic %q, got none", tc.ExpectedID)
+				t.Fatalf("expected diagnostic %q, got none", tc.ExpectedIDs[0])
 			}
 			for _, id := range got {
-				if id != tc.ExpectedID {
-					t.Fatalf("expected only %q, got %v", tc.ExpectedID, got)
+				if id != tc.ExpectedIDs[0] {
+					t.Fatalf("expected only %q, got %v", tc.ExpectedIDs[0], got)
 				}
 			}
 		})

@@ -32,7 +32,7 @@ func transformInitializer(s *State, id luau.WritableExpression, initializer *ast
 //   - a TS `this` parameter emits nothing (its only effect is via isMethod);
 //   - rest `...args` sets hasDotDotDot and prepends `local args = { ... }`;
 //   - defaults run BEFORE destructuring, via transformInitializer.
-func transformParameters(s *State, node *ast.Node) (parameters *luau.List[luau.AnyIdentifier], statements *luau.List[luau.Statement], hasDotDotDot bool) {
+func transformParameters(s *State, node *ast.Node) (parameters *luau.List[luau.AnyIdentifier], statements *luau.List[luau.Statement], hasDotDotDot bool, varArgsData *VarArgsData) {
 	parameters = luau.NewList[luau.AnyIdentifier]()
 	statements = luau.NewList[luau.Statement]()
 
@@ -48,7 +48,7 @@ func transformParameters(s *State, node *ast.Node) (parameters *luau.List[luau.A
 			continue
 		}
 
-		if parameter.DotDotDotToken != nil && ast.IsArrayBindingPattern(name) {
+		if parameter.DotDotDotToken != nil && ast.IsArrayBindingPattern(name) && !arrayLikeExpressionContainsSpread(name) {
 			// `...[a, b]: [A, B]` flattens the pattern elements into real
 			// parameters (no `...` capture).
 			statements.PushList(s.CaptureStatements(func() {
@@ -67,9 +67,16 @@ func transformParameters(s *State, node *ast.Node) (parameters *luau.List[luau.A
 
 		if parameter.DotDotDotToken != nil {
 			hasDotDotDot = true
-			// local args = { ... }
-			statements.Push(luau.NewVariableDeclaration(paramID,
-				luau.NewArray(luau.NewList[luau.Expression](luau.NewVarArgs()))))
+			varArgsData = analyzeVarArgsOptimization(s, parameterNode.AsNode(), node)
+			if varArgsData.IsOptimizable {
+				if varArgsData.SizeAccessCount+varArgsData.ForOfAccessCount > 1 {
+					varArgsData.LengthID = luau.TempID("args_length")
+					statements.Push(luau.NewVariableDeclaration(varArgsData.LengthID, createVarArgsLengthSelect()))
+				}
+			} else {
+				statements.Push(luau.NewVariableDeclaration(paramID,
+					luau.NewArray(luau.NewList[luau.Expression](luau.NewVarArgs()))))
+			}
 		} else {
 			parameters.Push(paramID)
 		}
@@ -90,13 +97,14 @@ func transformParameters(s *State, node *ast.Node) (parameters *luau.List[luau.A
 		}
 	}
 
-	return parameters, statements, hasDotDotDot
+	return parameters, statements, hasDotDotDot, varArgsData
 }
 
 // optimizeArraySpreadParameter ports transformParameters.ts
 // optimizeArraySpreadParameter (L16-51): parameters in the form
 // `...[a, b, c]: [A, B, C]` become just `(a, b, c)`. An omitted element gets
-// a placeholder temp parameter; a rest element raises noSpreadDestructuring
+// a placeholder temp parameter; a rest element raises
+// noNestedSpreadsInAssignmentPatterns
 // and aborts the pattern; nested patterns get a `_param` temp destructured
 // in the body (initializer first, then the recursion). Callers capture the
 // prereqs into the body-head statements.
@@ -107,7 +115,7 @@ func optimizeArraySpreadParameter(s *State, parameters *luau.List[luau.AnyIdenti
 		} else {
 			bindingElement := element.AsBindingElement()
 			if bindingElement.DotDotDotToken != nil {
-				s.Diags.Add(DiagNoSpreadDestructuring(element))
+				s.Diags.Add(DiagNoNestedSpreadsInAssignmentPatterns(element))
 				return
 			}
 			name := bindingElement.Name()

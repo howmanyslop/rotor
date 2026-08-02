@@ -40,20 +40,18 @@ func TestNestedDestructuring(t *testing.T) {
 		name = "n",
 	},
 }
-local _binding = data
-local _binding_1 = _binding.list
-local u = _binding_1[1]
-local v = _binding_1[2]
-local _binding_2 = _binding.info
-local name = _binding_2.name
+local _binding = data.list
+local u = _binding[1]
+local v = _binding[2]
+local _binding_1 = data.info
+local name = _binding_1.name
 local records = { {
 	id = 1,
 }, {
 	id = 2,
 } }
-local _binding_3 = records
-local _binding_4 = _binding_3[1]
-local firstId = _binding_4.id
+local _binding_2 = records[1]
+local firstId = _binding_2.id
 print(u, v, name, firstId)
 `
 	if got := renderDestructuringFile(t, "src/nested.ts"); got != want {
@@ -93,9 +91,8 @@ print(a, b, c)
 // literal-RHS multi-local form a hole becomes a `_` placeholder local.
 func TestDestructuringOmittedElements(t *testing.T) {
 	want := `local arr = { 1, 2, 3, 4, 5 }
-local _binding = arr
-local second = _binding[2]
-local fourth = _binding[4]
+local second = arr[2]
+local fourth = arr[4]
 local _, y = 10, 20
 print(second, fourth, y)
 `
@@ -179,35 +176,18 @@ print(d1, d2, e1)
 // statement WITHOUT pushing the result onto the idStack, so the following
 // element re-reads from the start (upstream quirk, ported verbatim).
 func TestIterationAccessors(t *testing.T) {
-	want := `local _binding = pairsIter
-local p1 = { _binding() }
-local p2 = { _binding() }
+	want := `local p1 = { pairsIter() }
+local p2 = { pairsIter() }
 print(p1[1], p2[2])
-local _binding_1 = nums
-_binding_1()
-local second = _binding_1()
+nums()
+local second = nums()
 print(second)
-local _binding_2 = tags
-next(_binding_2)
-local _value = next(_binding_2)
+next(tags)
+local _value = next(tags)
 local t2 = _value
 print(t2)
 `
 	if got := renderDestructuringFile(t, "src/iteraccessors.ts"); got != want {
 		t.Errorf("rendered output differs from rbxtsc:\ngot:\n%s\nwant:\n%s", got, want)
-	}
-}
-
-// TestNoSpreadDestructuringDiagnostics: rest elements raise
-// noSpreadDestructuring in all three positions — array binding pattern,
-// array assignment pattern, and object binding pattern. rbxtsc 3.0.0 reports
-// exactly "Operator `...` is not supported for destructuring!" for each
-// (verified via the oracle project).
-func TestNoSpreadDestructuringDiagnostics(t *testing.T) {
-	for _, relPath := range []string{"src/restbinding.ts", "src/restassign.ts", "src/restobject.ts"} {
-		ds := destructuringDiagnostics(t, relPath)
-		if !hasDiagnostic(ds, "noSpreadDestructuring", "Operator `...` is not supported for destructuring!") {
-			t.Errorf("%s: no noSpreadDestructuring diagnostic; got: %v", relPath, ds)
-		}
 	}
 }

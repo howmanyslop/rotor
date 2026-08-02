@@ -22,7 +22,7 @@ func TestBuildProjectIncrementalRebuildsChangedFilesAndImporters(t *testing.T) {
 		t.Fatalf("first build diagnostics: %v", diags)
 	}
 
-	buildInfoPath := filepath.Join(dir, "out", "cache.tsbuildinfo")
+	buildInfoPath := filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")
 	buildInfo, err := os.ReadFile(buildInfoPath)
 	if err != nil {
 		t.Fatalf("read build info: %v", err)

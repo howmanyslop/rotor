@@ -1,0 +1,29 @@
+{
+  "description": "Before transformers run before after transformers",
+  "category": "plugin",
+  "expectedExitCode": 0,
+  "artifactChecks": {
+    "requireLuau": true,
+    "requiredTexts": [
+      {
+        "suffix": ".luau",
+        "text": "__ORDER_BEFORE__"
+      },
+      {
+        "suffix": ".luau",
+        "text": "__ORDER_AFTER__"
+      }
+    ],
+    "requireSourceMap": false
+  },
+  "invocations": [
+    {
+      "name": "build",
+      "arguments": [
+        "build",
+        "--project",
+        "."
+      ]
+    }
+  ]
+}

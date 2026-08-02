@@ -66,6 +66,22 @@ function getTransformerFromFactory(ts, factory, config, program) {
   return transformer;
 }
 
+function wrapWithShouldTransform(ts, transformer, shouldTransformSourceFile, program, config) {
+  if (typeof shouldTransformSourceFile !== "function") {
+    return transformer;
+  }
+
+  return (context) => {
+    const transform = transformer(context);
+    return (sourceFile) => {
+      if (!ts.isSourceFile(sourceFile) || shouldTransformSourceFile(sourceFile, program, config)) {
+        return transform(sourceFile);
+      }
+      return sourceFile;
+    };
+  };
+}
+
 function createTransformerList(ts, program, configs, baseDir) {
   const transforms = {
     before: [],
@@ -82,7 +98,9 @@ function createTransformerList(ts, program, configs, baseDir) {
     try {
       const modulePath = require.resolve(config.transform, { paths: [baseDir] });
       const requiredModule = require(modulePath);
-      const factoryModule = typeof requiredModule === "function" ? { default: requiredModule } : requiredModule;
+      const factoryModule = typeof requiredModule === "function"
+        ? Object.assign({ default: requiredModule }, requiredModule)
+        : requiredModule;
       const factory = factoryModule[config.import ?? "default"];
 
       if (typeof factory !== "function") {
@@ -93,15 +111,18 @@ function createTransformerList(ts, program, configs, baseDir) {
       if (!transformer) {
         continue;
       }
+      const shouldTransformSourceFile = factoryModule.shouldTransformSourceFile;
 
       if (transformer.afterDeclarations) {
-        transforms.afterDeclarations.push(transformer.afterDeclarations);
+        transforms.afterDeclarations.push(
+          wrapWithShouldTransform(ts, transformer.afterDeclarations, shouldTransformSourceFile, program, config),
+        );
       }
       if (transformer.after) {
-        transforms.after.push(transformer.after);
+        transforms.after.push(wrapWithShouldTransform(ts, transformer.after, shouldTransformSourceFile, program, config));
       }
       if (transformer.before) {
-        transforms.before.push(transformer.before);
+        transforms.before.push(wrapWithShouldTransform(ts, transformer.before, shouldTransformSourceFile, program, config));
       }
     } catch (error) {
       diagnostics.push(createPluginNotFoundDiagnostic(config.transform, error));
@@ -113,9 +134,8 @@ function createTransformerList(ts, program, configs, baseDir) {
 
 function flattenIntoTransformers(transforms) {
   return [
-    ...transforms.after,
     ...transforms.before,
-    ...transforms.afterDeclarations,
+    ...transforms.after,
   ];
 }
 

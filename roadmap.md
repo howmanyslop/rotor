@@ -1,14 +1,15 @@
 # rotor Roadmap
 
 rotor is a native Go reimplementation of the roblox-ts compiler (`rbxtsc`), built on
-[typescript-go](https://github.com/microsoft/typescript-go). The contract: **byte-identical
-Luau output** vs roblox-ts 3.0.0 (header-normalized), the same `@rbxts/*` ecosystem, the
-same CLI — at roughly 10x the speed.
+[typescript-go](https://github.com/microsoft/typescript-go). The contract is upstream
+parity on unaffected surfaces, with the verified `@isentinel/roblox-ts@4.0.11` fork
+archive authoritative for fork-changed surfaces. The same `@rbxts/*` ecosystem and CLI
+remain the target, at roughly 10x the speed.
 
 - **Design spec:** `docs/superpowers/specs/2026-06-05-rotor-design.md`
 - **Detailed plans:** `docs/superpowers/plans/`
 - **Porting source of truth:** research digests in `docs/superpowers/research/` (authority order: `reference/` > digest > plan > tests)
-- **Acceptance test:** the real `randomness` game project compiles byte-identical to rbxtsc 3.0.0
+- **Acceptance test:** the real `randomness` game project follows the applicable upstream or fork-authoritative oracle for each surface
 
 Legend: ✅ done · 🚧 in progress · ⬜ not started
 
@@ -27,11 +28,10 @@ Legend: ✅ done · 🚧 in progress · ⬜ not started
 | **5** | Conformance — upstream behavioral suite, diagnostics corpus, acceptance | ✅ |
 | | **v1.0 — drop-in `rbxtsc` replacement** | ✅ |
 
-**Measured progress:** 43/43 differential fixtures and 44/44 conformance goldens are
-byte-identical to real rbxtsc 3.0.0; the vendored behavioral suite passes under Lune
-(`460 passed, 0 failed, 0 skipped` on June 7, 2026); the full vendored diagnostics corpus
-passes without skips; and the real `randomness` project compares byte-for-byte across
-`out/` + `include/` (`95/95` files, zero divergent, zero blocked).
+**Measured progress:** the differential and conformance harnesses cover the upstream
+reference plus fork-authoritative fixtures; upstream behavioral and diagnostics suites
+remain regression oracles where the fork has not changed behavior. Fork-divergent
+fixtures are not counted as upstream matches.
 
 ---
 
@@ -88,7 +88,7 @@ becomes the backbone for every later phase.*
 - [x] **Task 1: Fixtures + goldens** — 14–19 (functions, arrows, destructuring, for-of, switch, closures)
 - [x] **Task 2: Reference walker + loop closure copies + case hoisting** — `eachSymbolReferenceInFile` port; the real closure-copy machinery replaces Phase 2's panic; fixes the body-write loop divergence
 - [x] **Task 3: Functions** — declarations/expressions/arrows, parameters (defaults, rest, implicit `self`, `this` elision), bodiless overloads, `export default function`
-- [x] **Task 4: Destructuring** — array/object binding + assignment patterns, nesting, defaults, omitted elements, swap pattern, `noSpreadDestructuring`
+- [x] **Task 4: Destructuring** — array/object binding + assignment patterns, nesting, defaults, omitted elements, and swap pattern
 - [x] **Task 5: for-of (arrays)** — `for _, x in exp do` shapes, inline destructure fast path, builder dispatch table (non-array → clean diagnostics)
 - [x] **Task 6: switch** — repeat-until-true wrapper, `_fallthrough` flag, clauses-after-default quirk, case-clause hoisting
 - [x] **Task 7: Conformance sweep + merge** — adversarial fixture 20, first `randomness` real-world smoke (14/95 byte-identical; blocker table drove Phase 3 priorities)
@@ -153,6 +153,24 @@ Everything that makes rotor a usable CLI tool rather than a compile library.*
 - [x] **CLI logging + DX** — new `internal/term` color/style layer (NO_COLOR/FORCE_COLOR aware, Windows VT enablement, glyphs with ASCII fallbacks) and `cmd/rotor/ui.go`: clean colored `build`/`check`/`watch` output (banner, ✓/✗ result blocks, throughput, colored failures, watch change/idle lines). `internal/logservice` left byte-stable for differential tests. New `--cpuprofile <path>` diagnostics flag.
 - [x] V1 cleanup triage — the remaining non-surface cleanup (`TransformStatement` func-var removal) is tracked as post-v1 engineering follow-up rather than a parity blocker; warmer sidecar watch sessions landed June 10, 2026
 - [x] Known cleanup: `getLastToken` block-`}` trailing-comment handling
+
+### Fork parity boundary (July 2026)
+
+The committed `roblox-ts.zip` archive is the authority for surfaces changed by the
+`@isentinel/roblox-ts@4.0.11` fork: varargs optimization, object-rest direct access,
+the `rbxts` option cascade, `.luau.map` source maps, the copy-files gate, the Rojo
+resolver cache, solution builds, and solution watch. The older `reference/roblox-ts`
+tree remains the upstream parity reference for unaffected code only. User-facing
+schema and help must describe the fork behavior without presenting upstream-only
+diagnostic names or cache layouts as Rotor contracts.
+
+The project layer also publishes these generated build-state boundaries: `rbxts.copyfiles.json`
+in `outDir`, the fork-compatible `rbxts.rojocache.json` name protected from cleanup,
+`.rotor/cache/rojo/` for Rotor's hashed resolver state, adjacent `.luau.map` files when
+source maps are enabled, and `*.rbxtsc.tsbuildinfo` for Rotor incremental state.
+`RBXTSC_WRITE_CONCURRENCY`, `ROTOR_WRITE_WORKERS`,
+`UV_THREADPOOL_SIZE`, and `ROTOR_PRESERVE_DTS_MAPS=1` are documented tuning and cleanup
+controls, not tsconfig options.
 
 ## Phase 5 — Conformance ✅
 

@@ -1,0 +1,5 @@
+{
+  "captureCommand": "VerifyAndExtract(FindZip(repoRoot)); node \u003cextractDir\u003e/roblox-ts/dist/CLI/cli.cjs build --project \u003cfixtureDir\u003e [--build]",
+  "compilerVersion": "@isentinel/roblox-ts@4.0.11",
+  "zipDigest": "a0f097baefaa02ae411f18ea19a150c0076bfd2adbc6645dcef02e2c162cea5a"
+}

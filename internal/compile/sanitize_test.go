@@ -341,4 +341,23 @@ func TestSanitizeFSOnlyTouchesTSConfig(t *testing.T) {
 	if got != raw {
 		t.Errorf("my-tsconfig.json was sanitized; got %q, want %q", got, raw)
 	}
+
+	configPath := filepath.Join(tmp, "tsconfig.json")
+	parentPath := filepath.Join(tmp, "tsconfig.base.json")
+	parentRaw := `{"compilerOptions": {"downlevelIteration": true, "baseUrl": ".", "moduleResolution": "Node"}}`
+	if err := os.WriteFile(configPath, []byte(`{"extends": "./tsconfig.base.json"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(parentPath, []byte(parentRaw), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	chainWrapped := SanitizeFSWithConfigPath(inner, configPath)
+	got, ok = chainWrapped.ReadFile(parentPath)
+	if !ok {
+		t.Fatal("tsconfig.base.json unreadable through SanitizeFSWithConfigPath")
+	}
+	if strings.Contains(got, "downlevelIteration") || strings.Contains(got, "baseUrl") || !strings.Contains(got, `"moduleResolution": "bundler"`) {
+		t.Errorf("tsconfig.base.json in extends chain was not sanitized: %s", got)
+	}
 }

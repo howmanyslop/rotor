@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"rotor/internal/compile"
 	"rotor/internal/config"
 )
 
@@ -22,6 +23,23 @@ func TestCmdSchemaPrintsSchema(t *testing.T) {
 	var v any
 	if err := json.Unmarshal(buf.Bytes(), &v); err != nil {
 		t.Fatalf("schema output is not valid JSON: %v", err)
+	}
+}
+
+func TestCmdSchemaPrintsRbxtsSchema(t *testing.T) {
+	var buf bytes.Buffer
+	if code := writeRbxtsSchema(&buf); code != 0 {
+		t.Fatalf("writeRbxtsSchema exit = %d", code)
+	}
+	if buf.String() != compile.RbxtsTsConfigSchema {
+		t.Error("writeRbxtsSchema output differs from compile.RbxtsTsConfigSchema")
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &schema); err != nil {
+		t.Fatalf("rbxts schema output is not valid JSON: %v", err)
+	}
+	if _, ok := schema["properties"].(map[string]any)["rbxts"]; !ok {
+		t.Error("rbxts schema does not define the rbxts property")
 	}
 }
 

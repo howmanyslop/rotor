@@ -354,6 +354,12 @@ func IsMapType(s *State) TypeCheck {
 	}}
 }
 
+// IsSharedTableType reports whether t is the ambient SharedTable type. SharedTable
+// uses Map-shaped iteration, but is not a native Map constructor or macro type.
+func IsSharedTableType(s *State, t *checker.Type) bool {
+	return symbolIsAmbient(s, t, "SharedTable")
+}
+
 // IsGeneratorType ports isGeneratorType (L153-155).
 func IsGeneratorType(s *State) TypeCheck {
 	return TypeCheck{check: func(t *checker.Type) bool {

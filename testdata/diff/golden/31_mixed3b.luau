@@ -89,10 +89,9 @@ end
 -- destructuring FROM a Set feeding $tuple, consumed inside a Map for-of with
 -- an omitted key binding
 local function firstTwo(tags)
-	local _binding = tags
-	local _value = next(_binding)
+	local _value = next(tags)
 	local a = _value
-	local _value_1 = next(_binding, _value)
+	local _value_1 = next(tags, _value)
 	local b = _value_1
 	return a, b
 end

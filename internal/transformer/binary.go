@@ -84,8 +84,8 @@ func createBinaryFromOperator(s *State, left luau.Expression, leftType *checker.
 	}
 
 	// bitwise
-	if bit32Name, ok := bitwiseOperatorMap[operatorKind]; ok {
-		return luau.NewCall(luau.GlobalProperty("bit32", bit32Name), luau.NewList[luau.Expression](left, right))
+	if _, ok := bitwiseOperatorMap[operatorKind]; ok {
+		return createBitwiseCall(operatorKind, []luau.Expression{left, right})
 	}
 
 	if operatorKind == ast.KindCommaToken {
@@ -143,7 +143,8 @@ func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 				return rightExp
 			}
 
-			if luau.IsCall(rightExp) && IsLuaTupleType(s).Check(s.GetType(expression.Right)) {
+			if luau.IsCall(rightExp) && IsLuaTupleType(s).Check(s.GetType(expression.Right)) &&
+				!arrayLikeExpressionContainsSpread(expression.Left) {
 				transformOptimizedArrayAssignmentPattern(s, expression.Left, rightExp)
 				if !isUsedAsStatement(node) {
 					s.Diags.Add(DiagNoLuaTupleDestructureAssignmentExpression(node))
@@ -151,7 +152,8 @@ func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 				return luau.NewNone()
 			}
 
-			if array, ok := rightExp.(*luau.Array); ok && array.Members.IsNonEmpty() && isUsedAsStatement(node) {
+			if array, ok := rightExp.(*luau.Array); ok && array.Members.IsNonEmpty() && isUsedAsStatement(node) &&
+				!arrayLikeExpressionContainsSpread(expression.Left) {
 				transformOptimizedArrayAssignmentPattern(s, expression.Left, array.Members)
 				return luau.NewNone()
 			}
@@ -183,6 +185,10 @@ func transformBinaryExpression(s *State, node *ast.Node) luau.Expression {
 			return createAssignmentExpression(s, assignment.writable, operator, getAssignableValue(s, operator, assignment.value, valueType))
 		}
 		return createCompoundAssignmentExpression(s, assignment.writable, writableType, assignment.readable, operatorKind, assignment.value, valueType)
+	}
+
+	if isBitwiseOperator(operatorKind) {
+		return createBitwiseFromOperator(s, operatorKind, node)
 	}
 
 	ordered := ensureTransformOrder(s, []*ast.Node{expression.Left, expression.Right})

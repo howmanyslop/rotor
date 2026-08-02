@@ -120,11 +120,8 @@ func (w *treeWatcher) walk(dir string, stamps map[string]fileStamp) {
 		if isJunkFile(name) {
 			continue
 		}
-		// rotor's own generated companions are refreshed by the build itself;
-		// watching them would turn the first auto-write into a spurious
-		// rebuild (and a user edit is overwritten on the next pass anyway). The
-		// legacy per-macro names are still ignored for upgraded projects.
-		if strings.EqualFold(name, compile.RotorTypesFileName) ||
+		if strings.EqualFold(name, "flamework.build") ||
+			strings.EqualFold(name, compile.RotorTypesFileName) ||
 			strings.EqualFold(name, compile.EnvDeclFileName) ||
 			strings.EqualFold(name, compile.AssetDeclFileName) ||
 			strings.EqualFold(name, compile.MacroDeclFileName) {
@@ -224,11 +221,11 @@ func settleChanges(base, first map[string]fileStamp, snap func() map[string]file
 // runWatch runs an initial check, then polls the watched file set (the parsed
 // file list plus tsconfig.json) and re-runs the full check whenever anything
 // changes. Exits only via Ctrl+C.
-func runWatch(dir string, out io.Writer) int {
+func runWatch(dir string, out io.Writer, checkers *int) int {
 	u := newUI(out)
 	stats := &watchStats{}
 
-	res := runCheck(dir, out)
+	res := runCheck(dir, out, checkers)
 	stats.record(res.elapsed)
 	stamps := snapshotFiles(res.watchFiles)
 	u.watchBanner(len(res.watchFiles), stats)
@@ -249,7 +246,7 @@ func runWatch(dir string, out io.Writer) int {
 		}
 		u.watchChanges(changed)
 
-		res = runCheck(dir, out)
+		res = runCheck(dir, out, checkers)
 		stats.record(res.elapsed)
 		// Stamp NEW files at their current state, but keep the pre-check
 		// stamps for surviving files so an edit made while the check ran is

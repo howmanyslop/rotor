@@ -61,6 +61,24 @@ func TestTreeWatcherSnapshotPrunesAndDetectsAddedFiles(t *testing.T) {
 	}
 }
 
+func TestTreeWatcherSnapshotIgnoresFlameworkBuild(t *testing.T) {
+	root := t.TempDir()
+	sourceFile := filepath.Join(root, "src", "main.ts")
+	flameworkBuild := filepath.Join(root, "flamework.build")
+	writeTestFile(t, sourceFile, "export {}\n")
+	writeTestFile(t, flameworkBuild, "{\"version\":1}\n")
+
+	w := newTreeWatcher(root)
+	before := w.snapshot()
+	writeTestFile(t, flameworkBuild, "{\"version\":2}\n")
+	writeTestFile(t, sourceFile, "export const value = 1\n")
+
+	changed := diffStamps(before, w.snapshot())
+	if !reflect.DeepEqual(changed, []string{sourceFile}) {
+		t.Fatalf("diffStamps = %v, want [%s]", changed, sourceFile)
+	}
+}
+
 func TestDiffStampsReportsRemovedAndModifiedFiles(t *testing.T) {
 	root := t.TempDir()
 	gone := filepath.Join(root, "src", "gone.ts")

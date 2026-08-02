@@ -140,18 +140,25 @@ func shouldWrapLuaTuple(s *State, node *ast.Node, exp luau.Expression) bool {
 	// `const [a] = foo()`
 	if ast.IsVariableDeclaration(parent) {
 		name := parent.AsVariableDeclaration().Name()
-		if name != nil && ast.IsArrayBindingPattern(name) && !arrayBindingPatternContainsHoists(s, name) {
+		if name != nil && ast.IsArrayBindingPattern(name) &&
+			!arrayBindingPatternContainsHoists(s, name) &&
+			!arrayLikeExpressionContainsSpread(name) &&
+			node.AsCallExpression().QuestionDotToken == nil {
 			return false
 		}
 	}
 
 	// `[a] = foo()`
 	if ast.IsAssignmentExpression(parent, false) && ast.IsArrayLiteralExpression(parent.AsBinaryExpression().Left) {
-		return false
+		left := parent.AsBinaryExpression().Left
+		if !arrayLikeExpressionContainsSpread(left) && node.AsCallExpression().QuestionDotToken == nil {
+			return false
+		}
 	}
 
 	// `foo()[n]`
-	if ast.IsElementAccessExpression(parent) {
+	if ast.IsElementAccessExpression(parent) && node.AsCallExpression().QuestionDotToken == nil &&
+		parent.AsElementAccessExpression().QuestionDotToken == nil {
 		return false
 	}
 
@@ -170,7 +177,7 @@ func shouldWrapLuaTuple(s *State, node *ast.Node, exp luau.Expression) bool {
 
 // wrapReturnIfLuaTuple ports wrapReturnIfLuaTuple.ts (L58-63).
 func wrapReturnIfLuaTuple(s *State, node *ast.Node, exp luau.Expression) luau.Expression {
-	if IsLuaTupleType(s).Check(s.GetType(node)) && shouldWrapLuaTuple(s, node, exp) {
+	if IsLuaTupleType(s).Check(s.Checker.GetNonNullableType(s.GetType(node))) && shouldWrapLuaTuple(s, node, exp) {
 		return luau.NewArray(luau.NewList[luau.Expression](exp))
 	}
 	return exp
@@ -284,6 +291,27 @@ func fixVoidArgumentsForRobloxFunctions(s *State, expType *checker.Type, args []
 	}
 }
 
+func tryTransformOptimizableVarArgsSizeCall(s *State, node *ast.Node) luau.Expression {
+	call := node.AsCallExpression()
+	if !ast.IsPropertyAccessExpression(call.Expression) {
+		return nil
+	}
+
+	propertyAccess := call.Expression.AsPropertyAccessExpression()
+	if propertyAccess.Name().Text() != "size" {
+		return nil
+	}
+
+	data := s.getOptimizableVarArgsData(propertyAccess.Expression)
+	if data == nil || !data.IsOptimizable {
+		return nil
+	}
+	if data.usesLengthCache() {
+		return data.LengthID
+	}
+	return createVarArgsLengthSelect()
+}
+
 // ---------------------------------------------------------------------------
 // The three call transforms — transformCallExpression.ts
 // ---------------------------------------------------------------------------
@@ -307,6 +335,9 @@ func transformCallExpressionInner(s *State, node *ast.Node, expression luau.Expr
 			luau.NewList(append([]luau.Expression{luau.GlobalID("self")},
 				ensureTransformOrder(s, call.Arguments.Nodes)...)...),
 		)
+	}
+	if expression := tryTransformOptimizableVarArgsSizeCall(s, node); expression != nil {
+		return expression
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
@@ -354,6 +385,9 @@ func transformPropertyCallExpressionInner(s *State, node *ast.Node, expression *
 			luau.NewList(append([]luau.Expression{luau.GlobalID("self")},
 				ensureTransformOrder(s, call.Arguments.Nodes)...)...),
 		)
+	}
+	if optimized := tryTransformOptimizableVarArgsSizeCall(s, node); optimized != nil {
+		return optimized
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))
@@ -428,6 +462,9 @@ func transformElementCallExpressionInner(s *State, node *ast.Node, expression *a
 			luau.NewList(append([]luau.Expression{luau.GlobalID("self")},
 				ensureTransformOrder(s, call.Arguments.Nodes)...)...),
 		)
+	}
+	if optimized := tryTransformOptimizableVarArgsSizeCall(s, node); optimized != nil {
+		return optimized
 	}
 
 	expType := s.Checker.GetNonOptionalType(s.GetType(call.Expression))

@@ -11,5 +11,5 @@
 		"typeRoots": ["../../../../testdata/diff/project/node_modules/@rbxts"],
 		"rootDir": "src"
 	},
-	"include": ["src"]
+	"include": ["src", "src/**/*.d.ts"]
 }

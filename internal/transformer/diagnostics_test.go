@@ -123,6 +123,43 @@ func TestDiagnosticContextMessages(t *testing.T) {
 	}
 }
 
+func TestSpreadDiagnostics(t *testing.T) {
+	node := new(ast.Node)
+	tests := []struct {
+		name string
+		d    Diagnostic
+		code string
+		msg  string
+	}{
+		{
+			name: "nested spreads in assignment patterns",
+			d:    DiagNoNestedSpreadsInAssignmentPatterns(node),
+			code: "noNestedSpreadsInAssignmentPatterns",
+			msg:  "Nesting spreads in assignment patterns is not supported!",
+		},
+		{
+			name: "rest spreading of roblox types",
+			d:    DiagNoRestSpreadingOfRobloxTypes(node),
+			code: "noRestSpreadingOfRobloxTypes",
+			msg:  "Operator `...` is not allowed on Roblox types!",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.d.Code != tc.code {
+				t.Fatalf("Code = %q, want %q", tc.d.Code, tc.code)
+			}
+			if tc.d.Message != tc.msg {
+				t.Fatalf("Message = %q, want %q", tc.d.Message, tc.msg)
+			}
+			if tc.d.Node != node {
+				t.Fatal("Node not propagated")
+			}
+		})
+	}
+}
+
 func TestDiagServiceAddSingleDedupe(t *testing.T) {
 	s := NewDiagService()
 	s.Add(DiagNoVar(nil))

@@ -1,0 +1,34 @@
+{
+  "description": "afterDeclarations plugins affect declarations without leaking into Luau",
+  "category": "plugin",
+  "expectedExitCode": 0,
+  "artifactChecks": {
+    "requireLuau": true,
+    "requiredSuffixes": [
+      ".d.ts"
+    ],
+    "requiredTexts": [
+      {
+        "suffix": ".d.ts",
+        "text": "__DECLARATION_MARKER__"
+      }
+    ],
+    "forbiddenTexts": [
+      {
+        "suffix": ".luau",
+        "text": "__DECLARATION_MARKER__"
+      }
+    ],
+    "requireSourceMap": false
+  },
+  "invocations": [
+    {
+      "name": "build",
+      "arguments": [
+        "build",
+        "--project",
+        "."
+      ]
+    }
+  ]
+}

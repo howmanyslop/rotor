@@ -1,0 +1,1 @@
+{"extends":"../lib/tsconfig.json","compilerOptions":{"rootDir":"src","outDir":"out"},"include":["src"],"references":[{"path":"../lib"}],"rbxts":{"rojo":"./game.project.json","type":"game"}}

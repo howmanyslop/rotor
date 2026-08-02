@@ -14,12 +14,13 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
 // Verbose gates WriteLineIfVerbose and BenchmarkIfVerbose — set from the
-// merged project options exactly once (`LogService.verbose =
-// projectOptions.verbose === true`, CLI/commands/build.ts L132).
+// merged project options exactly once before concurrent logging begins
+// (`LogService.verbose = projectOptions.verbose === true`, CLI/commands/build.ts L132).
 var Verbose bool
 
 // Output is where everything is written (upstream process.stdout).
@@ -30,8 +31,16 @@ var Output io.Writer = os.Stdout
 // any WriteLine so warnings never glue onto a pending ` ( N ms )` suffix.
 var partial bool
 
+var mu sync.Mutex
+
 // Write ports LogService.write (L7-10).
 func Write(message string) {
+	mu.Lock()
+	defer mu.Unlock()
+	write(message)
+}
+
+func write(message string) {
 	partial = !strings.HasSuffix(message, "\n")
 	fmt.Fprint(Output, message)
 }
@@ -39,11 +48,17 @@ func Write(message string) {
 // WriteLine ports LogService.writeLine (L12-19), including the
 // partial-line "\n" injection.
 func WriteLine(messages ...string) {
+	mu.Lock()
+	defer mu.Unlock()
+	writeLine(messages...)
+}
+
+func writeLine(messages ...string) {
 	if partial {
-		Write("\n")
+		write("\n")
 	}
 	for _, message := range messages {
-		Write(message + "\n")
+		write(message + "\n")
 	}
 }
 
@@ -68,10 +83,9 @@ func BenchmarkIfVerbose(name string, callback func()) {
 		callback()
 		return
 	}
-	Write(name)
 	start := time.Now()
 	callback()
-	Write(fmt.Sprintf(" ( %d ms )\n", time.Since(start).Milliseconds()))
+	WriteLine(fmt.Sprintf("%s ( %d ms )", name, time.Since(start).Milliseconds()))
 }
 
 // yellow wraps s in kleur.yellow's SGR codes (\x1b[33m ... \x1b[39m) when

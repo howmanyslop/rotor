@@ -215,8 +215,7 @@ func TestCallSpread(t *testing.T) {
 
 	want := `local arr1 = { 1, 2 }
 local function takeNums(...)
-	local nums = { ... }
-	return #nums
+	return select("#", ...)
 end
 print(takeNums(unpack(arr1)))
 print(takeNums(1, unpack(arr1)))

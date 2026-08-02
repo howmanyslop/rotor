@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -31,8 +32,8 @@ func TestParseBuildArgs(t *testing.T) {
 
 	t.Run("usePolling without watch errors", func(t *testing.T) {
 		_, err := parseBuildArgs([]string{"--usePolling"})
-		if err == nil || !strings.Contains(err.Error(), "watch") {
-			t.Errorf("err = %v, want implies-watch error", err)
+		if err == nil || err.Error() != "Implications failed:\n usePolling -> watch" {
+			t.Errorf("err = %v, want yargs implication error", err)
 		}
 	})
 
@@ -171,6 +172,72 @@ func TestUsageErrorsExitOne(t *testing.T) {
 	if got := cmdCheck([]string{"--bogus"}); got != 1 {
 		t.Errorf("unknown check flag exit = %d, want 1", got)
 	}
+
+	for _, tt := range []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{
+			name:    "builders missing value",
+			args:    []string{"--build", "--builders"},
+			wantErr: `invalid --builders value "" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers missing value",
+			args:    []string{"--checkers"},
+			wantErr: `invalid --checkers value "" (must be a positive integer)`,
+		},
+		{
+			name:    "builders zero",
+			args:    []string{"--build", "--builders", "0"},
+			wantErr: `invalid --builders value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers zero",
+			args:    []string{"--checkers=0"},
+			wantErr: `invalid --checkers value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "builders negative",
+			args:    []string{"--build", "--builders", "-1"},
+			wantErr: `invalid --builders value "-1" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers negative",
+			args:    []string{"--checkers=-1"},
+			wantErr: `invalid --checkers value "-1" (must be a positive integer)`,
+		},
+		{
+			name:    "builders non-integer",
+			args:    []string{"--build", "--builders", "many"},
+			wantErr: `invalid --builders value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers non-integer",
+			args:    []string{"--checkers=many"},
+			wantErr: `invalid --checkers value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "builders without build mode",
+			args:    []string{"--builders", "2"},
+			wantErr: "--builders requires --build",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stderr, code := captureStderr(t, func() int {
+				return cmdBuild(tt.args)
+			})
+			if code != 1 {
+				t.Errorf("cmdBuild(%v) exit = %d, want 1", tt.args, code)
+			}
+			firstLine := strings.SplitN(stderr, "\n", 2)[0]
+			wantFirstLine := "rotor build: " + tt.wantErr
+			if firstLine != wantFirstLine {
+				t.Errorf("cmdBuild(%v) first stderr line = %q, want %q", tt.args, firstLine, wantFirstLine)
+			}
+		})
+	}
 }
 
 func TestParseBuildArgsJSON(t *testing.T) {
@@ -180,6 +247,329 @@ func TestParseBuildArgsJSON(t *testing.T) {
 	}
 	if !got.jsonOut {
 		t.Error("--json not parsed")
+	}
+}
+
+func TestBuildModeArgs(t *testing.T) {
+	// Given
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+		build   bool
+		path    string
+		emit    bool
+	}{
+		{name: "short build path", args: []string{"-b", "tsconfig.solution.json"}, build: true, path: "tsconfig.solution.json"},
+		{name: "bare build", args: []string{"--build"}, build: true},
+		{name: "declaration only build", args: []string{"--build", "--emitDeclarationOnly"}, build: true, emit: true},
+		{name: "declaration only requires build", args: []string{"--emitDeclarationOnly"}, wantErr: "Implications failed:\n emitDeclarationOnly -> build"},
+		{name: "declaration watch incompatible", args: []string{"--build", "--watch", "--emitDeclarationOnly"}, wantErr: "--build --watch is incompatible with --emitDeclarationOnly (no Luau emit to incrementally watch)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			got, err := parseBuildArgs(tt.args)
+
+			// Then
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("parseBuildArgs(%v) error = %v, want %q", tt.args, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.build != tt.build || got.buildPath != tt.path || got.emitDeclarationOnly != tt.emit {
+				t.Errorf("parseBuildArgs(%v) = %+v", tt.args, got)
+			}
+		})
+	}
+}
+
+func TestParseBuildArgsConcurrencyControls(t *testing.T) {
+	intPtr := func(value int) *int { return &value }
+	tests := []struct {
+		name         string
+		args         []string
+		wantBuilders *int
+		wantCheckers *int
+		wantErr      string
+	}{
+		{name: "omitted", args: nil},
+		{
+			name:         "builders separated value one",
+			args:         []string{"--build", "--builders", "1"},
+			wantBuilders: intPtr(1),
+		},
+		{
+			name:         "builders equals value four",
+			args:         []string{"--build", "--builders=4"},
+			wantBuilders: intPtr(4),
+		},
+		{
+			name:         "checkers separated value one",
+			args:         []string{"--checkers", "1"},
+			wantCheckers: intPtr(1),
+		},
+		{
+			name:         "checkers equals value four",
+			args:         []string{"--checkers=4"},
+			wantCheckers: intPtr(4),
+		},
+		{
+			name:         "accepts_builders_and_checkers",
+			args:         []string{"--build", "--builders", "4", "--checkers", "2"},
+			wantBuilders: intPtr(4),
+			wantCheckers: intPtr(2),
+		},
+		{
+			name:         "builders with short build alias",
+			args:         []string{"-b", "--builders=1"},
+			wantBuilders: intPtr(1),
+		},
+		{
+			name:    "builders missing value",
+			args:    []string{"--build", "--builders"},
+			wantErr: `invalid --builders value "" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers missing value",
+			args:    []string{"--checkers"},
+			wantErr: `invalid --checkers value "" (must be a positive integer)`,
+		},
+		{
+			name:    "builders zero",
+			args:    []string{"--build", "--builders", "0"},
+			wantErr: `invalid --builders value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers zero",
+			args:    []string{"--checkers=0"},
+			wantErr: `invalid --checkers value "0" (must be a positive integer)`,
+		},
+		{
+			name:    "builders negative",
+			args:    []string{"--build", "--builders", "-1"},
+			wantErr: `invalid --builders value "-1" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers negative",
+			args:    []string{"--checkers=-1"},
+			wantErr: `invalid --checkers value "-1" (must be a positive integer)`,
+		},
+		{
+			name:    "builders non-integer",
+			args:    []string{"--build", "--builders", "many"},
+			wantErr: `invalid --builders value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "checkers non-integer",
+			args:    []string{"--checkers=many"},
+			wantErr: `invalid --checkers value "many" (must be a positive integer)`,
+		},
+		{
+			name:    "rejects_builders_without_build",
+			args:    []string{"--builders", "2"},
+			wantErr: "--builders requires --build",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := parseBuildArgs(tt.args)
+			if tt.wantErr != "" {
+				if err == nil || err.Error() != tt.wantErr {
+					t.Fatalf("parseBuildArgs(%v) error = %v, want %q", tt.args, err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (got.builders == nil) != (tt.wantBuilders == nil) {
+				t.Errorf("builders = %v, want %v", got.builders, tt.wantBuilders)
+			}
+			if got.builders != nil && *got.builders != *tt.wantBuilders {
+				t.Errorf("builders = %d, want %d", *got.builders, *tt.wantBuilders)
+			}
+			if (got.checkers == nil) != (tt.wantCheckers == nil) {
+				t.Errorf("checkers = %v, want %v", got.checkers, tt.wantCheckers)
+			}
+			if got.checkers != nil && *got.checkers != *tt.wantCheckers {
+				t.Errorf("checkers = %d, want %d", *got.checkers, *tt.wantCheckers)
+			}
+		})
+	}
+}
+
+func TestUsageIncludesConcurrencyControls(t *testing.T) {
+	var output strings.Builder
+	usage(&output)
+	for _, want := range []string{
+		"--builders <n>",
+		"default 4",
+		"only with --build",
+		"--checkers <n>",
+		"build and check",
+	} {
+		if !strings.Contains(output.String(), want) {
+			t.Errorf("usage does not contain %q", want)
+		}
+	}
+}
+
+func TestProjectCompileOptionsConcurrencyControls(t *testing.T) {
+	// Given
+	builders := 3
+	checkers := 3
+	opts := projectOptions{
+		builders: &builders,
+		checkers: &checkers,
+	}
+
+	// When
+	got := projectCompileOptions("tsconfig.json", opts)
+
+	// Then
+	if got.Builders != opts.builders || got.Checkers != opts.checkers {
+		t.Fatalf("concurrency pointers = builders %p/checkers %p, want %p/%p", got.Builders, got.Checkers, opts.builders, opts.checkers)
+	}
+	if *got.Builders != 3 || *got.Checkers != 3 {
+		t.Fatalf("concurrency values = builders %d/checkers %d, want 3/3", *got.Builders, *got.Checkers)
+	}
+
+	missing := projectCompileOptions("tsconfig.json", projectOptions{})
+	if missing.Builders != nil || missing.Checkers != nil {
+		t.Fatalf("missing CLI overrides = builders %v/checkers %v, want nil", missing.Builders, missing.Checkers)
+	}
+	present := projectCompileOptions("tsconfig.json", projectOptions{checkers: &checkers})
+	if present.Checkers == nil || *present.Checkers != 3 {
+		t.Fatalf("present checker override = %v, want 3", present.Checkers)
+	}
+}
+
+func TestBuildWatchConcurrencyOptions(t *testing.T) {
+	// Given
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "tsconfig.json")
+	mustWrite(t, configPath, `{"rbxts":{"luau":false}}`)
+	parsed, err := parseBuildArgs([]string{"--build", "--watch", "--builders", "3", "--checkers", "2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	reload := newBuildOptionsReload(configPath, parsed)
+	got, err := reload()
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.builders != parsed.builders || got.checkers != parsed.checkers {
+		t.Fatalf("reloaded pointers = builders %p/checkers %p, want %p/%p", got.builders, got.checkers, parsed.builders, parsed.checkers)
+	}
+	if *got.builders != 3 || *got.checkers != 2 {
+		t.Fatalf("reloaded values = builders %d/checkers %d, want 3/2", *got.builders, *got.checkers)
+	}
+	if got.luau {
+		t.Fatal("rbxts options were not re-read during reload")
+	}
+}
+
+func TestBuildSolutionPropagatesCheckers(t *testing.T) {
+	// Given
+	root, projectConfigs := writeConcurrencySolution(t)
+	tests := []struct {
+		name     string
+		checkers int
+	}{
+		{name: "CLI checker 2 reaches every referenced project", checkers: 2},
+		{name: "CLI checker 3 overrides configured checker 1", checkers: 3},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// When
+			parsed, err := parseBuildArgs([]string{"--build", "--builders", "3", "--checkers", fmt.Sprint(tt.checkers)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			opts := mergeProjectOptions(defaultProjectOptions, nil, &parsed.opts)
+			opts.builders = parsed.builders
+			opts.checkers = parsed.checkers
+			coordinator, err := compile.NewSolutionCoordinator(
+				filepath.Join(root, "tsconfig.json"),
+				projectCompileOptions(filepath.Join(root, "tsconfig.json"), opts),
+			)
+
+			// Then
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, configPath := range projectConfigs {
+				state, ok := coordinator.ProjectState(configPath)
+				if !ok {
+					t.Fatalf("missing referenced project state for %s", configPath)
+				}
+				if state.Project.Options.Checkers == nil || *state.Project.Options.Checkers != tt.checkers {
+					t.Fatalf("%s checkers = %v, want CLI %d", configPath, state.Project.Options.Checkers, tt.checkers)
+				}
+				if state.Project.Options.Builders == nil || *state.Project.Options.Builders != 3 {
+					t.Fatalf("%s builders = %v, want CLI 3", configPath, state.Project.Options.Builders)
+				}
+			}
+		})
+	}
+}
+
+func writeConcurrencySolution(t *testing.T) (string, []string) {
+	t.Helper()
+	root := t.TempDir()
+	configs := []string{}
+	mustWrite(t, filepath.Join(root, "tsconfig.json"), `{"files":[],"references":[{"path":"./left"},{"path":"./right"}]}`)
+	for _, name := range []string{"left", "right"} {
+		dir := filepath.Join(root, name)
+		configPath := filepath.Join(dir, "tsconfig.json")
+		configs = append(configs, configPath)
+		mustWrite(t, configPath, `{"compilerOptions":{"allowSyntheticDefaultImports":true,"composite":true,"declaration":true,"module":"CommonJS","moduleResolution":"Node","noLib":true,"moduleDetection":"force","strict":true,"target":"ESNext","types":[],"rootDir":"src","outDir":"out","checkers":1},"include":["src"]}`)
+		mustWrite(t, filepath.Join(dir, "package.json"), `{"name":"@scope/`+name+`"}`)
+		mustWrite(t, filepath.Join(dir, "src", "globals.d.ts"), noLibGlobalStubs)
+		mustWrite(t, filepath.Join(dir, "src", "main.ts"), "export {};\n")
+	}
+	return root, configs
+}
+
+func TestBuildModeArgs_emitDeclarationOnly_skipsLuau(t *testing.T) {
+	// Given
+	dir := writeBuildableProject(t, "")
+	configPath := filepath.Join(dir, "tsconfig.json")
+	config, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config = []byte(strings.Replace(string(config), `"outDir": "out"`, `"declaration": true,
+		"outDir": "out"`, 1))
+	if err := os.WriteFile(configPath, config, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// When
+	_, code := captureStdout(t, func() int {
+		return cmdBuild([]string{"--build", "--emitDeclarationOnly", dir})
+	})
+
+	// Then
+	if code != 0 {
+		t.Fatalf("declaration-only build exit = %d", code)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "main.luau")); !os.IsNotExist(err) {
+		t.Errorf("declaration-only build wrote main.luau: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "main.d.ts")); err != nil {
+		t.Errorf("declaration-only build did not write main.d.ts: %v", err)
 	}
 }
 
@@ -460,8 +850,7 @@ func TestCmdBuildMinify(t *testing.T) {
 	}
 	for p, c := range minLuau {
 		minSize += len(c)
-		// Minify strips comments, including rotor's header.
-		if strings.Contains(c, "-- Compiled with rotor") {
+		if strings.Contains(c, "-- Compiled with @isentinel/roblox-ts") {
 			t.Errorf("%s still carries the header comment (not minified)", p)
 		}
 		// Minified output must still be valid Luau.
@@ -472,7 +861,7 @@ func TestCmdBuildMinify(t *testing.T) {
 	// A normal build keeps the header comment (proves the flag is the cause).
 	keptHeader := false
 	for _, c := range normalLuau {
-		if strings.Contains(c, "-- Compiled with rotor") {
+		if strings.Contains(c, "-- Compiled with @isentinel/roblox-ts") {
 			keptHeader = true
 		}
 	}
