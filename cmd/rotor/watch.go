@@ -120,11 +120,8 @@ func (w *treeWatcher) walk(dir string, stamps map[string]fileStamp) {
 		if isJunkFile(name) {
 			continue
 		}
-		// rotor's own generated companions are refreshed by the build itself;
-		// watching them would turn the first auto-write into a spurious
-		// rebuild (and a user edit is overwritten on the next pass anyway). The
-		// legacy per-macro names are still ignored for upgraded projects.
-		if strings.EqualFold(name, compile.RotorTypesFileName) ||
+		if strings.EqualFold(name, "flamework.build") ||
+			strings.EqualFold(name, compile.RotorTypesFileName) ||
 			strings.EqualFold(name, compile.EnvDeclFileName) ||
 			strings.EqualFold(name, compile.AssetDeclFileName) ||
 			strings.EqualFold(name, compile.MacroDeclFileName) {

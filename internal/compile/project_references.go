@@ -36,6 +36,8 @@ func readProjectReferencePaths(tsConfigPath string) ([]string, bool, error) {
 		paths = append(paths, filepath.Clean(path))
 	}
 	files, hasFiles := config["files"].([]any)
-	_, hasInclude := config["include"]
-	return paths, len(paths) > 0 && hasFiles && len(files) == 0 && !hasInclude, nil
+	includeValue, hasInclude := config["include"]
+	include, includeIsArray := includeValue.([]any)
+	emptyInclude := !hasInclude || (includeIsArray && len(include) == 0)
+	return paths, len(paths) > 0 && hasFiles && len(files) == 0 && emptyInclude, nil
 }

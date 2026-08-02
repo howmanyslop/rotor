@@ -359,7 +359,7 @@ func cmdBuild(args []string) int {
 	// stdout. Watch mode has no terminal "end", so it is not JSON-encoded; a
 	// one-shot build is what CI/editor integrations call with --json.
 	if parsed.jsonOut && !opts.watch {
-		return cmdBuildJSON(dir, tsConfigPath, opts)
+		return cmdBuildJSON(dir, tsConfigPath, opts, parsed.build)
 	}
 
 	out := newUI(os.Stdout)
@@ -518,8 +518,16 @@ func writeJSONResult(w io.Writer, res jsonResult) {
 // cmdBuildJSON runs a one-shot build and prints a single jsonResult object
 // instead of the styled UI. Exit code is unchanged from the styled path: 1 on
 // any build error, 0 otherwise.
-func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions) int {
-	result, diags, elapsed, err := runBuildOnce(dir, tsConfigPath, opts)
+func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions, solution bool) int {
+	var result *compile.BuildResult
+	var diags []compile.DiagnosticInfo
+	var elapsed time.Duration
+	var err error
+	if solution {
+		result, diags, elapsed, err = runBuildSolutionOnce(tsConfigPath, opts)
+	} else {
+		result, diags, elapsed, err = runBuildOnce(dir, tsConfigPath, opts)
+	}
 	res := jsonResult{
 		Version:    version,
 		OK:         err == nil,

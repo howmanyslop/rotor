@@ -138,6 +138,27 @@ func TestSolutionCoordinatorSkipsUpToDateProjects(t *testing.T) {
 	}
 }
 
+func TestReferenceOnlySolutionCoordinatorAllowsEmptyInclude(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	rootConfig := filepath.Join(root, "tsconfig.json")
+	if err := os.WriteFile(rootConfig, []byte(`{"files":[],"include":[],"references":[{"path":"./child"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	writeBuildableSolutionProject(t, child)
+
+	_, messages, err := BuildSolutionWithOptions(rootConfig, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("BuildSolutionWithOptions: %v (%v)", err, messages)
+	}
+	if _, err := os.Stat(filepath.Join(child, "out", "main.luau")); err != nil {
+		t.Fatalf("child output: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "out")); !os.IsNotExist(err) {
+		t.Fatalf("coordinator output stat error = %v, want not exists", err)
+	}
+}
+
 func TestSolutionBuildOrder(t *testing.T) {
 	root := t.TempDir()
 	writeSolutionConfig(t, root, "tsconfig.json", []string{"./app"}, true)
