@@ -72,3 +72,11 @@ go run ./cmd/rotor build --build "$project/$tsconfig" --builders 1 --checkers 1 
 rm -rf "$project/out"
 go run ./cmd/rotor build --build "$project/$tsconfig" --builders 3 --checkers 1 --json
 '''
+
+[tasks."benchmark:solution"]
+description = "Run a hyperfine benchmark comparing solutions."
+usage = """
+arg "<project-dir>" help="External project directory"
+arg "<tsconfig-path>" help="Path to tsconfig relative to the project directory"
+"""
+run = """"""
