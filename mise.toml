@@ -11,9 +11,10 @@ lockfile = true
 "github:lune-org/lune" = "0.10.1"
 go = "1.26.5"
 goreleaser = "latest"
+hyperfine = "1.20.0"
 
 [tasks."build:one-shot"]
-description = "Remove the supplied project's out directory, then run a one-shot (non-watch) rotor build --json with --checkers 1 and --checkers 4. Usage: mise run build:one-shot -- <project-dir> <tsconfig-path> (tsconfig path relative to the project dir)."
+description = "Delete the supplied project's out/out-test/out-tsc directories and *.rbxtsc.tsbuildinfo state, then run one-shot (non-watch) rotor builds --json with --checkers 1 and --checkers equal to the detected logical CPU count. Usage: mise run build:one-shot -- <project-dir> <tsconfig-path> (tsconfig path relative to the project dir)."
 usage = '''
 arg "<project-dir>" help="External project directory"
 arg "<tsconfig-path>" help="Path to tsconfig relative to the project directory"
@@ -33,20 +34,31 @@ readonly tsconfig=$usage_tsconfig_path
     exit 1
 }
 
-rm -rf "$project/out"
+cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null | tr -cd '0-9' || true)"
+if [ -z "$cores" ]; then
+    cores="$(sysctl -n hw.ncpu 2>/dev/null | tr -cd '0-9' || true)"
+fi
+cores="${cores:-1}"
+readonly cores
+
+reset_state() {
+    rm -rf "$project/out" "$project/out-test" "$project/out-tsc"
+    find "$project" -type f -name '*.rbxtsc.tsbuildinfo' \
+        -not -path '*/node_modules/*' \
+        -not -path '*/.git/*' \
+        -not -path '*/.rotor/*' \
+        -delete
+}
+
+reset_state
 go run ./cmd/rotor build --project "$project/$tsconfig" --json --checkers 1
 
-rm -rf "$project/out"
-go run ./cmd/rotor build --project "$project/$tsconfig" --json --checkers 4
-
-# Run with `--checkers` equal to the number of CPU cores
-
-rm -rf "$project/out"
-go run ./cmd/rotor build --project "$project/$tsconfig" --json --checkers "$(nproc)"
+reset_state
+go run ./cmd/rotor build --project "$project/$tsconfig" --json --checkers "$cores"
 '''
 
 [tasks."build:solution"]
-description = "Remove the supplied project's out directory, then run a solution (project references) rotor build --build --json with --builders 1 and --builders 3 at a fixed --checkers 1. Usage: mise run build:solution -- <project-dir> <tsconfig-path> (tsconfig path relative to the project dir)."
+description = "Delete the supplied project's out/out-test/out-tsc directories and *.rbxtsc.tsbuildinfo state, then run solution (project references) rotor builds --build --json with --builders 1 and --builders equal to the detected logical CPU count at a fixed --checkers 1. Usage: mise run build:solution -- <project-dir> <tsconfig-path> (tsconfig path relative to the project dir)."
 usage = '''
 arg "<project-dir>" help="External project directory"
 arg "<tsconfig-path>" help="Path to tsconfig relative to the project directory"
@@ -66,17 +78,115 @@ readonly tsconfig=$usage_tsconfig_path
     exit 1
 }
 
-rm -rf "$project/out"
+cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null | tr -cd '0-9' || true)"
+if [ -z "$cores" ]; then
+    cores="$(sysctl -n hw.ncpu 2>/dev/null | tr -cd '0-9' || true)"
+fi
+cores="${cores:-1}"
+readonly cores
+
+reset_state() {
+    rm -rf "$project/out" "$project/out-test" "$project/out-tsc"
+    find "$project" -type f -name '*.rbxtsc.tsbuildinfo' \
+        -not -path '*/node_modules/*' \
+        -not -path '*/.git/*' \
+        -not -path '*/.rotor/*' \
+        -delete
+}
+
+reset_state
 go run ./cmd/rotor build --build "$project/$tsconfig" --builders 1 --checkers 1 --json
 
-rm -rf "$project/out"
-go run ./cmd/rotor build --build "$project/$tsconfig" --builders 3 --checkers 1 --json
+reset_state
+go run ./cmd/rotor build --build "$project/$tsconfig" --builders "$cores" --checkers 1 --json
 '''
 
 [tasks."benchmark:solution"]
-description = "Run a hyperfine benchmark comparing solutions."
+description = "hyperfine benchmark of solution (project references) rotor builds across builders/checkers combinations derived from the detected logical CPU count; deletes the supplied project's out/out-test/out-tsc directories and *.rbxtsc.tsbuildinfo state before every measured run so each build is cold. Usage: mise run benchmark:solution -- <project-dir> <tsconfig-path> (tsconfig path relative to the project dir)."
 usage = """
 arg "<project-dir>" help="External project directory"
 arg "<tsconfig-path>" help="Path to tsconfig relative to the project directory"
 """
-run = """"""
+run = '''
+set -euo pipefail
+
+readonly project=$usage_project_dir
+readonly tsconfig=$usage_tsconfig_path
+
+[ -d "$project" ] || {
+    echo "error: project directory not found: $project" >&2
+    exit 1
+}
+[ -f "$project/$tsconfig" ] || {
+    echo "error: tsconfig not found: $project/$tsconfig" >&2
+    exit 1
+}
+
+cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null | tr -cd '0-9' || true)"
+if [ -z "$cores" ]; then
+    cores="$(sysctl -n hw.ncpu 2>/dev/null | tr -cd '0-9' || true)"
+fi
+cores="${cores:-1}"
+readonly cores
+
+export PROJECT_DIR="$project"
+export TSCONFIG_PATH="$tsconfig"
+export CORES="$cores"
+
+readonly prepareCommand="rm -rf \"$PROJECT_DIR/out\" \"$PROJECT_DIR/out-test\" \"$PROJECT_DIR/out-tsc\" && find \"$PROJECT_DIR\" -type f -name \"*.rbxtsc.tsbuildinfo\" -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" -not -path \"*/.rotor/*\" -delete"
+
+hyperfine \
+    --warmup 1 \
+    --prepare "$prepareCommand" \
+    --command-name "builders=1 checkers=1" \
+    --command-name "builders=1 checkers=$CORES" \
+    --command-name "builders=$CORES checkers=1" \
+    --command-name "builders=$CORES checkers=$CORES" \
+    'go run ./cmd/rotor build --build "$PROJECT_DIR/$TSCONFIG_PATH" --json --builders 1 --checkers 1' \
+    'go run ./cmd/rotor build --build "$PROJECT_DIR/$TSCONFIG_PATH" --json --builders 1 --checkers "$CORES"' \
+    'go run ./cmd/rotor build --build "$PROJECT_DIR/$TSCONFIG_PATH" --json --builders "$CORES" --checkers 1' \
+    'go run ./cmd/rotor build --build "$PROJECT_DIR/$TSCONFIG_PATH" --json --builders "$CORES" --checkers "$CORES"'
+'''
+
+[tasks."benchmark:one-shot"]
+description = "hyperfine benchmark of one-shot (non-watch) rotor builds at --checkers 1 and --checkers equal to the detected logical CPU count; deletes the supplied project's out/out-test/out-tsc directories and *.rbxtsc.tsbuildinfo state before every measured run so each build is cold. Usage: mise run benchmark:one-shot -- <project-dir> <tsconfig-path> (tsconfig path relative to the project dir)."
+usage = """
+arg "<project-dir>" help="External project directory"
+arg "<tsconfig-path>" help="Path to tsconfig relative to the project directory"
+"""
+run = '''
+set -euo pipefail
+
+readonly project=$usage_project_dir
+readonly tsconfig=$usage_tsconfig_path
+
+[ -d "$project" ] || {
+    echo "error: project directory not found: $project" >&2
+    exit 1
+}
+[ -f "$project/$tsconfig" ] || {
+    echo "error: tsconfig not found: $project/$tsconfig" >&2
+    exit 1
+}
+
+cores="$(getconf _NPROCESSORS_ONLN 2>/dev/null | tr -cd '0-9' || true)"
+if [ -z "$cores" ]; then
+    cores="$(sysctl -n hw.ncpu 2>/dev/null | tr -cd '0-9' || true)"
+fi
+cores="${cores:-1}"
+readonly cores
+
+export PROJECT_DIR="$project"
+export TSCONFIG_PATH="$tsconfig"
+export CORES="$cores"
+
+readonly prepareCommand="rm -rf \"$PROJECT_DIR/out\" \"$PROJECT_DIR/out-test\" \"$PROJECT_DIR/out-tsc\" && find \"$PROJECT_DIR\" -type f -name \"*.rbxtsc.tsbuildinfo\" -not -path \"*/node_modules/*\" -not -path \"*/.git/*\" -not -path \"*/.rotor/*\" -delete"
+
+hyperfine \
+    --warmup 1 \
+    --prepare "$prepareCommand" \
+    --command-name "checkers=1" \
+    --command-name "checkers=$CORES" \
+    'go run ./cmd/rotor build --project "$PROJECT_DIR/$TSCONFIG_PATH" --json --checkers 1' \
+    'go run ./cmd/rotor build --project "$PROJECT_DIR/$TSCONFIG_PATH" --json --checkers "$CORES"'
+'''
