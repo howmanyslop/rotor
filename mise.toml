@@ -1,0 +1,11 @@
+[env]
+_.file = { path = ".env" }
+_.path = ["{{config_root}}/node_modules/.bin", "{{cwd}}/node_modules/.bin"]
+
+[settings]
+auto_install = false
+lockfile = true
+
+[tools]
+"github:rojo-rbx/rojo" = "7.6.1"
+"github:lune-org/lune" = "0.10.1"
