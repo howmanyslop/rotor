@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 )
 
 // capture redirects Output to a buffer for one test and resets the
@@ -100,6 +99,12 @@ func TestConcurrentBenchmarkIfVerboseAndWarn(t *testing.T) {
 	names := []string{"compile alpha", "compile beta", "compile gamma"}
 	started := make(chan string, benchmarkCount)
 	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseBenchmarks := func() {
+		releaseOnce.Do(func() { close(release) })
+	}
+	defer releaseBenchmarks()
+	// hung-test safety comes from go test -timeout, not from in-test timers, per the plan guardrail.
 	var wg sync.WaitGroup
 	wg.Add(benchmarkCount)
 
@@ -115,11 +120,7 @@ func TestConcurrentBenchmarkIfVerboseAndWarn(t *testing.T) {
 	}
 
 	for range names {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatal("benchmark callback did not start")
-		}
+		<-started
 	}
 
 	warnDone := make(chan struct{})
@@ -128,24 +129,9 @@ func TestConcurrentBenchmarkIfVerboseAndWarn(t *testing.T) {
 		close(warnDone)
 	}()
 
-	select {
-	case <-warnDone:
-	case <-time.After(time.Second):
-		t.Fatal("Warn blocked while benchmark callbacks were waiting")
-	}
-
-	close(release)
-	done := make(chan struct{})
-	go func() {
-		wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("benchmark callbacks did not finish")
-	}
+	<-warnDone
+	releaseBenchmarks()
+	wg.Wait()
 
 	got := buf.String()
 	if count := strings.Count(got, "Compiler Warning: parallel compile in progress\n"); count != 1 {
