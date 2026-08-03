@@ -50,7 +50,10 @@ jobs:
           ROTOR_REQUIRE_TRANSFORMERS_FIXTURE: "1"
 
   windows:
-    runs-on: windows-2022
+    # Blacksmith Windows runner (Server 2025, GitHub image base) — GitHub's
+    # windows-2022 hosted runners queue for minutes; Blacksmith provisions
+    # on demand. Fall back to windows-2025 if the label is unavailable.
+    runs-on: blacksmith-8vcpu-windows-2025
     timeout-minutes: 45
 
     steps:
