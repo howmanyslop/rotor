@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/trace"
 	"strings"
 	"sync"
 	"time"
@@ -143,7 +144,9 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	}
 
 	sidecarStarted := time.Now()
+	sidecarRegion := trace.StartRegion(context.Background(), "transformer sidecar")
 	response, err := runTransformerSidecar(dir, configPath, sourceFiles, projectSourceFiles(program))
+	sidecarRegion.End()
 	sidecarDuration := time.Since(sidecarStarted)
 	if err != nil {
 		return nil, []string{err.Error()}, err
@@ -192,7 +195,9 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 		overlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
 	}
 	overlayStarted := time.Now()
+	overlayRegion := trace.StartRegion(context.Background(), "overlay program creation and parse/load")
 	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, overlays, program.Options().Checkers)
+	overlayRegion.End()
 	overlayDuration := time.Since(overlayStarted)
 	if err != nil {
 		return nil, nil, err

@@ -379,6 +379,38 @@ func TestBuildWritesCombinedProfiles(t *testing.T) {
 	}
 }
 
+func TestFailedBuildFinalizesCombinedProfiles(t *testing.T) {
+	profileDir := t.TempDir()
+	paths := []string{
+		filepath.Join(profileDir, "cpu.prof"),
+		filepath.Join(profileDir, "trace.out"),
+		filepath.Join(profileDir, "block.prof"),
+		filepath.Join(profileDir, "mutex.prof"),
+		filepath.Join(profileDir, "heap.prof"),
+	}
+	args := []string{
+		"--cpuprofile", paths[0], "--trace-out", paths[1],
+		"--blockprofile", paths[2], "--mutexprofile", paths[3],
+		"--heapprofile", paths[4], filepath.Join(t.TempDir(), "missing"),
+	}
+
+	_, _, code := captureBuildOutput(t, args)
+
+	if code != 1 {
+		t.Fatalf("failed profiled build exit = %d, want 1", code)
+	}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Errorf("profile %s: %v", filepath.Base(path), err)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("profile %s is empty", filepath.Base(path))
+		}
+	}
+}
+
 func assertTimingJSONShape(t *testing.T, data []byte) {
 	t.Helper()
 	var value map[string]json.RawMessage
