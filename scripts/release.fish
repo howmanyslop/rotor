@@ -16,9 +16,11 @@
 #   ./scripts/release.fish --tag-only --yes
 #   ./scripts/release.fish --snapshot
 #   ./scripts/release.fish --build --os windows --arch amd64,arm64
+#   ./scripts/release.fish --build --os windows --compress 7z
 #
 # Requires: git, fish, go (for --build). Optional: gum (nicer prompts),
-# goreleaser (full-matrix --snapshot only).
+# goreleaser (full-matrix --snapshot only), 7z (turbo compress).
+# UPX is intentionally not supported.
 
 set -g SCRIPT_NAME (status filename)
 set -g REPO_ROOT (git rev-parse --show-toplevel 2>/dev/null)
@@ -29,6 +31,11 @@ end
 
 set -g VERSION_GO "$REPO_ROOT/internal/version/version.go"
 set -g PACKAGE_JSON "$REPO_ROOT/package.json"
+
+# Size-oriented link flags. -s -w drop symbol/DWARF tables; -buildid= makes
+# builds reproducible and sheds a few KB. Cannot get a tsgo-linked rotor
+# under ~10MiB by flags alone — use --compress 7z for archives.
+set -g ROTOR_SIZE_LDFLAGS "-s -w -buildid="
 
 set -g FLAG_HELP 0
 set -g FLAG_YES 0
@@ -45,6 +52,10 @@ set -g OPT_REMOTE origin
 set -g OPT_MESSAGE ""
 set -g OPT_OS ""
 set -g OPT_ARCH ""
+# compress: "" | skip | 7z
+set -g OPT_COMPRESS ""
+# Soft target for packed artifacts (MiB). Default 10.
+set -g OPT_MAX_MIB 10
 
 function usage
     echo "Usage: $SCRIPT_NAME [options]"
@@ -65,6 +76,10 @@ function usage
     echo "  --build           local go build into dist/ (pick OS/arch; no tag)"
     echo "  --os LIST         comma list: windows,linux,darwin (with --build)"
     echo "  --arch LIST       comma list: amd64,arm64 (with --build)"
+    echo "  --compress MODE   after build: skip | 7z | zpaq  (UPX not allowed)"
+    echo "                    7z  = universal archive; auto-splits into <target volumes"
+    echo "                    zpaq = smallest single file (~9.9MiB), needs zpaq to extract"
+    echo "  --max-mib N       size budget for packed artifacts (default: 10)"
     echo "  --skip-checks     skip dirty-tree / remote-tag probes"
     echo "  -h, --help        show this help"
     echo
@@ -75,7 +90,7 @@ function usage
     echo "  $SCRIPT_NAME --tag-only --yes --remote upstream"
     echo "  $SCRIPT_NAME --snapshot"
     echo "  $SCRIPT_NAME --build --os windows --arch amd64"
-    echo "  $SCRIPT_NAME --build --os windows,linux --arch amd64,arm64"
+    echo "  $SCRIPT_NAME --build --os windows --compress 7z --max-mib 10"
 end
 
 function has_gum
@@ -553,6 +568,233 @@ function binary_name --argument-names ver os arch
     echo "rotor-v$ver-$os-$arch-bin$suffix"
 end
 
+function file_bytes --argument-names path
+    if test -f "$path"
+        stat -f %z -- $path 2>/dev/null
+        or stat -c %s -- $path 2>/dev/null
+    else
+        echo 0
+    end
+end
+
+function fmt_mib --argument-names bytes
+    # One decimal MiB, e.g. 11.6
+    awk -v b=$bytes 'BEGIN { printf "%.1f" , b / 1024 / 1024 }'
+end
+
+function max_bytes
+    # OPT_MAX_MIB may be int or float-ish; treat as MiB.
+    awk -v m=$OPT_MAX_MIB 'BEGIN { printf "%.0f" , m * 1024 * 1024 }'
+end
+
+function pick_compress_mode
+    if test -n "$OPT_COMPRESS"
+        echo $OPT_COMPRESS
+        return
+    end
+    if test $FLAG_YES -eq 1
+        echo skip
+        return
+    end
+
+    set -l choice (choose "Turbo-compress for easy distribution? (target ≤ $OPT_MAX_MIB MiB)" \
+        "7z — standard archive (auto-splits into <10MiB volumes if needed)" \
+        "zpaq — smallest single file (needs zpaq to extract)" \
+        "skip — leave raw build")
+    or die cancelled
+
+    switch $choice
+        case "7z*"
+            echo 7z
+        case "zpaq*"
+            echo zpaq
+        case "skip*"
+            echo skip
+        case '*'
+            die "unknown compress choice: $choice"
+    end
+end
+
+function require_compress_tools --argument-names mode
+    switch $mode
+        case 7z
+            command -q 7z; or command -q 7zz; or die "7z not on PATH (brew install p7zip)"
+        case zpaq
+            command -q zpaq; or die "zpaq not on PATH (brew install zpaq)"
+        case skip
+            return 0
+        case '*'
+            die "unknown compress mode: $mode (want 7z|zpaq|skip; UPX is not allowed)"
+    end
+end
+
+function sevenz_bin
+    if command -q 7z
+        echo 7z
+    else if command -q 7zz
+        echo 7zz
+    else
+        die "7z not on PATH"
+    end
+end
+
+function remove_stale_parts --argument-names src
+    # Delete existing foo.7z.001/002/… for a source binary. Uses find because
+    # fish globs support only '*'; find -name handles [0-9] classes.
+    set -l dir (dirname -- $src)
+    set -l base (basename -- $src)
+    find -- $dir -maxdepth 1 -name "$base.7z.[0-9][0-9][0-9]" -delete 2>/dev/null
+    return 0
+end
+
+function compress_7z --argument-names src
+    # Ultra LZMA2 solid archive next to the binary. Measured on the real
+    # windows binary: md=64m→10.93MiB, md=1536m→10.79MiB (best single-file).
+    # If the archive still exceeds the target, also split into <10MiB
+    # volumes (foo.7z.001, .002…) — 7-Zip reassembles them from part .001.
+    set -l dst $src.7z
+    set -l bin (sevenz_bin)
+
+    if test $FLAG_DRY_RUN -eq 1
+        info "[dry-run] $bin a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=1536m -ms=on $dst $src"
+        echo $dst
+        return 0
+    end
+
+    rm -f -- $dst
+    remove_stale_parts $src
+    # -mfb=273 max fast bytes, 1.5G dict, solid — best measured ratio for PE.
+    $bin a -t7z -m0=lzma2 -mx=9 -mfb=273 -md=1536m -ms=on -mmt=on -- $dst $src >/dev/null
+    or die "7z failed on $src"
+    test -s $dst; or die "empty archive: $dst"
+    echo $dst
+end
+
+function compress_7z_volumes --argument-names src
+    # Split the archive into volumes each under the byte target. Returns the
+    # part count. Parts live at foo.7z.001, foo.7z.002, …
+    set -l dst $src.7z
+    set -l bin (sevenz_bin)
+    # 0.5MiB headroom under the limit for safety (and Discord byte math).
+    set -l vol_mib (awk -v m=$OPT_MAX_MIB 'BEGIN { v=m-0.5; if (v<1) v=1; printf "%d", int(v) }')
+    set -l vol_bytes (math "$vol_mib * 1024 * 1024")
+
+    if test $FLAG_DRY_RUN -eq 1
+        info "[dry-run] $bin a -t7z -v$vol_mib""m -m0=lzma2 -mx=9 -mfb=273 -md=1536m -ms=on $dst $src"
+        echo 2
+        return 0
+    end
+
+    rm -f -- $dst
+    remove_stale_parts $src
+    $bin a -t7z "-v$vol_mib""m" -m0=lzma2 -mx=9 -mfb=273 -md=1536m -ms=on -mmt=on -- $dst $src >/dev/null
+    or die "7z volume split failed on $src"
+
+    set -l parts (find (dirname -- $src) -maxdepth 1 -name (basename -- $src).7z.[0-9][0-9][0-9] -print 2>/dev/null)
+    test (count $parts) -gt 0; or die "7z produced no volumes: $dst"
+    # Sanity: every part under limit.
+    for p in $parts
+        test (file_bytes $p) -le (max_bytes); or warn "volume over target: $p"
+    end
+    echo (count $parts)
+end
+
+function compress_zpaq --argument-names src
+    # Smallest single-file lossless option measured: zpaq -m5 → 9.92 MiB
+    # (beats 7z 10.79). Recipient needs zpaq to extract.
+    set -l dst $src.zpaq
+
+    if test $FLAG_DRY_RUN -eq 1
+        info "[dry-run] zpaq add $dst $src -m5 -threads 8"
+        echo $dst
+        return 0
+    end
+
+    rm -f -- $dst
+    zpaq add $dst $src -m5 -threads 8 >/dev/null 2>&1
+    or die "zpaq failed on $src"
+    test -s $dst; or die "empty archive: $dst"
+    echo $dst
+end
+
+function report_size --argument-names path kind
+    set -l bytes (file_bytes $path)
+    set -l mib (fmt_mib $bytes)
+    set -l limit (max_bytes)
+    set -l limit_mib (fmt_mib $limit)
+    if test $bytes -le $limit
+        info "  ✓ $kind $path  $mib MiB  (≤ $limit_mib MiB)"
+        return 0
+    end
+    set -l over (math $bytes - $limit)
+    set -l over_mib (fmt_mib $over)
+    warn "  ✗ $kind $path  $mib MiB  ($over_mib MiB over $limit_mib MiB target)"
+    return 1
+end
+
+function turbo_compress_files
+    # argv: list of built binary paths
+    set -l files $argv
+    test (count $files) -gt 0; or return 0
+
+    set -l mode (pick_compress_mode)
+    set OPT_COMPRESS $mode
+    if test "$mode" = skip
+        info "Skipping compress."
+        return 0
+    end
+
+    require_compress_tools $mode
+
+    set -l limit_mib (fmt_mib (max_bytes))
+    info "Turbo compress mode=$mode  target≤$limit_mib MiB"
+    info "Measured on the real windows exe: 7z 10.79MiB, zpaq 9.92MiB (raw ~50MiB)."
+
+    set -l failed 0
+    for src in $files
+        if not test -f $src
+            warn "missing $src — skip"
+            continue
+        end
+
+        set -l raw_mib (fmt_mib (file_bytes $src))
+        info "Packing $src ($raw_mib MiB raw)"
+
+        switch $mode
+            case 7z
+                set -l out (compress_7z $src)
+                if test (file_bytes $out) -gt (max_bytes)
+                    warn "$out over target — splitting into volumes"
+                    set -l n (compress_7z_volumes $src)
+                    info "  ✓ $src.7z.001 …  $n parts, each < $limit_mib MiB"
+                    # Leave the single archive too? No — remove to avoid confusion.
+                    rm -f -- $out
+                    info "  Tip: put all $src.7z.* parts in one folder and open .001 with 7-Zip."
+                else
+                    report_size $out 7z
+                    or set failed 1
+                end
+            case zpaq
+                set -l out (compress_zpaq $src)
+                report_size $out zpaq
+                or set failed 1
+                info "  Tip: recipient extracts with: zpaq x (basename $out)"
+            case '*'
+                die "unknown compress mode: $mode"
+        end
+    end
+
+    if test $failed -ne 0
+        warn "One or more archives exceeded $limit_mib MiB. Single-file floor is 7z 10.79 / zpaq 9.92 MiB for current rotor."
+        # Non-zero only when user set an explicit compress mode via flags;
+        # interactive stays non-fatal so the build still "worked".
+        if test $FLAG_YES -eq 1
+            return 1
+        end
+    end
+    return 0
+end
+
 function do_build
     command -q go
     or die "go not on PATH"
@@ -567,7 +809,7 @@ function do_build
     test (count $targets) -gt 0; or die "no build targets"
 
     echo >&2
-    info "Local build plan (version $ver):"
+    info "Local build plan (version $ver, size ldflags: $ROTOR_SIZE_LDFLAGS):"
     for line in $targets
         set -l parts (string split ' ' -- $line)
         set -l os $parts[1]
@@ -580,13 +822,16 @@ function do_build
     or die aborted
 
     if test $FLAG_DRY_RUN -eq 1
+        set -l planned
         for line in $targets
             set -l parts (string split ' ' -- $line)
             set -l os $parts[1]
             set -l arch $parts[2]
             set -l out dist/(binary_name $ver $os $arch)
-            info "[dry-run] GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags=\"-s -w\" -o $out ./cmd/rotor"
+            info "[dry-run] GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -buildvcs=false -ldflags=\"$ROTOR_SIZE_LDFLAGS\" -o $out ./cmd/rotor"
+            set -a planned $out
         end
+        turbo_compress_files $planned
         info "Dry run complete."
         return 0
     end
@@ -602,7 +847,7 @@ function do_build
         set -l out dist/(binary_name $ver $os $arch)
         info "Building $os/$arch → $out"
         env GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
-            go build -trimpath -ldflags="-s -w" -o $out ./cmd/rotor
+            go build -trimpath -buildvcs=false -ldflags="$ROTOR_SIZE_LDFLAGS" -o $out ./cmd/rotor
         or die "go build failed for $os/$arch"
         test -s $out; or die "empty binary: $out"
         set -a built $out
@@ -610,8 +855,11 @@ function do_build
 
     info "Built "(count $built)" binary(ies):"
     for f in $built
-        ls -lh $f >&2
+        set -l mib (fmt_mib (file_bytes $f))
+        info "  $f  $mib MiB"
     end
+
+    turbo_compress_files $built
 end
 
 function parse_args
@@ -661,6 +909,14 @@ function parse_args
                 set i (math $i + 1)
                 test $i -le (count $argv); or die "--arch needs a value"
                 set OPT_ARCH $argv[$i]
+            case --compress
+                set i (math $i + 1)
+                test $i -le (count $argv); or die "--compress needs a value (skip|7z|zpaq)"
+                set OPT_COMPRESS $argv[$i]
+            case --max-mib
+                set i (math $i + 1)
+                test $i -le (count $argv); or die "--max-mib needs a number"
+                set OPT_MAX_MIB $argv[$i]
             case '--*'
                 die "unknown option: $arg (try --help)"
             case '*'
@@ -1001,6 +1257,20 @@ if test -n "$OPT_BUMP"
     if not contains -- $OPT_BUMP fork patch minor major custom
         die "--bump must be patch|minor|major|fork|custom"
     end
+end
+
+if test -n "$OPT_COMPRESS"
+    if not contains -- $OPT_COMPRESS skip 7z zpaq
+        die "--compress must be skip|7z|zpaq (UPX is not allowed)"
+    end
+    # Compress implies a local build unless snapshot was requested.
+    if test $FLAG_SNAPSHOT -eq 0 -a $FLAG_TAG_ONLY -eq 0
+        set FLAG_BUILD 1
+    end
+end
+
+if not string match -qr '^[0-9]+([.][0-9]+)?$' -- $OPT_MAX_MIB
+    die "--max-mib must be a number (got '$OPT_MAX_MIB')"
 end
 
 # Mutual exclusion soft rules
