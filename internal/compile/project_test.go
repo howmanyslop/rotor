@@ -101,6 +101,39 @@ func TestCompileProjectRuntimeLibPackage(t *testing.T) {
 	}
 }
 
+func TestCompileProjectNestedRojoProjectFile(t *testing.T) {
+	dir := writeProject(t, "nested-project-fixture",
+		`{"name":"root","tree":{"Main":{"$path":"out/main.luau"},"Pkg":{"$path":"shared.project.json"},"include":{"$path":"include"}}}`)
+	if err := os.WriteFile(
+		filepath.Join(dir, "shared.project.json"),
+		[]byte(`{"name":"IgnoredName","tree":{"Dep":{"$path":"out/dep.luau"}}}`),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, "src", "main.ts"),
+		[]byte("import { value } from \"./dep\";\nprint(value);\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "src", "dep.ts"), []byte("export const value = 42;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	files, diags, err := CompileProject(dir)
+	if err != nil {
+		t.Fatalf("CompileProject: %v (diags: %v)", err, diags)
+	}
+	if len(diags) != 0 {
+		t.Fatalf("diagnostics: %v", diags)
+	}
+	if got := files["out/main.luau"]; !strings.Contains(got, `TS.import(script, script.Parent, "Pkg", "Dep").value`) {
+		t.Fatalf("nested-project import did not use the mounted output path:\n%s", got)
+	}
+}
+
 // CompileProject over the differential fixture project must reproduce every
 // golden byte-for-byte — the whole-project path emits exactly what the
 // per-file path (and rbxtsc) does. Task 6 moves the diff harness onto this.

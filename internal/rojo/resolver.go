@@ -387,6 +387,16 @@ func (r *RojoResolver) parseTree(basePath, name string, tree *Tree, doNotPush bo
 // else becomes a partition, UNSHIFTED so later/deeper partitions match first.
 func (r *RojoResolver) parsePath(itemPath string) {
 	itemPath = convertToLuau(itemPath)
+
+	// A $path that points directly at a *.project.json file composes that
+	// project's tree at the current Roblox path. Its own project name is not
+	// pushed, matching Rojo's nested-project mount semantics. This check must
+	// precede rojoModuleExts because project files also have a .json extension.
+	if rojoFileRegex.MatchString(filepath.Base(itemPath)) {
+		r.parseConfig(itemPath, true)
+		return
+	}
+
 	realPath := itemPath
 	if pathExists(itemPath) {
 		realPath = realpathOr(itemPath)

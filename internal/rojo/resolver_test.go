@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -350,6 +351,89 @@ func TestNestedDefaultProjectViaPath(t *testing.T) {
 	got := mustRbxPath(t, r, filepath.Join(dir, "pkg", "src", "x.luau"))
 	if want := (RbxPath{"child", "x"}); !reflect.DeepEqual(got, want) {
 		t.Errorf("nested default project = %v, want %v", got, want)
+	}
+}
+
+func TestNestedProjectFileViaPath(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"default.project.json":          `{"name":"root","tree":{"Pkg":{"$path":"projects/shared.project.json"}}}`,
+		"projects/shared.project.json":  `{"name":"IgnoredName","tree":{"$path":"src","Nested":{"$path":"nested.project.json"}}}`,
+		"projects/nested.project.json":  `{"name":"AlsoIgnored","tree":{"$path":"nested-src"}}`,
+		"projects/src/root.luau":        "return {}",
+		"projects/nested-src/leaf.luau": "return {}",
+	})
+	r := FromPath(filepath.Join(dir, "default.project.json"))
+
+	if got := mustRbxPath(t, r, filepath.Join(dir, "projects", "src", "root.luau")); !reflect.DeepEqual(got, RbxPath{"Pkg", "root"}) {
+		t.Errorf("direct nested project path = %v, want [Pkg root]", got)
+	}
+	if got := mustRbxPath(t, r, filepath.Join(dir, "projects", "nested-src", "leaf.luau")); !reflect.DeepEqual(got, RbxPath{"Pkg", "Nested", "leaf"}) {
+		t.Errorf("recursive nested project path = %v, want [Pkg Nested leaf]", got)
+	}
+
+	state := r.GetState()
+	sharedConfig := filepath.Clean(realpathOr(filepath.Join(dir, "projects", "shared.project.json")))
+	nestedConfig := filepath.Clean(realpathOr(filepath.Join(dir, "projects", "nested.project.json")))
+	if !slices.Contains(state.WalkedConfigs, sharedConfig) || !slices.Contains(state.WalkedConfigs, nestedConfig) {
+		t.Errorf("walked configs = %v, want %q and %q", state.WalkedConfigs, sharedConfig, nestedConfig)
+	}
+	for _, filePath := range state.FilePaths {
+		if filePath.Path == sharedConfig || filePath.Path == nestedConfig {
+			t.Errorf("nested project was registered as an exact module mapping: %#v", filePath)
+		}
+	}
+	if _, ok := r.GetRbxPathFromFilePath(sharedConfig); ok {
+		t.Error("nested project config itself must not resolve as a Roblox module")
+	}
+}
+
+func TestNestedProjectFileWarnings(t *testing.T) {
+	t.Run("missing", func(t *testing.T) {
+		dir := writeProject(t, map[string]string{
+			"default.project.json": `{"name":"root","tree":{"Pkg":{"$path":"missing.project.json"}}}`,
+		})
+		r := FromPath(filepath.Join(dir, "default.project.json"))
+		if warnings := r.GetWarnings(); len(warnings) != 1 || !strings.Contains(warnings[0], "Path does not exist") {
+			t.Fatalf("warnings = %v, want one missing-path warning", warnings)
+		}
+		if _, ok := r.GetRbxPathFromFilePath(filepath.Join(dir, "missing.project.json")); ok {
+			t.Error("missing nested project must not become an exact module mapping")
+		}
+	})
+
+	t.Run("malformed", func(t *testing.T) {
+		dir := writeProject(t, map[string]string{
+			"default.project.json": `{"name":"root","tree":{"Pkg":{"$path":"broken.project.json"}}}`,
+			"broken.project.json":  "{not json",
+		})
+		r := FromPath(filepath.Join(dir, "default.project.json"))
+		if warnings := r.GetWarnings(); len(warnings) != 1 || !strings.Contains(warnings[0], "Invalid configuration") {
+			t.Fatalf("warnings = %v, want one invalid-configuration warning", warnings)
+		}
+		if _, ok := r.GetRbxPathFromFilePath(filepath.Join(dir, "broken.project.json")); ok {
+			t.Error("malformed nested project must not become an exact module mapping")
+		}
+	})
+}
+
+func TestNestedProjectFileSymlink(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"default.project.json":     `{"name":"root","tree":{"Pkg":{"$path":"links/shared.project.json"}}}`,
+		"real/shared.project.json": `{"name":"ignored","tree":{"$path":"../content"}}`,
+		"content/value.luau":       "return {}",
+		"links/":                   "",
+	})
+	linkPath := filepath.Join(dir, "links", "shared.project.json")
+	if err := os.Symlink(filepath.Join(dir, "real", "shared.project.json"), linkPath); err != nil {
+		t.Skipf("cannot create project-file symlink: %v", err)
+	}
+
+	r := FromPath(filepath.Join(dir, "default.project.json"))
+	if got := mustRbxPath(t, r, filepath.Join(dir, "content", "value.luau")); !reflect.DeepEqual(got, RbxPath{"Pkg", "value"}) {
+		t.Errorf("symlinked nested project path = %v, want [Pkg value]", got)
+	}
+	if want := filepath.Clean(realpathOr(filepath.Join(dir, "real", "shared.project.json"))); !slices.Contains(r.GetState().WalkedConfigs, want) {
+		t.Errorf("walked configs = %v, want real target %q", r.GetState().WalkedConfigs, want)
 	}
 }
 
