@@ -62,6 +62,7 @@ type BuildResult struct {
 // compiled outputs. CompileProject remains the pure library API; this is the
 // writing entry point for the CLI and future watch/incremental layers.
 func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResult, []string, error) {
+	writer := newOutputWriter()
 	timings := opts.Timings
 	if timings != nil {
 		defer timings.finish()
@@ -86,7 +87,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 		timings.recordPreparedTransformerProgram(prepared)
 		stopDeclarations := timings.startStage(declarationEmitWritesStage)
-		emitted, err := emitDeclarations(prepared.program, nil, opts.WriteOnlyChanged, prepared.declarations, timings)
+		emitted, err := emitDeclarations(prepared.program, nil, opts.WriteOnlyChanged, prepared.declarations, writer, timings)
 		stopDeclarations()
 		if err != nil {
 			return nil, nil, err
@@ -250,13 +251,13 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 				return err
 			}
 			absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
-			w, err := writeOutputFile(absOut, outputs[relOut], opts.WriteOnlyChanged)
+			w, err := writer.write(absOut, outputs[relOut], opts.WriteOnlyChanged)
 			wrote[i] = w
 			timings.recordOutputWrite(absOut, w)
 			if err != nil || !hasSourceMap {
 				return err
 			}
-			mapWrote, err := writeOutputFile(absOut+".map", sourceMap, opts.WriteOnlyChanged)
+			mapWrote, err := writer.write(absOut+".map", sourceMap, opts.WriteOnlyChanged)
 			timings.recordOutputWrite(absOut+".map", mapWrote)
 			return err
 		}
@@ -279,7 +280,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	}
 
 	stopDeclarations := timings.startStage(declarationEmitWritesStage)
-	declFiles, err := emitDeclarations(program, selectedPaths, opts.WriteOnlyChanged, prepared.declarations, timings)
+	declFiles, err := emitDeclarations(program, selectedPaths, opts.WriteOnlyChanged, prepared.declarations, writer, timings)
 	stopDeclarations()
 	if err != nil {
 		return nil, nil, err
@@ -362,12 +363,12 @@ func loadRojoCachesPreBuild(dir string, opts ProjectOptions) *rojo.RojoResolverC
 	return cache
 }
 
-func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct{}, writeOnlyChanged bool, sidecarDeclarations []sidecarOutputFile, timings *BuildTimings) ([]string, error) {
+func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct{}, writeOnlyChanged bool, sidecarDeclarations []sidecarOutputFile, writer *outputWriter, timings *BuildTimings) ([]string, error) {
 	if !program.Options().GetEmitDeclarations() {
 		return nil, nil
 	}
 	if len(sidecarDeclarations) > 0 {
-		return writeSidecarDeclarations(sidecarDeclarations, writeOnlyChanged, timings)
+		return writeSidecarDeclarations(sidecarDeclarations, writeOnlyChanged, writer, timings)
 	}
 
 	ctx := context.Background()
@@ -430,7 +431,7 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 	for i, write := range pending {
 		writeJobs[i] = func() error {
 			var err error
-			wrote[i], err = writeOutputFile(write.path, write.text, writeOnlyChanged)
+			wrote[i], err = writer.write(write.path, write.text, writeOnlyChanged)
 			timings.recordOutputWrite(write.path, wrote[i])
 			if !wrote[i] && write.data != nil {
 				write.data.SkippedDtsWrite = true
@@ -450,7 +451,7 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 	return emitted, nil
 }
 
-func writeSidecarDeclarations(declarations []sidecarOutputFile, writeOnlyChanged bool, timings *BuildTimings) ([]string, error) {
+func writeSidecarDeclarations(declarations []sidecarOutputFile, writeOnlyChanged bool, writer *outputWriter, timings *BuildTimings) ([]string, error) {
 	paths := make([]string, len(declarations))
 	for i, declaration := range declarations {
 		paths[i] = filepath.FromSlash(declaration.FileName)
@@ -465,7 +466,7 @@ func writeSidecarDeclarations(declarations []sidecarOutputFile, writeOnlyChanged
 		jobs[i] = func() error {
 			var err error
 			path := filepath.FromSlash(declaration.FileName)
-			wrote[i], err = writeOutputFile(path, declaration.Text, writeOnlyChanged)
+			wrote[i], err = writer.write(path, declaration.Text, writeOnlyChanged)
 			timings.recordOutputWrite(path, wrote[i])
 			return err
 		}
@@ -541,21 +542,6 @@ func rejectDuplicateOutputPaths(paths []string) error {
 		seen[key] = path
 	}
 	return nil
-}
-
-func writeOutputFile(path string, text string, writeOnlyChanged bool) (bool, error) {
-	if writeOnlyChanged {
-		if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, []byte(text)) {
-			return false, nil
-		}
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return false, err
-	}
-	if err := os.WriteFile(path, []byte(text), 0o644); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func maybeCopyInclude(dir string, opts ProjectOptions) error {

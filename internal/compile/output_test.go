@@ -382,6 +382,33 @@ func TestBuildProjectEmitsDeclarationsForPackage(t *testing.T) {
 	}
 }
 
+func TestBuildProjectDeclarationOnlyEmitsDeclarations(t *testing.T) {
+	dir := writeProject(t, "@scope/declaration-only-fixture", "")
+	tsconfigPath := filepath.Join(dir, "tsconfig.json")
+	tsconfig, err := os.ReadFile(tsconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := strings.Replace(string(tsconfig), `"outDir": "out"`, `"outDir": "out", "declaration": true`, 1)
+	if err := os.WriteFile(tsconfigPath, []byte(updated), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, diags, err := BuildProjectWithOptions(dir, ProjectOptions{EmitDeclarationOnly: true})
+	if err != nil {
+		t.Fatalf("BuildProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+	if len(result.EmittedFiles) != 1 || filepath.Base(result.EmittedFiles[0]) != "main.d.ts" {
+		t.Fatalf("EmittedFiles = %v, want main.d.ts", result.EmittedFiles)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "main.d.ts")); err != nil {
+		t.Fatalf("declaration output: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "main.luau")); !os.IsNotExist(err) {
+		t.Fatalf("Luau output stat error = %v, want not exists", err)
+	}
+}
+
 func TestBuildResultCarriesStructuredDiagnostics(t *testing.T) {
 	res, msgs, err := BuildProjectWithOptions("testdata/env_diag_model", ProjectOptions{})
 	if err == nil {
