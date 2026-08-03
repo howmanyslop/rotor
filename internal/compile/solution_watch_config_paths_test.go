@@ -26,7 +26,11 @@ func TestWatchSetsCanonicalizeConfigPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 	rojoConfig := filepath.Join(projectDir, "game.project.json")
-	if err := os.WriteFile(rojoConfig, []byte(`{"name":"watch-configs","tree":{}}`), 0o644); err != nil {
+	if err := os.WriteFile(rojoConfig, []byte(`{"name":"watch-configs","tree":{"Nested":{"$path":"nested.project.json"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	nestedRojoConfig := filepath.Join(projectDir, "nested.project.json")
+	if err := os.WriteFile(nestedRojoConfig, []byte(`{"name":"nested","tree":{}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -48,7 +52,10 @@ func TestWatchSetsCanonicalizeConfigPaths(t *testing.T) {
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("TsConfigPaths = %v, want %v", got, want)
 	}
-	if got, want := watchSets[0].RojoConfigs, []string{filepath.Join(canonicalProjectDir, "game.project.json")}; !reflect.DeepEqual(got, want) {
+	if got, want := watchSets[0].RojoConfigs, []string{
+		filepath.Join(canonicalProjectDir, "game.project.json"),
+		filepath.Join(canonicalProjectDir, "nested.project.json"),
+	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("RojoConfigs = %v, want %v", got, want)
 	}
 }

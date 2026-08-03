@@ -10,7 +10,7 @@ import (
 	"sync"
 )
 
-const resolverCacheFormatVersion = 1
+const resolverCacheFormatVersion = 2
 
 type resolverCacheManifestEntry struct {
 	Path          string `json:"path"`

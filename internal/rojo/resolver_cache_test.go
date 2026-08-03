@@ -174,6 +174,40 @@ func TestRojoCache_rebuildsWhenWalkedDirectoryChanges(t *testing.T) {
 	}
 }
 
+func TestRojoCache_rebuildsWhenNestedProjectChanges(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"default.project.json": `{"name":"root","tree":{"Pkg":{"$path":"shared.project.json"}}}`,
+		"shared.project.json":  `{"name":"ignored","tree":{"$path":"first"}}`,
+		"first/":               "",
+		"second/":              "",
+	})
+	configPath := filepath.Join(dir, "default.project.json")
+	nestedConfigPath := filepath.Join(dir, "shared.project.json")
+	cache := NewRojoResolverCache(filepath.Join(dir, ".cache"), "compiler-v1")
+
+	before := mustRbxPath(t, cache.Load(configPath), filepath.Join(dir, "first", "item.luau"))
+	if !reflect.DeepEqual(before, RbxPath{"Pkg", "item"}) {
+		t.Fatalf("initial path = %v, want [Pkg item]", before)
+	}
+
+	if err := os.WriteFile(nestedConfigPath, []byte(`{"name":"ignored","tree":{"$path":"second"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changedAt := time.Now().Add(2 * time.Second)
+	if err := os.Chtimes(nestedConfigPath, changedAt, changedAt); err != nil {
+		t.Fatal(err)
+	}
+
+	afterResolver := cache.Load(configPath)
+	if _, ok := afterResolver.GetRbxPathFromFilePath(filepath.Join(dir, "first", "item.luau")); ok {
+		t.Error("stale nested-project partition survived cache invalidation")
+	}
+	after := mustRbxPath(t, afterResolver, filepath.Join(dir, "second", "item.luau"))
+	if !reflect.DeepEqual(after, RbxPath{"Pkg", "item"}) {
+		t.Errorf("rebuilt path = %v, want [Pkg item]", after)
+	}
+}
+
 func TestRojoCache_rebuildsWhenCompilerVersionOrDiskDataChanges(t *testing.T) {
 	// Given
 	dir := writeProject(t, map[string]string{
