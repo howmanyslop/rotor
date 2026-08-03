@@ -14,6 +14,12 @@ const tsConfigPath = path.join(projectDir, "tsconfig.json");
 const sourcePath = path.join(projectDir, "src", "example.ts");
 const mainPath = path.resolve(__dirname, "..", "main.js");
 
+// TypeScript reports file names with forward slashes on every platform, so
+// comparisons against host paths must be slash-normalized to hold on Windows.
+function toSlash(value) {
+  return value.replace(/\\/g, "/");
+}
+
 function createProgram() {
   const parsed = ts.getParsedCommandLineOfConfigFile(tsConfigPath, {}, ts.sys);
   if (!parsed) {
@@ -355,7 +361,8 @@ test("declaration path resolution observes filesystem mutations on the next requ
   assert.match(firstRequest.text, /import\("@fixture\/new-package"\)/);
   assert.match(firstRequest.text, /import\("\.\.\/packages\/replace-package\/old"\)/);
   assert.match(firstRequest.text, /import\("\.\/deleted-target"\)/);
-  assert.ok(firstRequest.probes.some((probe) => probe.fileName === path.join(sourceDir, "generated.ts") && !probe.exists));
+  const generatedProbePath = toSlash(path.join(sourceDir, "generated.ts"));
+  assert.ok(firstRequest.probes.some((probe) => toSlash(probe.fileName) === generatedProbePath && !probe.exists));
 
   fs.writeFileSync(path.join(sourceDir, "generated.ts"), "export interface Generated { value: string; }\n");
   fs.mkdirSync(path.join(packagesDir, "new-package"), { recursive: true });
@@ -375,7 +382,7 @@ test("declaration path resolution observes filesystem mutations on the next requ
   assert.match(secondRequest.text, /import\("\.\.\/packages\/new-package\/entry"\)/);
   assert.match(secondRequest.text, /import\("\.\.\/packages\/replace-package\/new"\)/);
   assert.match(secondRequest.text, /import\("@fixture\/deleted-target"\)/);
-  assert.ok(secondRequest.probes.some((probe) => probe.fileName === path.join(sourceDir, "generated.ts") && probe.exists));
+  assert.ok(secondRequest.probes.some((probe) => toSlash(probe.fileName) === generatedProbePath && probe.exists));
 });
 
 test("transformSourceFiles repairs orphaned parents between transformers", () => {
@@ -546,7 +553,7 @@ module.exports.shouldTransformSourceFile = true;
   const response = JSON.parse(result.stdout.trim());
   assert.deepEqual(response.diagnostics, []);
   assert.equal(response.transformed.length, 1);
-  assert.equal(response.transformed[0].fileName, selectedPath);
+  assert.equal(toSlash(response.transformed[0].fileName), toSlash(selectedPath));
   assert.match(response.transformed[0].text, /after:before:selected/);
   assert.doesNotMatch(response.transformed[0].text, /afterDeclarations/);
 });
