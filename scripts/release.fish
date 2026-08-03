@@ -150,31 +150,41 @@ function confirm --argument-names prompt default_yes
 end
 
 function choose --argument-names header
-    # Remaining argv after header are options.
+    # Remaining argv after header are options. An option may carry a
+    # tab-delimited description ("label\tdescription") so the menu can
+    # preview each choice's consequences; only the label is echoed back.
     set -l options $argv[2..-1]
+    set -l picked
     if has_gum
-        printf '%s\n' $options | gum choose --header "$header"
-        return $status
+        set picked (printf '%s\n' $options | gum choose --header "$header")
+        or return 1
+    else if command -q fzf
+        # fzf can't render tab-delimited descriptions; show labels only.
+        set picked (printf '%s\n' $options | awk -F '\t' '{print $1}' | fzf --prompt "$header > " --height 12 --reverse)
+        or return 1
+    else
+        echo $header >&2
+        set -l i 1
+        for opt in $options
+            set -l parts (string split -m1 (printf '\t') -- $opt)
+            echo "  $i) $parts[1]" >&2
+            if test (count $parts) -gt 1
+                echo "      $parts[2]" >&2
+            end
+            set i (math $i + 1)
+        end
+        read -P "Choice [1-"(count $options)"]: " pick
+        or return 1
+        if not string match -qr '^[0-9]+$' -- $pick
+            return 1
+        end
+        if test $pick -lt 1 -o $pick -gt (count $options)
+            return 1
+        end
+        set picked $options[$pick]
     end
-    if command -q fzf
-        printf '%s\n' $options | fzf --prompt "$header > " --height 12 --reverse
-        return $status
-    end
-    echo $header >&2
-    set -l i 1
-    for opt in $options
-        echo "  $i) $opt" >&2
-        set i (math $i + 1)
-    end
-    read -P "Choice [1-"(count $options)"]: " pick
-    or return 1
-    if not string match -qr '^[0-9]+$' -- $pick
-        return 1
-    end
-    if test $pick -lt 1 -o $pick -gt (count $options)
-        return 1
-    end
-    echo $options[$pick]
+    # Strip the description (gum drops it on selection; fzf/plain keep it).
+    echo (string split -m1 (printf '\t') -- $picked)[1]
 end
 
 function choose_multi --argument-names header
@@ -949,20 +959,39 @@ function pick_mode
         return
     end
 
+    # Live previews: each menu option shows what it will actually change.
+    # The bump example follows the repo's fork.x habit when the current
+    # version is fork-shaped, otherwise patch.
+    set -l current (read_code_version)
+    set -l example_next
+    if string match -qr -- '-fork\.[0-9]+$' $current
+        set example_next (bump_version fork $current)
+    else
+        set example_next (bump_version patch $current)
+    end
+    set -l tag "v$current"
+    set -l push_hint "push → $OPT_REMOTE"
+    if test $FLAG_NO_PUSH -eq 1
+        set push_hint "no push (--no-push)"
+    end
+
     set -l choice (choose "What do you want to do?" \
-        "Full release (bump → commit → tag → push)" \
-        "Tag + push only (versions already bumped)" \
-        "Bump versions only (no commit/tag)" \
-        "Local build (pick OS/arch — windows, linux, darwin)" \
-        "Quit")
+        (printf '%s\t%s' "Full release (bump → commit → tag → push)" "edit version.go + package.json ($current → e.g. $example_next), commit, tag v$example_next, $push_hint") \
+        (printf '%s\t%s' "Tag + push only (versions already bumped)" "no file edits — create+push tag $tag on current HEAD") \
+        (printf '%s\t%s' "Bump versions only (no commit/tag)" "edit version.go + package.json only ($current → e.g. $example_next); no commit/tag/push") \
+        (printf '%s\t%s' "Local build (pick OS/arch — windows, linux, darwin)" "go build binaries into dist/ (pick OS/arch), then optional 7z/zpaq compress") \
+        (printf '%s\t%s' "Quit" "exit without changes"))
     or die cancelled
 
     switch $choice
         case "Full release (bump → commit → tag → push)"
+            info "Full release: bump version.go+package.json ($current → e.g. $example_next), commit, tag v$example_next, $push_hint"
             echo full
         case "Tag + push only (versions already bumped)"
+            info "Tag + push: no file edits — create+push tag $tag on current HEAD"
             echo tag-only
         case "Bump versions only (no commit/tag)"
+            info "Bump only: edit version.go + package.json ($current → e.g. $example_next); no commit/tag/push"
             echo bump-only
         case "Local build (pick OS/arch — windows, linux, darwin)"
             echo build
