@@ -1,0 +1,1 @@
+{"version":3,"file":"<PERFORMANCE_OUTPUT_ROOT>/src/beta.luau","sources":["<PERFORMANCE_OUTPUT_ROOT>/src/beta.ts"],"sourcesContent":["export interface Beta {\r\n  label: string;\r\n  weight: number;\r\n}\r\n\r\nexport const beta: Beta = { label: \"beta\", weight: 2 };\r\n"],"mappings":";AAKA"}

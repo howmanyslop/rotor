@@ -13,3 +13,5 @@
 # Go fuzz corpus seeds must keep their exact bytes (LF); no EOL conversion.
 testdata/fuzz/** -text
 **/testdata/fuzz/** -text
+# This byte-parity fixture deliberately exercises CRLF and a UTF-8 BOM.
+testdata/forkparity/project/performance-output/tree/src/*.ts -text whitespace=-cr-at-eol

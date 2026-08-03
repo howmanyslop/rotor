@@ -1,0 +1,27 @@
+{
+  "compilerOptions": {
+    "allowSyntheticDefaultImports": true,
+    "baseUrl": ".",
+    "composite": true,
+    "declaration": true,
+    "declarationMap": true,
+    "emitBOM": true,
+    "incremental": true,
+    "module": "Preserve",
+    "moduleDetection": "force",
+    "moduleResolution": "Bundler",
+    "noLib": true,
+    "outDir": "out",
+    "paths": {
+      "@performance/*": ["src/*"]
+    },
+    "plugins": [{ "transform": "./declaration-order-transformer.js", "afterDeclarations": true }],
+    "rootDir": "src",
+    "sourceMap": true,
+    "strict": true,
+    "target": "ESNext",
+    "typeRoots": ["node_modules/@rbxts"],
+    "types": ["globals"]
+  },
+  "include": ["src"]
+}
