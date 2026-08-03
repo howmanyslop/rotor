@@ -25,3 +25,4 @@ testdata/transformers/project/flamework.build
 .agents/skills/golang-continuous-integration/
 .agents/skills/golang-error-handling/
 .agents/skills/golang-testing/
+dist/
