@@ -10,6 +10,8 @@ import (
 
 // captureStderr runs fn with os.Stderr redirected to a pipe and returns what
 // was written, plus fn's return value. Mirrors captureStdout in build_test.go.
+// The pipe is drained concurrently: Windows pipes buffer only ~4KB, so a
+// reader that starts after fn returns would deadlock on larger output.
 func captureStderr(t *testing.T, fn func() int) (string, int) {
 	t.Helper()
 	prev := os.Stderr
@@ -18,10 +20,16 @@ func captureStderr(t *testing.T, fn func() int) (string, int) {
 		t.Fatal(err)
 	}
 	os.Stderr = w
+	done := make(chan struct{})
+	var data []byte
+	go func() {
+		data, _ = io.ReadAll(r)
+		close(done)
+	}()
 	code := fn()
 	_ = w.Close()
 	os.Stderr = prev
-	data, _ := io.ReadAll(r)
+	<-done
 	return string(data), code
 }
 

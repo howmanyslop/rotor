@@ -13,3 +13,12 @@
 # Go fuzz corpus seeds must keep their exact bytes (LF); no EOL conversion.
 testdata/fuzz/** -text
 **/testdata/fuzz/** -text
+# Fixture trees are byte-exact goldens: keep the committed bytes on every
+# platform. Without this, `* text=auto` rewrites unpinned extensions (.txt,
+# .map, .tsx, .js, .md) to CRLF on Windows checkouts and golden compares drift.
+testdata/** -text
+**/testdata/** -text
+# This byte-parity fixture deliberately exercises CRLF and a UTF-8 BOM.
+testdata/forkparity/project/performance-output/tree/src/*.ts -text whitespace=-cr-at-eol
+# The $file macro inlines this text file byte-for-byte into Luau output.
+internal/compile/testdata/macros_model/src/notes.txt -text

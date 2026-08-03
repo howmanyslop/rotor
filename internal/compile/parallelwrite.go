@@ -8,8 +8,9 @@ import (
 )
 
 const (
-	writeConcurrencyCap = 256
-	writeSyncCutoff     = 16
+	writeConcurrencyCap     = 256
+	writeConcurrencyDefault = 8
+	writeSyncCutoff         = 16
 )
 
 func writeWorkers() int {
@@ -19,20 +20,7 @@ func writeWorkers() int {
 	if n, ok := parseWriteConcurrency(os.Getenv("ROTOR_WRITE_WORKERS")); ok {
 		return n
 	}
-	poolSize := 4.0
-	if raw := os.Getenv("UV_THREADPOOL_SIZE"); raw != "" {
-		if n, err := strconv.ParseFloat(raw, 64); err == nil && n > 0 && !math.IsNaN(n) && !math.IsInf(n, 0) {
-			poolSize = n
-		}
-	}
-	workers := poolSize * 2
-	if workers >= writeConcurrencyCap {
-		return writeConcurrencyCap
-	}
-	if workers < 1 {
-		return 1
-	}
-	return int(workers)
+	return writeConcurrencyDefault
 }
 
 func parseWriteConcurrency(raw string) (int, bool) {

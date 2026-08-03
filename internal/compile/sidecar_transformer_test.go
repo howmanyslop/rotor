@@ -66,9 +66,10 @@ module.exports.shouldTransformSourceFile = function (sourceFile, program, config
 func TestTransformerOrdering(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
-
 	dir := writeProject(t, "@scope/plugin-ordering-fixture", "")
+	// Registered after writeProject's t.TempDir so it runs before the temp
+	// dir is removed (the worker's cwd is the project dir).
+	t.Cleanup(closeSidecarSessions)
 	writeSidecarPluginFixture(t, dir, `{
 	"compilerOptions": {
 		"plugins": [{
@@ -121,9 +122,10 @@ func TestTransformerOrdering(t *testing.T) {
 func TestTransformerHooks(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
-
 	dir := writeProject(t, "@scope/plugin-hooks-fixture", "")
+	// Registered after writeProject's t.TempDir so it runs before the temp
+	// dir is removed (the worker's cwd is the project dir).
+	t.Cleanup(closeSidecarSessions)
 	writeSidecarPluginFixture(t, dir, "", `{
 	"compilerOptions": {
 		"allowSyntheticDefaultImports": true,

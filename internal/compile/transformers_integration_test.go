@@ -41,10 +41,13 @@ func skipOrFailFixture(t *testing.T, format string, args ...any) {
 // resolved from the fixture's node_modules, warm session, real packages.
 func TestTransformersFixtureFlameworkAndEnv(t *testing.T) {
 	dir := transformersFixtureDir(t)
-	t.Cleanup(closeSidecarSessions)
 	closeSidecarSessions()
 	t.Setenv("ROTOR_SIDECAR_PATH", "")
 	redirectUserCacheDir(t)
+	// Registered after redirectUserCacheDir's t.TempDir so it runs before the
+	// cache dir is removed: Windows refuses to delete the extracted sidecar
+	// script while the worker still has it open.
+	t.Cleanup(closeSidecarSessions)
 	t.Setenv("ROTOR_FIXTURE_API_URL", "https://env.example")
 
 	if err := os.RemoveAll(filepath.Join(dir, "out")); err != nil {

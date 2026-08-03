@@ -41,10 +41,11 @@ type buildArgs struct {
 	checkers            *int
 	jsonOut             bool   // rotor DX extension: emit a machine-readable result object
 	cpuprofile          string // rotor DX extension: write a pprof CPU profile here
-	maxErrors           int    // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
-	bell                bool   // rotor DX extension (watch): ring the bell on a fail<->pass flip
-	clearScreen         bool   // rotor DX extension (watch): clear the screen before each rebuild (default true)
-	minify              bool   // rotor DX extension: minify emitted Luau before writing
+	timings             string
+	maxErrors           int  // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
+	bell                bool // rotor DX extension (watch): ring the bell on a fail<->pass flip
+	clearScreen         bool // rotor DX extension (watch): clear the screen before each rebuild (default true)
+	minify              bool // rotor DX extension: minify emitted Luau before writing
 }
 
 // parseBuildArgs parses the rbxtsc-compatible `build` flag surface
@@ -153,6 +154,12 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			continue
 		case "cpuprofile":
 			res.cpuprofile = takeValue()
+			continue
+		case "timings":
+			res.timings = takeValue()
+			if res.timings == "" {
+				return nil, errors.New("--timings requires a path")
+			}
 			continue
 		case "max-errors":
 			v := takeValue()
@@ -310,6 +317,10 @@ func cmdBuild(args []string) int {
 		fmt.Println(version)
 		return 0
 	}
+	if parsed.timings != "" && parsed.opts.watch != nil && *parsed.opts.watch {
+		fmt.Fprintln(os.Stderr, "rotor build: --timings cannot be used with --watch")
+		return 1
+	}
 
 	if parsed.cpuprofile != "" {
 		f, err := os.Create(parsed.cpuprofile)
@@ -347,6 +358,16 @@ func cmdBuild(args []string) int {
 	opts.emitDeclarationOnly = parsed.emitDeclarationOnly
 	opts.builders = parsed.builders
 	opts.checkers = parsed.checkers
+	if parsed.timings != "" && opts.watch {
+		fmt.Fprintln(os.Stderr, "rotor build: --timings cannot be used with --watch")
+		return 1
+	}
+	if parsed.timings != "" {
+		if err := prepareBuildTimingsPath(parsed.timings); err != nil {
+			fmt.Fprintf(os.Stderr, "rotor build: cannot prepare timings output: %v\n", err)
+			return 1
+		}
+	}
 
 	// LogService.verbose = projectOptions.verbose === true (build.ts L132).
 	logservice.Verbose = opts.verbose
@@ -359,7 +380,7 @@ func cmdBuild(args []string) int {
 	// stdout. Watch mode has no terminal "end", so it is not JSON-encoded; a
 	// one-shot build is what CI/editor integrations call with --json.
 	if parsed.jsonOut && !opts.watch {
-		return cmdBuildJSON(dir, tsConfigPath, opts, parsed.build)
+		return cmdBuildJSON(dir, tsConfigPath, opts, parsed.build, parsed.timings)
 	}
 
 	out := newUI(os.Stdout)
@@ -391,10 +412,21 @@ func cmdBuild(args []string) int {
 	var result *compile.BuildResult
 	var diags []compile.DiagnosticInfo
 	var elapsed time.Duration
+	var timings *compile.BuildTimings
+	if parsed.timings != "" {
+		timings = compile.NewBuildTimings()
+	}
 	if parsed.build {
-		result, diags, elapsed, err = runBuildSolutionOnce(tsConfigPath, opts)
+		result, diags, elapsed, err = runBuildSolutionOnce(tsConfigPath, opts, timings)
 	} else {
-		result, diags, elapsed, err = runBuildOnce(dir, tsConfigPath, opts)
+		result, diags, elapsed, err = runBuildOnceWithTimings(dir, tsConfigPath, opts, timings)
+	}
+	if timings != nil {
+		timings.SetOK(err == nil)
+		if writeErr := writeBuildTimings(parsed.timings, timings); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "rotor build: write timings: %v\n", writeErr)
+			return 1
+		}
 	}
 	if err != nil {
 		newUI(os.Stderr).buildFailure(err.Error(), diags, parsed.maxErrors)
@@ -431,10 +463,16 @@ func newBuildOptionsReload(tsConfigPath string, parsed *buildArgs) func() (proje
 }
 
 func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
+	return runBuildOnceWithTimings(dir, tsConfigPath, opts, nil)
+}
+
+func runBuildOnceWithTimings(dir, tsConfigPath string, opts projectOptions, timings *compile.BuildTimings) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
 	transformer.HeaderComment = " Compiled with @isentinel/roblox-ts v4.0.11"
 
 	start := time.Now()
-	result, msgs, err := compile.BuildProjectWithOptions(dir, projectCompileOptions(tsConfigPath, opts))
+	compileOptions := projectCompileOptions(tsConfigPath, opts)
+	compileOptions.Timings = timings
+	result, msgs, err := compile.BuildProjectWithOptions(dir, compileOptions)
 	var diags []compile.DiagnosticInfo
 	if result != nil {
 		diags = result.Diagnostics
@@ -447,10 +485,12 @@ func runBuildOnce(dir, tsConfigPath string, opts projectOptions) (*compile.Build
 	return result, diags, time.Since(start), err
 }
 
-func runBuildSolutionOnce(tsConfigPath string, opts projectOptions) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
+func runBuildSolutionOnce(tsConfigPath string, opts projectOptions, timings *compile.BuildTimings) (*compile.BuildResult, []compile.DiagnosticInfo, time.Duration, error) {
 	transformer.HeaderComment = " Compiled with @isentinel/roblox-ts v4.0.11"
 	start := time.Now()
-	result, msgs, err := compile.BuildSolutionWithOptions(tsConfigPath, projectCompileOptions(tsConfigPath, opts))
+	compileOptions := projectCompileOptions(tsConfigPath, opts)
+	compileOptions.Timings = timings
+	result, msgs, err := compile.BuildSolutionWithOptions(tsConfigPath, compileOptions)
 	var diags []compile.DiagnosticInfo
 	if result != nil {
 		diags = result.Diagnostics
@@ -518,15 +558,26 @@ func writeJSONResult(w io.Writer, res jsonResult) {
 // cmdBuildJSON runs a one-shot build and prints a single jsonResult object
 // instead of the styled UI. Exit code is unchanged from the styled path: 1 on
 // any build error, 0 otherwise.
-func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions, solution bool) int {
+func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions, solution bool, timingPath string) int {
 	var result *compile.BuildResult
 	var diags []compile.DiagnosticInfo
 	var elapsed time.Duration
 	var err error
+	var timings *compile.BuildTimings
+	if timingPath != "" {
+		timings = compile.NewBuildTimings()
+	}
 	if solution {
-		result, diags, elapsed, err = runBuildSolutionOnce(tsConfigPath, opts)
+		result, diags, elapsed, err = runBuildSolutionOnce(tsConfigPath, opts, timings)
 	} else {
-		result, diags, elapsed, err = runBuildOnce(dir, tsConfigPath, opts)
+		result, diags, elapsed, err = runBuildOnceWithTimings(dir, tsConfigPath, opts, timings)
+	}
+	if timings != nil {
+		timings.SetOK(err == nil)
+		if writeErr := writeBuildTimings(timingPath, timings); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "rotor build: write timings: %v\n", writeErr)
+			return 1
+		}
 	}
 	res := jsonResult{
 		Version:    version,
@@ -555,6 +606,58 @@ func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions, solution bool) 
 	res.Files = len(result.Outputs)
 	writeJSONResult(os.Stdout, res)
 	return 0
+}
+
+func prepareBuildTimingsPath(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create timings directory %q: %w", dir, err)
+	}
+	file, err := os.CreateTemp(dir, ".rotor-timings-*")
+	if err != nil {
+		return fmt.Errorf("create timings destination in %q: %w", dir, err)
+	}
+	name := file.Name()
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close timings destination %q: %w", name, err)
+	}
+	if err := os.Remove(name); err != nil {
+		return fmt.Errorf("remove timings destination %q: %w", name, err)
+	}
+	return nil
+}
+
+func writeBuildTimings(path string, timings *compile.BuildTimings) (err error) {
+	data, err := json.Marshal(timings)
+	if err != nil {
+		return fmt.Errorf("encode timings: %w", err)
+	}
+	dir := filepath.Dir(path)
+	file, err := os.CreateTemp(dir, ".rotor-timings-*")
+	if err != nil {
+		return fmt.Errorf("create temporary timings file: %w", err)
+	}
+	temporaryPath := file.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(temporaryPath)
+		}
+	}()
+	if _, err := file.Write(append(data, '\n')); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write temporary timings file: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync temporary timings file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close temporary timings file: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace timings output %q: %w", path, err)
+	}
+	return nil
 }
 
 // lineColOf computes 1-based line/col for a byte offset in a file (0,0 if unreadable).

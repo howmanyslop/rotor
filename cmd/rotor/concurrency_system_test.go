@@ -16,6 +16,7 @@ import (
 
 var concurrencyTimingLine = regexp.MustCompile(`(?m)(compiled\s+\d+\s+files\s+in\s+)\d+(?:\.\d+)?\s*(?:ns|us|µs|ms|s)`)
 var concurrencyRate = regexp.MustCompile(`(?m)(\s)\d+ files/s`)
+var concurrencyPathPrefix = regexp.MustCompile(`^(?:[A-Za-z]:)?/+`)
 
 type concurrencySystemRun struct {
 	code     int
@@ -235,8 +236,47 @@ func writeConcurrencyManifest(t *testing.T, name string, manifest map[string]str
 
 func normalizeConcurrencyOutput(value, tempRoot string) string {
 	value = strings.ReplaceAll(value, `\`, "/")
-	value = strings.ReplaceAll(value, filepath.ToSlash(tempRoot), "<TEMP_ROOT>")
-	value = strings.ReplaceAll(value, filepath.Base(tempRoot), "<TEMP_ROOT>")
+	// Separators are normalized by hand instead of with filepath.ToSlash and
+	// filepath.Base, which ignore backslashes off Windows: doing it this way
+	// makes the redaction identical on every platform, so the Windows spellings
+	// stay testable from a Linux run.
+	slashRoot := strings.ReplaceAll(tempRoot, `\`, "/")
+	value = strings.ReplaceAll(value, slashRoot, "<TEMP_ROOT>")
+	// Diagnostics can render a fixture path relative to the working directory,
+	// which drops the volume and leading separator; on Windows that spelling
+	// never matched the absolute root. The prefix is stripped by pattern rather
+	// than filepath.VolumeName so the behavior is identical (and testable) on
+	// every platform.
+	if volumeless := concurrencyPathPrefix.ReplaceAllString(slashRoot, ""); volumeless != "" && volumeless != slashRoot {
+		value = strings.ReplaceAll(value, volumeless, "<TEMP_ROOT>")
+	}
+	// The banner prints the project directory on its own, so the bare base name
+	// needs redacting too — but only as a whole word. An unguarded "001" also
+	// matched digits inside the enclosing temp directory name, which made two
+	// builders normalize identical Windows output to different text.
+	baseName := slashRoot[strings.LastIndex(slashRoot, "/")+1:]
+	base := regexp.MustCompile(`\b` + regexp.QuoteMeta(baseName) + `\b`)
+	value = base.ReplaceAllString(value, "<TEMP_ROOT>")
 	value = concurrencyTimingLine.ReplaceAllString(value, `${1}<TIME>`)
 	return concurrencyRate.ReplaceAllString(value, `${1}<RATE> files/s`)
+}
+
+// TestNormalizeConcurrencyOutputRedactsWindowsSpellings pins the Windows shapes
+// no Linux run reaches: a diagnostic path rendered relative to the working
+// directory (no volume), and a temp directory name whose digits must survive a
+// redaction of the bare base component.
+func TestNormalizeConcurrencyOutputRedactsWindowsSpellings(t *testing.T) {
+	tempRoot := `C:\Users\RUNNER~1\AppData\Local\Temp\TestGraph1003578272\003`
+	value := "  rotor v0.0.0  -  003\n" +
+		"  --> ../../../../Users/RUNNER~1/AppData/Local/Temp/TestGraph1003578272/003/left/src/value.ts:1:14\n" +
+		"  wrote TestGraph1003578272.json\n"
+
+	got := normalizeConcurrencyOutput(value, tempRoot)
+
+	want := "  rotor v0.0.0  -  <TEMP_ROOT>\n" +
+		"  --> ../../../../<TEMP_ROOT>/left/src/value.ts:1:14\n" +
+		"  wrote TestGraph1003578272.json\n"
+	if got != want {
+		t.Fatalf("normalizeConcurrencyOutput() = %q, want %q", got, want)
+	}
 }

@@ -85,10 +85,16 @@ func TestCmdSourcemapStdout(t *testing.T) {
 		t.Fatal(err)
 	}
 	os.Stdout = w
+	done := make(chan struct{})
+	var data []byte
+	go func() {
+		data, _ = io.ReadAll(r)
+		close(done)
+	}()
 	code := cmdSourcemap([]string{dir})
 	_ = w.Close()
 	os.Stdout = old
-	data, err := io.ReadAll(r)
+	<-done
 	if err != nil {
 		t.Fatal(err)
 	}

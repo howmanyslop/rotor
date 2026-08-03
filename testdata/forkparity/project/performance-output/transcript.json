@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "description": "baseline byte contract for source maps, declarations, declaration maps, state, and stateful afterDeclarations ordering",
+  "exitCode": 0,
+  "diagnostics": [],
+  "artifactPaths": [
+    "out/alpha.d.ts",
+    "out/alpha.d.ts.map",
+    "out/alpha.luau",
+    "out/alpha.luau.map",
+    "out/beta.d.ts",
+    "out/beta.d.ts.map",
+    "out/beta.luau",
+    "out/beta.luau.map",
+    "out/rbxts.copyfiles.json"
+  ],
+  "emittedFiles": [
+    "<PERFORMANCE_OUTPUT_ROOT>/out/beta.luau",
+    "<PERFORMANCE_OUTPUT_ROOT>/out/alpha.luau",
+    "<PERFORMANCE_OUTPUT_ROOT>/out/beta.d.ts.map",
+    "<PERFORMANCE_OUTPUT_ROOT>/out/beta.d.ts",
+    "<PERFORMANCE_OUTPUT_ROOT>/out/alpha.d.ts.map",
+    "<PERFORMANCE_OUTPUT_ROOT>/out/alpha.d.ts"
+  ]
+}

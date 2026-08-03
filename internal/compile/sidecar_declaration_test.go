@@ -35,9 +35,8 @@ module.exports = function () {
 func TestAfterDeclarationsOnly(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
-
 	dir := writeProject(t, "@scope/after-declarations-fixture", "")
+	t.Cleanup(closeSidecarSessions)
 	writeSidecarPluginFixture(t, dir, "", sidecarDeclarationConfig(`[{ "transform": "./plugins/declaration-marker.js", "afterDeclarations": true }]`))
 	if err := os.WriteFile(filepath.Join(dir, "plugins", "declaration-marker.js"), []byte(declarationMarkerPlugin), 0o644); err != nil {
 		t.Fatal(err)
@@ -62,9 +61,8 @@ func TestAfterDeclarationsOnly(t *testing.T) {
 func TestTransformerParentFix(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
-
 	dir := writeProject(t, "@scope/parent-fix-fixture", "")
+	t.Cleanup(closeSidecarSessions)
 	plugin := `const ts = require("typescript");
 function inject(context) {
 	return (sourceFile) => ts.visitNode(sourceFile, function visit(node) {
@@ -99,9 +97,8 @@ module.exports = function () { return { before: inject, after: requireParent }; 
 func TestDeclarationPathRewrite(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
-
 	dir := writeProject(t, "@scope/declaration-path-fixture", "")
+	t.Cleanup(closeSidecarSessions)
 	config := strings.Replace(
 		sidecarDeclarationConfig(`[]`),
 		`"outDir": "out",`,
@@ -131,9 +128,8 @@ func TestDeclarationPathRewrite(t *testing.T) {
 func TestTransformerSourceMapOriginalContent(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
-
 	dir := writeProject(t, "@scope/transformer-source-map-fixture", "")
+	t.Cleanup(closeSidecarSessions)
 	config := strings.Replace(sidecarDeclarationConfig(`[{ "transform": "./plugins/insert.js" }]`), `"declaration": true,`, `"declaration": true, "sourceMap": true,`, 1)
 	writeSidecarPluginFixture(t, dir, "", config)
 	if err := os.WriteFile(filepath.Join(dir, "plugins", "insert.js"), []byte(insertStatementPlugin), 0o644); err != nil {

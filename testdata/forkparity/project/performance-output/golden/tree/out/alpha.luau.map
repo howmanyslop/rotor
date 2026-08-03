@@ -1,0 +1,1 @@
+{"version":3,"file":"<PERFORMANCE_OUTPUT_ROOT>/src/alpha.luau","sources":["<PERFORMANCE_OUTPUT_ROOT>/src/alpha.ts"],"sourcesContent":["import type { Beta } from \"@performance/beta\";\r\n\r\nexport const alpha: Beta = { label: \"alpha\", weight: 1 };\r\n"],"mappings":";AAEA"}

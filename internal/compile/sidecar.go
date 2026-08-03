@@ -23,10 +23,13 @@ import (
 	"rotor/tsgo/tsoptions"
 	"rotor/tsgo/vfs"
 	"rotor/tsgo/vfs/osvfs"
-	"rotor/tsgo/vfs/wrapvfs"
 )
 
-const defaultSidecarResponseTimeout = 30 * time.Second
+// defaultSidecarResponseTimeout is intentionally generous: upstream rbxtsc
+// awaits the transformer with no timeout, so the cap only guards against a
+// hung worker — never a legitimately slow build (Flamework + React Compiler
+// on a full project can take minutes on slow machines).
+const defaultSidecarResponseTimeout = 10 * time.Minute
 
 const sidecarResponseTimeoutEnv = "ROTOR_SIDECAR_TIMEOUT"
 
@@ -65,10 +68,14 @@ type sidecarOutputFile struct {
 }
 
 type preparedTransformerProgram struct {
-	program      *compiler.Program
-	sourceFiles  []*ast.SourceFile
-	declarations []sidecarOutputFile
-	sourceTraces map[string]*sourceTraceMap
+	program                  *compiler.Program
+	sourceFiles              []*ast.SourceFile
+	declarations             []sidecarOutputFile
+	sourceTraces             map[string]*sourceTraceMap
+	sidecarRoundTripDuration time.Duration
+	overlayProgramDuration   time.Duration
+	sidecarRoundTripRecorded bool
+	overlayProgramRecorded   bool
 }
 
 func prepareProjectProgramForCompile(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*compiler.Program, []*ast.SourceFile, []string, error) {
@@ -97,10 +104,14 @@ func prepareTransformerProgram(dir string, program *compiler.Program, sourceFile
 	}
 	if transformed.program == program {
 		return &preparedTransformerProgram{
-			program:      program,
-			sourceFiles:  sourceFiles,
-			declarations: transformed.declarations,
-			sourceTraces: transformed.sourceTraces,
+			program:                  program,
+			sourceFiles:              sourceFiles,
+			declarations:             transformed.declarations,
+			sourceTraces:             transformed.sourceTraces,
+			sidecarRoundTripDuration: transformed.sidecarRoundTripDuration,
+			overlayProgramDuration:   transformed.overlayProgramDuration,
+			sidecarRoundTripRecorded: transformed.sidecarRoundTripRecorded,
+			overlayProgramRecorded:   transformed.overlayProgramRecorded,
 		}, nil, nil
 	}
 
@@ -109,10 +120,14 @@ func prepareTransformerProgram(dir string, program *compiler.Program, sourceFile
 		return nil, nil, err
 	}
 	return &preparedTransformerProgram{
-		program:      transformed.program,
-		sourceFiles:  remapped,
-		declarations: transformed.declarations,
-		sourceTraces: transformed.sourceTraces,
+		program:                  transformed.program,
+		sourceFiles:              remapped,
+		declarations:             transformed.declarations,
+		sourceTraces:             transformed.sourceTraces,
+		sidecarRoundTripDuration: transformed.sidecarRoundTripDuration,
+		overlayProgramDuration:   transformed.overlayProgramDuration,
+		sidecarRoundTripRecorded: transformed.sidecarRoundTripRecorded,
+		overlayProgramRecorded:   transformed.overlayProgramRecorded,
 	}, nil, nil
 }
 
@@ -127,7 +142,9 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 		configPath = filepath.ToSlash(filepath.Join(filepath.FromSlash(dir), "tsconfig.json"))
 	}
 
+	sidecarStarted := time.Now()
 	response, err := runTransformerSidecar(dir, configPath, sourceFiles, projectSourceFiles(program))
+	sidecarDuration := time.Since(sidecarStarted)
 	if err != nil {
 		return nil, []string{err.Error()}, err
 	}
@@ -161,9 +178,11 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	}
 	if len(response.Transformed) == 0 {
 		return &preparedTransformerProgram{
-			program:      program,
-			declarations: response.Declarations,
-			sourceTraces: sourceTraces,
+			program:                  program,
+			declarations:             response.Declarations,
+			sourceTraces:             sourceTraces,
+			sidecarRoundTripDuration: sidecarDuration,
+			sidecarRoundTripRecorded: true,
 		}, nil, nil
 	}
 
@@ -172,14 +191,20 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	for _, file := range response.Transformed {
 		overlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
 	}
+	overlayStarted := time.Now()
 	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, overlays, program.Options().Checkers)
+	overlayDuration := time.Since(overlayStarted)
 	if err != nil {
 		return nil, nil, err
 	}
 	return &preparedTransformerProgram{
-		program:      transformedProgram,
-		declarations: response.Declarations,
-		sourceTraces: sourceTraces,
+		program:                  transformedProgram,
+		declarations:             response.Declarations,
+		sourceTraces:             sourceTraces,
+		sidecarRoundTripDuration: sidecarDuration,
+		overlayProgramDuration:   overlayDuration,
+		sidecarRoundTripRecorded: true,
+		overlayProgramRecorded:   true,
 	}, nil, nil
 }
 
@@ -522,22 +547,7 @@ func newProjectProgramWithOverlay(projectDir, tsConfigPath string, overlays map[
 		configPath = filepath.ToSlash(abs)
 	}
 
-	baseFS := SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath)
-	caseSensitive := baseFS.UseCaseSensitiveFileNames()
-	fs := wrapvfs.Wrap(baseFS, wrapvfs.Replacements{
-		FileExists: func(path string) bool {
-			if _, ok := overlays[normalizeOverlayPath(path, caseSensitive)]; ok {
-				return true
-			}
-			return baseFS.FileExists(path)
-		},
-		ReadFile: func(path string) (string, bool) {
-			if text, ok := overlays[normalizeOverlayPath(path, caseSensitive)]; ok {
-				return text, true
-			}
-			return baseFS.ReadFile(path)
-		},
-	})
+	fs := newOverlayFS(osvfs.FS(), configPath, overlays)
 	return newProjectProgramFromFSWithOptions(dir, configPath, fs, checkers)
 }
 

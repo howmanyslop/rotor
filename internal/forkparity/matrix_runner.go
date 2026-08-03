@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 )
 
@@ -123,6 +124,9 @@ func (r MatrixRunner) rotorBinary() (string, error) {
 		return "", fmt.Errorf("create matrix report directory: %w", err)
 	}
 	binPath := filepath.Join(r.ReportDir, "rotor")
+	if runtime.GOOS == "windows" {
+		binPath += ".exe"
+	}
 	cmd := exec.Command("go", "build", "-o", binPath, "./cmd/rotor")
 	cmd.Dir = r.RepoRoot
 	output, err := cmd.CombinedOutput()

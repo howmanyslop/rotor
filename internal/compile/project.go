@@ -423,6 +423,7 @@ func resolveAgainst(base, p string) string {
 // behavior (pure: nothing but the returned map is produced).
 type ProjectOptions struct {
 	rojoCache *rojo.RojoResolverCache
+	Timings   *BuildTimings
 
 	crossProjectImportPathMap map[string]string
 	pendingSolutionPersists   *[]func() error

@@ -179,7 +179,9 @@ The write-worker controls are:
 
 - `RBXTSC_WRITE_CONCURRENCY` directly overrides output-write workers and takes precedence over Rotor's setting; values are capped at 256.
 - `ROTOR_WRITE_WORKERS` is Rotor's own output-write override.
-- `UV_THREADPOOL_SIZE` supplies the fallback pool size; Rotor derives the default write-worker count as pool size x 2, capped at 256. Set it before starting a process when matching the fork's Node tuning is important.
+- Without either override, Rotor uses 8 Go output-write workers. Positive fractional overrides are rounded down; invalid values fall through to the next setting or this default.
+
+`UV_THREADPOOL_SIZE` may still affect the Node sidecar's libuv thread pool, but it does not select Rotor's Go output-write worker count.
 
 ## Production readiness
 

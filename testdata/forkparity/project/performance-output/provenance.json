@@ -1,0 +1,12 @@
+{
+  "baselineCommit": "11d0bc2",
+  "baselineVersion": "v2.2.1-fork.5",
+  "compilerVersion": "@isentinel/roblox-ts@4.0.11",
+  "zipDigest": "a0f097baefaa02ae411f18ea19a150c0076bfd2adbc6645dcef02e2c162cea5a",
+  "sourceDirectoryMtimeUnix": 946684800,
+  "baselineBinaryBuildCommand": "GIT_MASTER=1 git worktree add /tmp/rotor-baseline-11d0bc2 11d0bc2; go -C /tmp/rotor-baseline-11d0bc2 build -o /tmp/rotor-baseline ./cmd/rotor",
+  "baselineCaptureCommand": "cp -R testdata/forkparity/project/performance-output/tree /tmp/rotor-performance-output-baseline; cp -R testdata/forkparity/project/performance-output/support/globals /tmp/rotor-performance-output-baseline/node_modules/@rbxts/globals; python3 -c 'import os; os.utime(\"/tmp/rotor-performance-output-baseline/src\", (946684800, 946684800))'; ROTOR_SIDECAR_PATH=/Users/loganhamilton/GitHub/rotor-worktrees/windows-build-performance/tools/sidecar ROTOR_SIDECAR_TIMEOUT=300s /tmp/rotor-baseline build --project /tmp/rotor-performance-output-baseline",
+  "emittedMetadataCaptureCommand": "ROTOR_SIDECAR_PATH=/Users/loganhamilton/GitHub/rotor-worktrees/windows-build-performance/tools/sidecar ROTOR_SIDECAR_TIMEOUT=300s go -C /tmp/rotor-baseline-11d0bc2 run ./.tmp-performance-capture /tmp/rotor-performance-output-metadata",
+  "directArchiveExecutionAvailable": false,
+  "directArchiveExecutionReason": "zip lacks fork runtime deps"
+}
