@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -168,6 +169,9 @@ func TestProjectOracleGoldens(t *testing.T) {
 		t.Fatal(err)
 	}
 	rotorBin := filepath.Join(t.TempDir(), "rotor")
+	if runtime.GOOS == "windows" {
+		rotorBin += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", rotorBin, "./cmd/rotor")
 	build.Dir = root
 	if output, err := build.CombinedOutput(); err != nil {
