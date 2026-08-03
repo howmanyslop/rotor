@@ -152,6 +152,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  --allowCommentDirectives  allow @ts-ignore et al.")
 	fmt.Fprintln(w, "  --luau                    emit files with .luau extension (default true; --luau=false emits .lua)")
 	fmt.Fprintln(w, "  --cpuprofile <path>       write a pprof CPU profile of the build (diagnostics)")
+	fmt.Fprintln(w, "  --timings <path>          write aggregate one-shot build timings as JSON (not with --watch)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Diagnostics & watch DX (rotor extensions):")
 	fmt.Fprintln(w, "  --minify                  minify emitted Luau (strip comments/whitespace, t[\"x\"] -> t.x)")

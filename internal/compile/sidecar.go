@@ -69,10 +69,14 @@ type sidecarOutputFile struct {
 }
 
 type preparedTransformerProgram struct {
-	program      *compiler.Program
-	sourceFiles  []*ast.SourceFile
-	declarations []sidecarOutputFile
-	sourceTraces map[string]*sourceTraceMap
+	program                  *compiler.Program
+	sourceFiles              []*ast.SourceFile
+	declarations             []sidecarOutputFile
+	sourceTraces             map[string]*sourceTraceMap
+	sidecarRoundTripDuration time.Duration
+	overlayProgramDuration   time.Duration
+	sidecarRoundTripRecorded bool
+	overlayProgramRecorded   bool
 }
 
 func prepareProjectProgramForCompile(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*compiler.Program, []*ast.SourceFile, []string, error) {
@@ -101,10 +105,14 @@ func prepareTransformerProgram(dir string, program *compiler.Program, sourceFile
 	}
 	if transformed.program == program {
 		return &preparedTransformerProgram{
-			program:      program,
-			sourceFiles:  sourceFiles,
-			declarations: transformed.declarations,
-			sourceTraces: transformed.sourceTraces,
+			program:                  program,
+			sourceFiles:              sourceFiles,
+			declarations:             transformed.declarations,
+			sourceTraces:             transformed.sourceTraces,
+			sidecarRoundTripDuration: transformed.sidecarRoundTripDuration,
+			overlayProgramDuration:   transformed.overlayProgramDuration,
+			sidecarRoundTripRecorded: transformed.sidecarRoundTripRecorded,
+			overlayProgramRecorded:   transformed.overlayProgramRecorded,
 		}, nil, nil
 	}
 
@@ -113,10 +121,14 @@ func prepareTransformerProgram(dir string, program *compiler.Program, sourceFile
 		return nil, nil, err
 	}
 	return &preparedTransformerProgram{
-		program:      transformed.program,
-		sourceFiles:  remapped,
-		declarations: transformed.declarations,
-		sourceTraces: transformed.sourceTraces,
+		program:                  transformed.program,
+		sourceFiles:              remapped,
+		declarations:             transformed.declarations,
+		sourceTraces:             transformed.sourceTraces,
+		sidecarRoundTripDuration: transformed.sidecarRoundTripDuration,
+		overlayProgramDuration:   transformed.overlayProgramDuration,
+		sidecarRoundTripRecorded: transformed.sidecarRoundTripRecorded,
+		overlayProgramRecorded:   transformed.overlayProgramRecorded,
 	}, nil, nil
 }
 
@@ -131,7 +143,9 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 		configPath = filepath.ToSlash(filepath.Join(filepath.FromSlash(dir), "tsconfig.json"))
 	}
 
+	sidecarStarted := time.Now()
 	response, err := runTransformerSidecar(dir, configPath, sourceFiles, projectSourceFiles(program))
+	sidecarDuration := time.Since(sidecarStarted)
 	if err != nil {
 		return nil, []string{err.Error()}, err
 	}
@@ -165,9 +179,11 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	}
 	if len(response.Transformed) == 0 {
 		return &preparedTransformerProgram{
-			program:      program,
-			declarations: response.Declarations,
-			sourceTraces: sourceTraces,
+			program:                  program,
+			declarations:             response.Declarations,
+			sourceTraces:             sourceTraces,
+			sidecarRoundTripDuration: sidecarDuration,
+			sidecarRoundTripRecorded: true,
 		}, nil, nil
 	}
 
@@ -176,14 +192,20 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	for _, file := range response.Transformed {
 		overlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
 	}
+	overlayStarted := time.Now()
 	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, overlays, program.Options().Checkers)
+	overlayDuration := time.Since(overlayStarted)
 	if err != nil {
 		return nil, nil, err
 	}
 	return &preparedTransformerProgram{
-		program:      transformedProgram,
-		declarations: response.Declarations,
-		sourceTraces: sourceTraces,
+		program:                  transformedProgram,
+		declarations:             response.Declarations,
+		sourceTraces:             sourceTraces,
+		sidecarRoundTripDuration: sidecarDuration,
+		overlayProgramDuration:   overlayDuration,
+		sidecarRoundTripRecorded: true,
+		overlayProgramRecorded:   true,
 	}, nil, nil
 }
 

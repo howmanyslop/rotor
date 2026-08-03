@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -247,6 +248,105 @@ func TestParseBuildArgsJSON(t *testing.T) {
 	}
 	if !got.jsonOut {
 		t.Error("--json not parsed")
+	}
+}
+
+func TestBuildTimingsFlag(t *testing.T) {
+	for _, args := range [][]string{{"--timings", "report.json"}, {"--timings=report.json"}} {
+		parsed, err := parseBuildArgs(args)
+		if err != nil {
+			t.Fatalf("parseBuildArgs(%v): %v", args, err)
+		}
+		if parsed.timings != "report.json" {
+			t.Errorf("parseBuildArgs(%v) timings = %q, want report.json", args, parsed.timings)
+		}
+	}
+
+	// Given
+	dir := writeBuildableProject(t, "")
+	timingPath := filepath.Join(t.TempDir(), "build-timings.json")
+
+	// When
+	_, _, code := captureBuildOutput(t, []string{"--timings", timingPath, dir})
+
+	// Then
+	if code != 0 {
+		t.Fatalf("cmdBuild --timings exit = %d, want 0", code)
+	}
+	data, err := os.ReadFile(timingPath)
+	if err != nil {
+		t.Fatalf("read timing output: %v", err)
+	}
+	var timings compile.BuildTimings
+	if err := json.Unmarshal(data, &timings); err != nil {
+		t.Fatalf("decode timing output: %v", err)
+	}
+	if timings.SchemaVersion != compile.BuildTimingSchemaVersion || !timings.OK {
+		t.Errorf("timing schemaVersion = %d, ok = %t; want current successful schema", timings.SchemaVersion, timings.OK)
+	}
+	if timings.Counts.TotalSources != 1 || timings.Counts.SelectedSources != 1 || timings.Counts.EmittedEntries != 1 {
+		t.Errorf("timing counts = %+v", timings.Counts)
+	}
+	if timings.Stages.SidecarRoundTripMs != 0 || timings.Stages.OverlayProgramMs != 0 {
+		t.Errorf("pluginless sidecar stages = %+v, want zero", timings.Stages)
+	}
+	assertTimingJSONShape(t, data)
+
+	t.Run("failed build writes an unsuccessful report", func(t *testing.T) {
+		// Given
+		failingDir := writeBuildableProject(t, "export const value: string = 1;\n")
+		failingTimingPath := filepath.Join(t.TempDir(), "failed-build-timings.json")
+
+		// When
+		_, _, failureCode := captureBuildOutput(t, []string{"--timings", failingTimingPath, failingDir})
+
+		// Then
+		if failureCode != 1 {
+			t.Fatalf("failing cmdBuild --timings exit = %d, want 1", failureCode)
+		}
+		failureData, err := os.ReadFile(failingTimingPath)
+		if err != nil {
+			t.Fatalf("read failed-build timing output: %v", err)
+		}
+		var failedTimings compile.BuildTimings
+		if err := json.Unmarshal(failureData, &failedTimings); err != nil {
+			t.Fatalf("decode failed-build timing output: %v", err)
+		}
+		if failedTimings.OK {
+			t.Errorf("failed-build timing ok = %t, want false", failedTimings.OK)
+		}
+	})
+}
+
+func assertTimingJSONShape(t *testing.T, data []byte) {
+	t.Helper()
+	var value map[string]json.RawMessage
+	if err := json.Unmarshal(data, &value); err != nil {
+		t.Fatalf("decode timing JSON shape: %v", err)
+	}
+	for _, field := range []string{"schemaVersion", "ok", "totalMs", "stages", "counts"} {
+		if _, ok := value[field]; !ok {
+			t.Errorf("timing JSON missing %q", field)
+		}
+	}
+}
+
+func TestBuildTimingsWatchRejected(t *testing.T) {
+	// Given
+	timingPath := filepath.Join(t.TempDir(), "build-timings.json")
+
+	// When
+	_, stderr, code := captureBuildOutput(t, []string{"--watch", "--timings", timingPath, filepath.Join(t.TempDir(), "missing")})
+
+	// Then
+	if code != 1 {
+		t.Errorf("cmdBuild --watch --timings exit = %d, want 1", code)
+	}
+	if !strings.Contains(stderr, "--timings cannot be used with --watch") {
+		t.Errorf("stderr = %q, want timing/watch rejection", stderr)
+	}
+	if _, err := os.Stat(timingPath); !os.IsNotExist(err) {
+		t.Errorf("timing output exists after rejected watch build: %v", err)
 	}
 }
 
@@ -915,4 +1015,110 @@ func TestCmdBuildFailureCodeFrame(t *testing.T) {
 	if !strings.Contains(stderr, "error") {
 		t.Errorf("stderr does not contain 'error'\nstderr:\n%s", stderr)
 	}
+}
+
+func TestBuildTimingsNormalOutputUnchanged(t *testing.T) {
+	// Given
+	dir := writeBuildableProject(t, "")
+
+	// When
+	firstStdout, firstStderr, firstCode := captureBuildOutput(t, []string{dir})
+	firstFiles := outputFileTree(t, filepath.Join(dir, "out"))
+	timingPath := filepath.Join(t.TempDir(), "build-timings.json")
+	secondStdout, secondStderr, secondCode := captureBuildOutput(t, []string{"--timings", timingPath, dir})
+	secondFiles := outputFileTree(t, filepath.Join(dir, "out"))
+
+	// Then
+	if firstCode != 0 || secondCode != 0 {
+		t.Fatalf("build exits = %d, %d; stdout: %q, %q; stderr: %q, %q", firstCode, secondCode, firstStdout, secondStdout, firstStderr, secondStderr)
+	}
+	if got, want := normalizeBuildOutput(firstStdout), normalizeBuildOutput(secondStdout); got != want {
+		t.Errorf("normalized stdout differs:\nfirst:  %q\nsecond: %q", got, want)
+	}
+	if firstStderr != secondStderr {
+		t.Errorf("stderr differs:\nfirst:  %q\nsecond: %q", firstStderr, secondStderr)
+	}
+	if !equalFileTrees(firstFiles, secondFiles) {
+		t.Errorf("output artifacts differ:\nfirst:  %#v\nsecond: %#v", firstFiles, secondFiles)
+	}
+}
+
+var buildTimingText = regexp.MustCompile(`in [0-9]+(?:\.[0-9]+)? ?(?:ns|µs|ms|s)|[0-9]+ files/s|\n    [0-9]+ written(?: - [0-9]+ files/s)?`)
+
+func normalizeBuildOutput(output string) string {
+	return buildTimingText.ReplaceAllString(output, "<timing>")
+}
+
+func captureBuildOutput(t *testing.T, args []string) (string, string, int) {
+	t.Helper()
+
+	previousStdout := os.Stdout
+	previousStderr := os.Stderr
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = stdoutWriter
+	os.Stderr = stderrWriter
+	code := cmdBuild(args)
+	if err := stdoutWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := stderrWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = previousStdout
+	os.Stderr = previousStderr
+	stdout, err := io.ReadAll(stdoutReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stderr, err := io.ReadAll(stderrReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(stdout), string(stderr), code
+}
+
+func outputFileTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	files := map[string]string{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Base(path) == "rbxts.copyfiles.json" {
+			return nil
+		}
+		contents, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		files[filepath.ToSlash(relative)] = string(contents)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return files
+}
+
+func equalFileTrees(left, right map[string]string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for path, leftContents := range left {
+		if right[path] != leftContents {
+			return false
+		}
+	}
+	return true
 }

@@ -62,33 +62,49 @@ type BuildResult struct {
 // compiled outputs. CompileProject remains the pure library API; this is the
 // writing entry point for the CLI and future watch/incremental layers.
 func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResult, []string, error) {
+	timings := opts.Timings
+	if timings != nil {
+		defer timings.finish()
+		timings.setEffectiveWriteWorkers(writeWorkers())
+	}
+	stopInitialProgram := timings.startStage(initialProgramStage)
 	dir, program, diags, err := newProjectProgramWithOptions(projectDir, opts.TsConfigPath, opts)
+	stopInitialProgram()
 	if err != nil {
 		return nil, diags, err
 	}
 	if opts.EmitDeclarationOnly {
+		sourceFiles := projectSourceFiles(program)
+		timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
 		if !program.Options().GetEmitDeclarations() {
 			msg := "Option 'emitDeclarationOnly' cannot be specified without specifying option 'declaration' or option 'composite'."
 			return nil, []string{msg}, errors.New("compile: TypeScript diagnostics")
 		}
-		prepared, sidecarDiags, err := prepareProjectProgramForBuild(dir, program, projectSourceFiles(program))
+		prepared, sidecarDiags, err := prepareProjectProgramForBuild(dir, program, sourceFiles)
 		if err != nil {
 			return nil, sidecarDiags, err
 		}
-		emitted, err := emitDeclarations(prepared.program, nil, opts.WriteOnlyChanged, prepared.declarations)
+		timings.recordPreparedTransformerProgram(prepared)
+		stopDeclarations := timings.startStage(declarationEmitWritesStage)
+		emitted, err := emitDeclarations(prepared.program, nil, opts.WriteOnlyChanged, prepared.declarations, timings)
+		stopDeclarations()
 		if err != nil {
 			return nil, nil, err
 		}
+		timings.setEmittedEntries(len(emitted))
 		return &BuildResult{Outputs: map[string]string{}, EmittedFiles: emitted}, nil, nil
 	}
 
+	stopSelectionCleanupCopy := timings.startStage(incrementalSelectionCleanupCopyStage)
 	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
 	sourceFiles := projectSourceFiles(program)
+	timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
 	sourceOutputPaths := make([]string, len(sourceFiles))
 	for i, sourceFile := range sourceFiles {
 		sourceOutputPaths[i] = outputPathRelativeToDir(dir, pathTranslator.GetOutputPath(sourceFile.FileName()))
 	}
 	if err := rejectDuplicateOutputPaths(sourceOutputPaths); err != nil {
+		stopSelectionCleanupCopy()
 		return nil, nil, err
 	}
 	rojoCache := loadRojoCachesPreBuild(dir, opts)
@@ -100,10 +116,12 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
 		previousManifest, err = readIncrementalManifest(pathTranslator.BuildInfoOutputPath)
 		if err != nil {
+			stopSelectionCleanupCopy()
 			return nil, nil, err
 		}
 		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, pathTranslator.BuildInfoOutputPath))
 		if err != nil {
+			stopSelectionCleanupCopy()
 			return nil, nil, err
 		}
 		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
@@ -124,13 +142,17 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	}
 
 	if err := maybeCopyInclude(dir, opts); err != nil {
+		stopSelectionCleanupCopy()
 		return nil, nil, err
 	}
 	if !copyFilesGate.SkipCopyFiles {
 		if err := copyNonCompiledFiles(pathTranslator, getRootDirs(program), opts.WriteOnlyChanged); err != nil {
+			stopSelectionCleanupCopy()
 			return nil, nil, err
 		}
 	}
+	stopSelectionCleanupCopy()
+	timings.setSourceCounts(len(sourceFiles), len(selectedFiles))
 
 	// rotor extension: detect $env usage on the already-loaded source text
 	// (no extra IO; a substring scan per file). Drives the rotor-env.d.ts
@@ -158,14 +180,20 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err != nil {
 		return nil, diags, err
 	}
+	timings.recordPreparedTransformerProgram(prepared)
 	program = prepared.program
 	selectedFiles = prepared.sourceFiles
+	timings.setSourceCounts(len(sourceFiles), len(selectedFiles))
 
+	stopProjectContext := timings.startStage(projectContextStage)
 	pctx, diags, err := newProjectContext(dir, program, opts)
+	stopProjectContext()
 	if err != nil {
 		return nil, diags, err
 	}
+	stopNativeCompile := timings.startStage(nativeDiagnosticsTransformRenderStage)
 	outputs, sourceMaps, infos, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
+	stopNativeCompile()
 	if err != nil {
 		return &BuildResult{Diagnostics: infos}, diagnosticInfoMessages(infos), err
 	}
@@ -180,6 +208,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 	}
 
+	stopCompiledOutputWrites := timings.startStage(compiledOutputWritesStage)
 	emittedFiles := make([]string, 0, len(outputs))
 	relOuts := make([]string, 0, len(outputs))
 	for _, sourceFile := range selectedFiles {
@@ -202,10 +231,14 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	for i, relOut := range relOuts {
 		sourceMap, hasSourceMap := sourceMaps[relOut+".map"]
 		if hasSourceMap {
+			timings.addScheduledSourceMapWrite()
+		}
+		if hasSourceMap {
 			sourceFile := sourceFilesByOutput[relOut]
 			if trace := prepared.sourceTraces[normalizeSourceFilePath(sourceFile.FileName())]; trace != nil {
 				sourceMap, err = rewriteSourceMapWithTrace(sourceMap, trace)
 				if err != nil {
+					stopCompiledOutputWrites()
 					return nil, nil, err
 				}
 			}
@@ -219,14 +252,18 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
 			w, err := writeOutputFile(absOut, outputs[relOut], opts.WriteOnlyChanged)
 			wrote[i] = w
+			timings.recordOutputWrite(absOut, w)
 			if err != nil || !hasSourceMap {
 				return err
 			}
-			_, err = writeOutputFile(absOut+".map", sourceMap, opts.WriteOnlyChanged)
+			mapWrote, err := writeOutputFile(absOut+".map", sourceMap, opts.WriteOnlyChanged)
+			timings.recordOutputWrite(absOut+".map", mapWrote)
 			return err
 		}
 	}
-	if err := parallelize(writeWorkers(), jobs); err != nil {
+	err = parallelize(writeWorkers(), jobs)
+	stopCompiledOutputWrites()
+	if err != nil {
 		return nil, nil, err
 	}
 	for i, w := range wrote {
@@ -234,20 +271,25 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			emittedFiles = append(emittedFiles, filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOuts[i])))
 		}
 	}
+	timings.setEmittedEntries(len(emittedFiles))
 
 	selectedPaths := make(map[string]struct{}, len(selectedFiles))
 	for _, sourceFile := range selectedFiles {
 		selectedPaths[normalizeSourceFilePath(sourceFile.FileName())] = struct{}{}
 	}
 
-	declFiles, err := emitDeclarations(program, selectedPaths, opts.WriteOnlyChanged, prepared.declarations)
+	stopDeclarations := timings.startStage(declarationEmitWritesStage)
+	declFiles, err := emitDeclarations(program, selectedPaths, opts.WriteOnlyChanged, prepared.declarations, timings)
+	stopDeclarations()
 	if err != nil {
 		return nil, nil, err
 	}
 	emittedFiles = append(emittedFiles, declFiles...)
 
+	stopPersistence := timings.startStage(persistenceStage)
 	if currentManifest != nil && !sameIncrementalManifest(previousManifest, currentManifest) {
 		if err := writeIncrementalManifest(pathTranslator.BuildInfoOutputPath, currentManifest); err != nil {
+			stopPersistence()
 			return nil, nil, err
 		}
 	}
@@ -260,6 +302,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if usesEnvMacro || usesAssetMacro || usesMacros {
 		wroteRotorTypes, err = WriteRotorTypes(filepath.FromSlash(dir))
 		if err != nil {
+			stopPersistence()
 			return nil, nil, fmt.Errorf("compile: writing %s: %w", RotorTypesFileName, err)
 		}
 	}
@@ -272,6 +315,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	wroteLockfile := false
 	if pctx.assets != nil && pctx.assets.Dirty() {
 		if err := pctx.assets.Lockfile().Save(filepath.FromSlash(dir)); err != nil {
+			stopPersistence()
 			return nil, nil, fmt.Errorf("compile: writing %s: %w", assetsLockfileName, err)
 		}
 		wroteLockfile = true
@@ -289,9 +333,12 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		*opts.pendingSolutionPersists = append(*opts.pendingSolutionPersists, persist)
 	} else {
 		if err := persist(); err != nil {
+			stopPersistence()
 			return nil, nil, err
 		}
 	}
+	stopPersistence()
+	timings.setEmittedEntries(len(emittedFiles))
 
 	return &BuildResult{
 		Outputs:         outputs,
@@ -315,12 +362,12 @@ func loadRojoCachesPreBuild(dir string, opts ProjectOptions) *rojo.RojoResolverC
 	return cache
 }
 
-func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct{}, writeOnlyChanged bool, sidecarDeclarations []sidecarOutputFile) ([]string, error) {
+func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct{}, writeOnlyChanged bool, sidecarDeclarations []sidecarOutputFile, timings *BuildTimings) ([]string, error) {
 	if !program.Options().GetEmitDeclarations() {
 		return nil, nil
 	}
 	if len(sidecarDeclarations) > 0 {
-		return writeSidecarDeclarations(sidecarDeclarations, writeOnlyChanged)
+		return writeSidecarDeclarations(sidecarDeclarations, writeOnlyChanged, timings)
 	}
 
 	ctx := context.Background()
@@ -377,12 +424,14 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 	if err := rejectDuplicateOutputPaths(paths); err != nil {
 		return nil, err
 	}
+	timings.addScheduledDeclarationWrites(len(pending))
 	wrote := make([]bool, len(pending))
 	writeJobs := make([]func() error, len(pending))
 	for i, write := range pending {
 		writeJobs[i] = func() error {
 			var err error
 			wrote[i], err = writeOutputFile(write.path, write.text, writeOnlyChanged)
+			timings.recordOutputWrite(write.path, wrote[i])
 			if !wrote[i] && write.data != nil {
 				write.data.SkippedDtsWrite = true
 			}
@@ -401,7 +450,7 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 	return emitted, nil
 }
 
-func writeSidecarDeclarations(declarations []sidecarOutputFile, writeOnlyChanged bool) ([]string, error) {
+func writeSidecarDeclarations(declarations []sidecarOutputFile, writeOnlyChanged bool, timings *BuildTimings) ([]string, error) {
 	paths := make([]string, len(declarations))
 	for i, declaration := range declarations {
 		paths[i] = filepath.FromSlash(declaration.FileName)
@@ -409,12 +458,15 @@ func writeSidecarDeclarations(declarations []sidecarOutputFile, writeOnlyChanged
 	if err := rejectDuplicateOutputPaths(paths); err != nil {
 		return nil, err
 	}
+	timings.addScheduledDeclarationWrites(len(declarations))
 	wrote := make([]bool, len(declarations))
 	jobs := make([]func() error, len(declarations))
 	for i, declaration := range declarations {
 		jobs[i] = func() error {
 			var err error
-			wrote[i], err = writeOutputFile(filepath.FromSlash(declaration.FileName), declaration.Text, writeOnlyChanged)
+			path := filepath.FromSlash(declaration.FileName)
+			wrote[i], err = writeOutputFile(path, declaration.Text, writeOnlyChanged)
+			timings.recordOutputWrite(path, wrote[i])
 			return err
 		}
 	}
