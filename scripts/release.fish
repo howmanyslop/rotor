@@ -15,8 +15,10 @@
 #   ./scripts/release.fish --version 2.3.0 --yes
 #   ./scripts/release.fish --tag-only --yes
 #   ./scripts/release.fish --snapshot
+#   ./scripts/release.fish --build --os windows --arch amd64,arm64
 #
-# Requires: git, fish. Optional: gum (nicer prompts), goreleaser (snapshot builds).
+# Requires: git, fish, go (for --build). Optional: gum (nicer prompts),
+# goreleaser (full-matrix --snapshot only).
 
 set -g SCRIPT_NAME (status filename)
 set -g REPO_ROOT (git rev-parse --show-toplevel 2>/dev/null)
@@ -35,11 +37,14 @@ set -g FLAG_NO_PUSH 0
 set -g FLAG_NO_COMMIT 0
 set -g FLAG_TAG_ONLY 0
 set -g FLAG_SNAPSHOT 0
+set -g FLAG_BUILD 0
 set -g FLAG_SKIP_CHECKS 0
 set -g OPT_BUMP ""
 set -g OPT_VERSION ""
 set -g OPT_REMOTE origin
 set -g OPT_MESSAGE ""
+set -g OPT_OS ""
+set -g OPT_ARCH ""
 
 function usage
     echo "Usage: $SCRIPT_NAME [options]"
@@ -56,7 +61,10 @@ function usage
     echo "  --no-push         do not push commit/tag"
     echo "  --no-commit       bump files only (no commit/tag/push)"
     echo "  --tag-only        versions already bumped; create+push tag only"
-    echo "  --snapshot        local goreleaser snapshot build into dist/ (no tag)"
+    echo "  --snapshot        full-matrix local goreleaser snapshot (no tag)"
+    echo "  --build           local go build into dist/ (pick OS/arch; no tag)"
+    echo "  --os LIST         comma list: windows,linux,darwin (with --build)"
+    echo "  --arch LIST       comma list: amd64,arm64 (with --build)"
     echo "  --skip-checks     skip dirty-tree / remote-tag probes"
     echo "  -h, --help        show this help"
     echo
@@ -66,6 +74,8 @@ function usage
     echo "  $SCRIPT_NAME --version 2.3.0-fork.1 --dry-run"
     echo "  $SCRIPT_NAME --tag-only --yes --remote upstream"
     echo "  $SCRIPT_NAME --snapshot"
+    echo "  $SCRIPT_NAME --build --os windows --arch amd64"
+    echo "  $SCRIPT_NAME --build --os windows,linux --arch amd64,arm64"
 end
 
 function has_gum
@@ -150,6 +160,40 @@ function choose --argument-names header
         return 1
     end
     echo $options[$pick]
+end
+
+function choose_multi --argument-names header
+    # Multi-select. Remaining argv after header are options. Prints one per line.
+    set -l options $argv[2..-1]
+    if has_gum
+        printf '%s\n' $options | gum choose --no-limit --header "$header (space to toggle, enter to confirm)"
+        return $status
+    end
+    if command -q fzf
+        printf '%s\n' $options | fzf --multi --prompt "$header > " --height 12 --reverse
+        return $status
+    end
+    echo "$header (comma-separated indexes, e.g. 1,3)" >&2
+    set -l i 1
+    for opt in $options
+        echo "  $i) $opt" >&2
+        set i (math $i + 1)
+    end
+    read -P "Choices: " pick
+    or return 1
+    set -l picked
+    for part in (string split , -- $pick)
+        set part (string trim -- $part)
+        if not string match -qr '^[0-9]+$' -- $part
+            return 1
+        end
+        if test $part -lt 1 -o $part -gt (count $options)
+            return 1
+        end
+        set -a picked $options[$part]
+    end
+    test (count $picked) -gt 0; or return 1
+    printf '%s\n' $picked
 end
 
 function ask_text --argument-names prompt placeholder
@@ -330,10 +374,11 @@ function tag_exists_remote --argument-names remote tag
     git ls-remote --exit-code --tags $remote "refs/tags/$tag" >/dev/null 2>&1
 end
 
-function do_snapshot
+function do_snapshot_full
+    # Full 6-target goreleaser snapshot. Prefer do_build for filtered OS/arch.
     command -q goreleaser
     or die "goreleaser not on PATH (mise install goreleaser, or brew install goreleaser)"
-    info "Building local snapshot with goreleaser (no publish)…"
+    info "Building full-matrix local snapshot with goreleaser (no publish)…"
     if test $FLAG_DRY_RUN -eq 1
         info "[dry-run] goreleaser release --snapshot --clean --skip=publish"
         return 0
@@ -343,6 +388,229 @@ function do_snapshot
     info "Snapshot artifacts in dist/"
     if test -d dist
         ls -1 dist | head -n 40
+    end
+end
+
+function do_snapshot
+    # Interactive: always pick targets first. Full matrix → goreleaser;
+    # anything narrower → plain go build (same as --build).
+    if test $FLAG_YES -eq 1 -a -z "$OPT_OS"
+        do_snapshot_full
+        return
+    end
+
+    if test -z "$OPT_OS" -a $FLAG_YES -eq 0
+        set -l scope (choose "Local build scope" \
+            "Pick OS/arch (windows, linux, darwin…)" \
+            "Full matrix via goreleaser (all 6)")
+        or die cancelled
+        if test "$scope" = "Full matrix via goreleaser (all 6)"
+            do_snapshot_full
+            return
+        end
+        # Fall through to filtered build with interactive presets.
+        set FLAG_BUILD 1
+        do_build
+        return
+    end
+
+    # --snapshot --os windows → filtered go build
+    if test -n "$OPT_OS"
+        set FLAG_BUILD 1
+        do_build
+        return
+    end
+
+    do_snapshot_full
+end
+
+function parse_os_list --argument-names raw
+    set -l out
+    for part in (string split , -- $raw)
+        set part (string lower (string trim -- $part))
+        test -n "$part"; or continue
+        switch $part
+            case windows win
+                set -a out windows
+            case linux
+                set -a out linux
+            case darwin macos mac osx
+                set -a out darwin
+            case '*'
+                die "unknown OS '$part' (want windows|linux|darwin)"
+        end
+    end
+    test (count $out) -gt 0; or die "empty --os list"
+    set -l uniq
+    for o in $out
+        if not contains -- $o $uniq
+            set -a uniq $o
+        end
+    end
+    printf '%s\n' $uniq
+end
+
+function parse_arch_list --argument-names raw
+    set -l out
+    for part in (string split , -- $raw)
+        set part (string lower (string trim -- $part))
+        test -n "$part"; or continue
+        switch $part
+            case amd64 x64 x86_64
+                set -a out amd64
+            case arm64 aarch64
+                set -a out arm64
+            case '*'
+                die "unknown arch '$part' (want amd64|arm64)"
+        end
+    end
+    test (count $out) -gt 0; or die "empty --arch list"
+    set -l uniq
+    for a in $out
+        if not contains -- $a $uniq
+            set -a uniq $a
+        end
+    end
+    printf '%s\n' $uniq
+end
+
+function pick_build_targets
+    # Prints lines of "os arch". Uses OPT_OS/OPT_ARCH when set.
+    set -l oses
+    set -l arches
+
+    if test -n "$OPT_OS"
+        set oses (parse_os_list $OPT_OS)
+    else if test $FLAG_YES -eq 1
+        die "--build with --yes requires --os (and optionally --arch)"
+    else
+        set -l preset (choose "Which targets?" \
+            "windows (amd64 + arm64)" \
+            "windows amd64 only" \
+            "windows arm64 only" \
+            "linux (amd64 + arm64)" \
+            "darwin (amd64 + arm64)" \
+            "all platforms (6 binaries)" \
+            "custom multi-select…")
+        or die cancelled
+
+        switch $preset
+            case "windows (amd64 + arm64)"
+                set oses windows
+                set arches amd64 arm64
+            case "windows amd64 only"
+                set oses windows
+                set arches amd64
+            case "windows arm64 only"
+                set oses windows
+                set arches arm64
+            case "linux (amd64 + arm64)"
+                set oses linux
+                set arches amd64 arm64
+            case "darwin (amd64 + arm64)"
+                set oses darwin
+                set arches amd64 arm64
+            case "all platforms (6 binaries)"
+                set oses windows linux darwin
+                set arches amd64 arm64
+            case "custom multi-select…"
+                set oses (choose_multi "OS" windows linux darwin)
+                or die cancelled
+                set arches (choose_multi "Arch" amd64 arm64)
+                or die cancelled
+            case '*'
+                die "unknown preset: $preset"
+        end
+    end
+
+    if test -n "$OPT_ARCH"
+        set arches (parse_arch_list $OPT_ARCH)
+    else if test (count $arches) -eq 0
+        if test $FLAG_YES -eq 1
+            set arches amd64 arm64
+        else
+            set arches (choose_multi "Arch" amd64 arm64)
+            or die cancelled
+        end
+    end
+
+    test (count $oses) -gt 0; or die "no OS selected"
+    test (count $arches) -gt 0; or die "no arch selected"
+
+    for os in $oses
+        for arch in $arches
+            echo $os $arch
+        end
+    end
+end
+
+function binary_name --argument-names ver os arch
+    set -l suffix ""
+    if test "$os" = windows
+        set suffix .exe
+    end
+    # Matches release.yml bare-bin asset naming.
+    echo "rotor-v$ver-$os-$arch-bin$suffix"
+end
+
+function do_build
+    command -q go
+    or die "go not on PATH"
+
+    set -l ver (read_code_version)
+    set -l pkg_v (read_pkg_version)
+    if test "$ver" != "$pkg_v"
+        warn "version.go=$ver package.json=$pkg_v (build still uses version.go)"
+    end
+
+    set -l targets (pick_build_targets)
+    test (count $targets) -gt 0; or die "no build targets"
+
+    echo >&2
+    info "Local build plan (version $ver):"
+    for line in $targets
+        set -l parts (string split ' ' -- $line)
+        set -l os $parts[1]
+        set -l arch $parts[2]
+        info "  → dist/"(binary_name $ver $os $arch)
+    end
+    echo >&2
+
+    confirm "Build these binaries into dist/?" 1
+    or die aborted
+
+    if test $FLAG_DRY_RUN -eq 1
+        for line in $targets
+            set -l parts (string split ' ' -- $line)
+            set -l os $parts[1]
+            set -l arch $parts[2]
+            set -l out dist/(binary_name $ver $os $arch)
+            info "[dry-run] GOOS=$os GOARCH=$arch CGO_ENABLED=0 go build -trimpath -ldflags=\"-s -w\" -o $out ./cmd/rotor"
+        end
+        info "Dry run complete."
+        return 0
+    end
+
+    mkdir -p dist
+    or die "mkdir dist failed"
+
+    set -l built
+    for line in $targets
+        set -l parts (string split ' ' -- $line)
+        set -l os $parts[1]
+        set -l arch $parts[2]
+        set -l out dist/(binary_name $ver $os $arch)
+        info "Building $os/$arch → $out"
+        env GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
+            go build -trimpath -ldflags="-s -w" -o $out ./cmd/rotor
+        or die "go build failed for $os/$arch"
+        test -s $out; or die "empty binary: $out"
+        set -a built $out
+    end
+
+    info "Built "(count $built)" binary(ies):"
+    for f in $built
+        ls -lh $f >&2
     end
 end
 
@@ -365,6 +633,8 @@ function parse_args
                 set FLAG_TAG_ONLY 1
             case --snapshot
                 set FLAG_SNAPSHOT 1
+            case --build
+                set FLAG_BUILD 1
             case --skip-checks
                 set FLAG_SKIP_CHECKS 1
             case --bump
@@ -383,6 +653,14 @@ function parse_args
                 set i (math $i + 1)
                 test $i -le (count $argv); or die "--message needs a value"
                 set OPT_MESSAGE $argv[$i]
+            case --os
+                set i (math $i + 1)
+                test $i -le (count $argv); or die "--os needs a value"
+                set OPT_OS $argv[$i]
+            case --arch
+                set i (math $i + 1)
+                test $i -le (count $argv); or die "--arch needs a value"
+                set OPT_ARCH $argv[$i]
             case '--*'
                 die "unknown option: $arg (try --help)"
             case '*'
@@ -393,12 +671,21 @@ function parse_args
 end
 
 function pick_mode
+    if test $FLAG_BUILD -eq 1
+        echo build
+        return
+    end
     if test $FLAG_SNAPSHOT -eq 1
         echo snapshot
         return
     end
     if test $FLAG_TAG_ONLY -eq 1
         echo tag-only
+        return
+    end
+    if test -n "$OPT_OS" -o -n "$OPT_ARCH"
+        set FLAG_BUILD 1
+        echo build
         return
     end
     if test -n "$OPT_BUMP" -o -n "$OPT_VERSION" -o $FLAG_YES -eq 1
@@ -410,7 +697,7 @@ function pick_mode
         "Full release (bump → commit → tag → push)" \
         "Tag + push only (versions already bumped)" \
         "Bump versions only (no commit/tag)" \
-        "Local snapshot build (goreleaser, no tag)" \
+        "Local build (pick OS/arch — windows, linux, darwin)" \
         "Quit")
     or die cancelled
 
@@ -421,8 +708,8 @@ function pick_mode
             echo tag-only
         case "Bump versions only (no commit/tag)"
             echo bump-only
-        case "Local snapshot build (goreleaser, no tag)"
-            echo snapshot
+        case "Local build (pick OS/arch — windows, linux, darwin)"
+            echo build
         case Quit
             echo quit
         case '*'
@@ -717,8 +1004,12 @@ if test -n "$OPT_BUMP"
 end
 
 # Mutual exclusion soft rules
-if test $FLAG_SNAPSHOT -eq 1 -a $FLAG_TAG_ONLY -eq 1
-    die "use either --snapshot or --tag-only, not both"
+set -l mode_flags 0
+test $FLAG_SNAPSHOT -eq 1; and set mode_flags (math $mode_flags + 1)
+test $FLAG_TAG_ONLY -eq 1; and set mode_flags (math $mode_flags + 1)
+test $FLAG_BUILD -eq 1; and set mode_flags (math $mode_flags + 1)
+if test $mode_flags -gt 1
+    die "use only one of --snapshot, --tag-only, --build"
 end
 
 set -l mode (pick_mode)
@@ -729,6 +1020,8 @@ switch $mode
         exit 0
     case snapshot
         do_snapshot
+    case build
+        do_build
     case tag-only
         do_tag_only
     case bump-only
