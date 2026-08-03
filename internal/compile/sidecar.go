@@ -26,7 +26,11 @@ import (
 	"rotor/tsgo/vfs/wrapvfs"
 )
 
-const defaultSidecarResponseTimeout = 30 * time.Second
+// defaultSidecarResponseTimeout is intentionally generous: upstream rbxtsc
+// awaits the transformer with no timeout, so the cap only guards against a
+// hung worker — never a legitimately slow build (Flamework + React Compiler
+// on a full project can take minutes on slow machines).
+const defaultSidecarResponseTimeout = 10 * time.Minute
 
 const sidecarResponseTimeoutEnv = "ROTOR_SIDECAR_TIMEOUT"
 
