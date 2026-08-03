@@ -63,6 +63,13 @@ jobs:
       - name: Set up rotor toolchain
         uses: ./.github/actions/setup
 
+      # Warm the module cache before the long steps. setup-go caches on
+      # success only; this step downloads everything up front so a canceled
+      # later step never wastes a cold cache on re-downloads.
+      - name: Cache go modules
+        shell: bash
+        run: go mod download
+
       - name: Sidecar tests
         shell: bash
         working-directory: tools/sidecar
