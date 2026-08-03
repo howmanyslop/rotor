@@ -3,8 +3,8 @@ const path = require("node:path");
 const typeReferencePackage = "types";
 const typeReferenceScope = "@rbxts/";
 
-function createDeclarationTransformers(ts, program) {
-  return [transformTypeReferenceDirectives(ts), transformPaths(ts, program)];
+function createDeclarationTransformers(ts, program, moduleResolutionHost = ts.sys) {
+  return [transformTypeReferenceDirectives(ts), transformPaths(ts, program, moduleResolutionHost)];
 }
 
 function transformTypeReferenceDirectives(ts) {
@@ -23,8 +23,15 @@ function transformTypeReferenceDirectives(ts) {
   };
 }
 
-function transformPaths(ts, program) {
+function transformPaths(ts, program, moduleResolutionHost) {
   const compilerOptions = program.getCompilerOptions();
+  const currentDirectory = program.getCurrentDirectory();
+  const canonicalName = (fileName) => {
+    const actualPath = path.isAbsolute(fileName) ? fileName : path.join(currentDirectory, fileName);
+    const resolved = path.normalize(path.resolve(actualPath));
+    return ts.sys.useCaseSensitiveFileNames ? resolved : resolved.toLowerCase();
+  };
+  const moduleResolutionCache = ts.createModuleResolutionCache(currentDirectory, canonicalName, compilerOptions);
   const implicitExtensions = [".ts", ".d.ts"];
   if (compilerOptions.allowJs) {
     implicitExtensions.push(".js");
@@ -54,7 +61,8 @@ function transformPaths(ts, program) {
         moduleName,
         fileName,
         compilerOptions,
-        ts.sys,
+        moduleResolutionHost,
+        moduleResolutionCache,
       );
       let resolvedPath;
       if (!resolvedModule) {

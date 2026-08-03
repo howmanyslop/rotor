@@ -7,6 +7,7 @@ const test = require("node:test");
 const ts = require("typescript");
 
 const sidecar = require("../index.js");
+const { createDeclarationTransformers } = require("../lib/declarations");
 
 const projectDir = path.resolve(__dirname, "..", "testdata", "project");
 const tsConfigPath = path.join(projectDir, "tsconfig.json");
@@ -192,6 +193,189 @@ module.exports = () => context => sourceFile => {
   assert.equal(response.declarations.length, 1);
   assert.match(response.declarations[0].text, /__DECLARATION_MARKER__/);
   assert.match(response.declarations[0].text, /from "\.\/value"/);
+});
+
+test("declaration path resolution reuses host probes within one declaration request", () => {
+  const resolutionProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "rotor-sidecar-resolution-cache-"));
+  const sourceDir = path.join(resolutionProjectDir, "src");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(resolutionProjectDir, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        declaration: true,
+        module: "CommonJS",
+        moduleResolution: "Node",
+        noLib: true,
+        strict: true,
+        target: "ESNext",
+        baseUrl: ".",
+        paths: { "@alias/*": ["src/*"] },
+        rootDir: "src",
+        outDir: "out",
+      },
+      include: ["src"],
+    }),
+  );
+  fs.writeFileSync(path.join(sourceDir, "one.ts"), 'import type { Value } from "@alias/value";\nexport type One = Value;\n');
+  fs.writeFileSync(path.join(sourceDir, "two.ts"), 'import type { Value } from "@alias/value";\nexport type Two = Value;\n');
+  fs.writeFileSync(path.join(sourceDir, "value.ts"), "export interface Value { name: string; }\n");
+
+  const parsed = ts.getParsedCommandLineOfConfigFile(path.join(resolutionProjectDir, "tsconfig.json"), {}, ts.sys);
+  assert.ok(parsed, "expected parsed tsconfig");
+  const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options });
+  const sourceFiles = ["one.ts", "two.ts"].map((fileName) => {
+    const sourceFile = program.getSourceFile(path.join(sourceDir, fileName));
+    assert.ok(sourceFile, `expected ${fileName}`);
+    return sourceFile;
+  });
+  const probeCounts = [];
+  const declarationTexts = [];
+
+  for (const sourceFile of sourceFiles) {
+    let probes = 0;
+    const moduleResolutionHost = {
+      ...ts.sys,
+      fileExists(fileName) {
+        probes += 1;
+        return ts.sys.fileExists(fileName);
+      },
+    };
+    const afterDeclarations = createDeclarationTransformers(ts, program, moduleResolutionHost);
+    program.emit(sourceFile, (_fileName, text) => declarationTexts.push(text), undefined, true, { afterDeclarations });
+    probeCounts.push(probes);
+  }
+
+  let requestProbes = 0;
+  const requestHost = {
+    ...ts.sys,
+    fileExists(fileName) {
+      requestProbes += 1;
+      return ts.sys.fileExists(fileName);
+    },
+  };
+  const requestDeclarations = [];
+  const afterDeclarations = createDeclarationTransformers(ts, program, requestHost);
+  for (const sourceFile of sourceFiles) {
+    program.emit(sourceFile, (_fileName, text) => requestDeclarations.push(text), undefined, true, { afterDeclarations });
+  }
+
+  assert.ok(probeCounts.every((count) => count > 0), "separate declaration requests must probe the host");
+  assert.ok(requestProbes < probeCounts[0] + probeCounts[1], `request probes = ${requestProbes}, separate probes = ${probeCounts}`);
+  assert.deepEqual(requestDeclarations, declarationTexts);
+  assert.deepEqual(requestDeclarations.map((text) => text.includes('from "./value"')), [true, true]);
+});
+
+test("declaration path resolution observes filesystem mutations on the next request", () => {
+  const resolutionProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), "rotor-sidecar-resolution-boundary-"));
+  const sourceDir = path.join(resolutionProjectDir, "src");
+  const packagesDir = path.join(resolutionProjectDir, "packages");
+  fs.mkdirSync(sourceDir, { recursive: true });
+  fs.mkdirSync(path.join(packagesDir, "replace-package"), { recursive: true });
+  fs.writeFileSync(
+    path.join(resolutionProjectDir, "tsconfig.json"),
+    JSON.stringify({
+      compilerOptions: {
+        declaration: true,
+        module: "CommonJS",
+        moduleResolution: "Node",
+        noLib: true,
+        strict: true,
+        target: "ESNext",
+        baseUrl: ".",
+        paths: {
+          "@fixture/new-package": ["packages/new-package"],
+          "@fixture/replace-package": ["packages/replace-package"],
+          "@fixture/deleted-target": ["src/deleted-target"],
+        },
+        rootDir: "src",
+        outDir: "out",
+      },
+      include: ["src"],
+    }),
+  );
+  const mainPath = path.join(sourceDir, "main.ts");
+  fs.writeFileSync(
+    mainPath,
+    [
+      'export type Generated = import("./generated").Generated;',
+      'export type NewPackage = import("@fixture/new-package").NewPackage;',
+      'export type Replaced = import("@fixture/replace-package").Replaced;',
+      'export type Deleted = import("@fixture/deleted-target").Deleted;',
+      "",
+    ].join("\n"),
+  );
+  fs.writeFileSync(path.join(sourceDir, "deleted-target.ts"), "export interface Deleted { value: string; }\n");
+  fs.writeFileSync(path.join(packagesDir, "replace-package", "package.json"), JSON.stringify({ types: "old.d.ts" }));
+  fs.writeFileSync(path.join(packagesDir, "replace-package", "old.d.ts"), "export interface Replaced { version: \"old\"; }\n");
+
+  const parsed = ts.getParsedCommandLineOfConfigFile(path.join(resolutionProjectDir, "tsconfig.json"), {}, ts.sys);
+  assert.ok(parsed, "expected parsed tsconfig");
+  const program = ts.createProgram({ rootNames: parsed.fileNames, options: parsed.options });
+  const sourceFile = program.getSourceFile(mainPath);
+  assert.ok(sourceFile, "expected main source file");
+  const session = new sidecar.SidecarProjectSession(ts, resolutionProjectDir, path.join(resolutionProjectDir, "tsconfig.json"));
+
+  function emitSessionRequest() {
+    const response = session.handleRequest({
+      protocol: 1,
+      projectDir: resolutionProjectDir,
+      tsConfigPath: path.join(resolutionProjectDir, "tsconfig.json"),
+      compileFileNames: [mainPath],
+      changedFiles: [],
+    });
+    assert.deepEqual(response.diagnostics, []);
+    assert.equal(response.declarations.length, 1);
+    return response.declarations.map((declaration) => declaration.text).join("");
+  }
+
+  function emitDeclarationForRequest() {
+    const probes = [];
+    const moduleResolutionHost = {
+      ...ts.sys,
+      fileExists(fileName) {
+        const exists = ts.sys.fileExists(fileName);
+        probes.push({ fileName, exists });
+        return exists;
+      },
+    };
+    const declarations = [];
+    const afterDeclarations = createDeclarationTransformers(ts, program, moduleResolutionHost);
+    program.emit(sourceFile, (_fileName, text) => declarations.push(text), undefined, true, { afterDeclarations });
+    return { probes, text: declarations.join("") };
+  }
+
+  const firstSessionRequest = emitSessionRequest();
+  const firstRequest = emitDeclarationForRequest();
+  assert.match(firstSessionRequest, /import\("\.\/generated"\)/);
+  assert.match(firstSessionRequest, /import\("@fixture\/new-package"\)/);
+  assert.match(firstSessionRequest, /import\("\.\.\/packages\/replace-package\/old"\)/);
+  assert.match(firstSessionRequest, /import\("\.\/deleted-target"\)/);
+  assert.match(firstRequest.text, /import\("\.\/generated"\)/);
+  assert.match(firstRequest.text, /import\("@fixture\/new-package"\)/);
+  assert.match(firstRequest.text, /import\("\.\.\/packages\/replace-package\/old"\)/);
+  assert.match(firstRequest.text, /import\("\.\/deleted-target"\)/);
+  assert.ok(firstRequest.probes.some((probe) => probe.fileName === path.join(sourceDir, "generated.ts") && !probe.exists));
+
+  fs.writeFileSync(path.join(sourceDir, "generated.ts"), "export interface Generated { value: string; }\n");
+  fs.mkdirSync(path.join(packagesDir, "new-package"), { recursive: true });
+  fs.writeFileSync(path.join(packagesDir, "new-package", "package.json"), JSON.stringify({ types: "entry.d.ts" }));
+  fs.writeFileSync(path.join(packagesDir, "new-package", "entry.d.ts"), "export interface NewPackage { value: string; }\n");
+  fs.writeFileSync(path.join(packagesDir, "replace-package", "package.json"), JSON.stringify({ types: "new.d.ts" }));
+  fs.writeFileSync(path.join(packagesDir, "replace-package", "new.d.ts"), "export interface Replaced { version: \"new\"; }\n");
+  fs.rmSync(path.join(sourceDir, "deleted-target.ts"));
+
+  const secondSessionRequest = emitSessionRequest();
+  const secondRequest = emitDeclarationForRequest();
+  assert.match(secondSessionRequest, /import\("\.\/generated"\)/);
+  assert.match(secondSessionRequest, /import\("\.\.\/packages\/new-package\/entry"\)/);
+  assert.match(secondSessionRequest, /import\("\.\.\/packages\/replace-package\/new"\)/);
+  assert.match(secondSessionRequest, /import\("@fixture\/deleted-target"\)/);
+  assert.match(secondRequest.text, /import\("\.\/generated"\)/);
+  assert.match(secondRequest.text, /import\("\.\.\/packages\/new-package\/entry"\)/);
+  assert.match(secondRequest.text, /import\("\.\.\/packages\/replace-package\/new"\)/);
+  assert.match(secondRequest.text, /import\("@fixture\/deleted-target"\)/);
+  assert.ok(secondRequest.probes.some((probe) => probe.fileName === path.join(sourceDir, "generated.ts") && probe.exists));
 });
 
 test("transformSourceFiles repairs orphaned parents between transformers", () => {
