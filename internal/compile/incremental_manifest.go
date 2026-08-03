@@ -119,6 +119,7 @@ func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTransla
 		IncludePath          string `json:"includePath"`
 		LuaExtension         bool   `json:"luaExtension"`
 		Declaration          bool   `json:"declaration"`
+		EmitDeclarationOnly  bool   `json:"emitDeclarationOnly"`
 	}{
 		Version:              "rotor-incremental-v2",
 		ConfigFilePath:       options.ConfigFilePath,
@@ -130,9 +131,19 @@ func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTransla
 		IncludePath:          opts.IncludePath,
 		LuaExtension:         !opts.LuaExtension,
 		Declaration:          options.Declaration.IsTrue(),
+		EmitDeclarationOnly:  opts.EmitDeclarationOnly,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+func pruneMissingOutputs(projectDir string, outputs map[string]string) {
+	for path := range outputs {
+		info, err := os.Lstat(filepath.Join(projectDir, filepath.FromSlash(path)))
+		if err != nil || !info.Mode().IsRegular() {
+			delete(outputs, path)
+		}
+	}
 }
 
 func outputManifestPath(projectDir, configPath string) string {

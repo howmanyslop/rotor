@@ -305,6 +305,28 @@ func TestBuildProjectWriteOnlyChangedSkipsUnchangedOutputs(t *testing.T) {
 	}
 }
 
+func TestBuildProjectHashMatchRecreatesMissingOutput(t *testing.T) {
+	dir := writeProject(t, "@scope/missing-output-fixture", "")
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v (diags: %v)", err, diags)
+	}
+	outputPath := filepath.Join(dir, "out", "main.luau")
+	if err := os.Remove(outputPath); err != nil {
+		t.Fatal(err)
+	}
+
+	result, diags, err := BuildProjectWithOptions(dir, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("second build: %v (diags: %v)", err, diags)
+	}
+	if len(result.EmittedFiles) != 1 || result.EmittedFiles[0] != outputPath {
+		t.Fatalf("emitted files = %v, want %s", result.EmittedFiles, outputPath)
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("recreated output: %v", err)
+	}
+}
+
 func TestBuildProjectLuaExtension(t *testing.T) {
 	dir := writeProject(t, "@scope/lua-ext-fixture", "")
 
@@ -379,6 +401,14 @@ func TestBuildProjectEmitsDeclarationsForPackage(t *testing.T) {
 
 	if len(result.EmittedFiles) != 2 {
 		t.Fatalf("EmittedFiles = %v, want compiled file + declaration", result.EmittedFiles)
+	}
+	timings := NewBuildTimings()
+	warm, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings})
+	if err != nil {
+		t.Fatalf("warm build: %v (diags: %v)", err, diags)
+	}
+	if len(warm.EmittedFiles) != 0 || timings.Counts.ActualWrites != 0 || timings.Counts.HashSkips < 2 {
+		t.Fatalf("warm emitted=%v counts=%+v", warm.EmittedFiles, timings.Counts)
 	}
 }
 

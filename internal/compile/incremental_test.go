@@ -9,6 +9,21 @@ import (
 	"time"
 )
 
+func TestIncrementalManifestV1HardCutover(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(path, []byte(`{"salt":"old","files":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := readIncrementalManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest != nil {
+		t.Fatalf("v1 manifest accepted: %+v", manifest)
+	}
+}
+
 func TestBuildProjectIncrementalRebuildsChangedFilesAndImporters(t *testing.T) {
 	dir := writeProject(t, "@scope/incremental-fixture", "")
 	enableIncrementalBuilds(t, dir)

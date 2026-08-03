@@ -74,14 +74,20 @@ func (writer *outputWriter) write(path string, text string, writeOnlyChanged boo
 			return false, nil
 		}
 	}
-	if err := writer.prepareParent(path); err != nil {
-		return false, err
-	}
 	if err := writer.operations.writeFile(path, contents, 0o644); err != nil {
 		return false, err
 	}
 	writer.recordHash(key, hash)
 	return true, nil
+}
+
+func (writer *outputWriter) prepare(paths []string) error {
+	for _, path := range paths {
+		if err := writer.prepareParent(path); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (writer *outputWriter) outputKey(path string) string {

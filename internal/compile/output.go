@@ -74,9 +74,42 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err != nil {
 		return nil, diags, err
 	}
+	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
+	sourceFiles := projectSourceFiles(program)
+	timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
+	manifestPath := pathTranslator.BuildInfoOutputPath
+	if manifestPath == "" {
+		manifestPath = outputManifestPath(filepath.FromSlash(dir), program.Options().ConfigFilePath)
+	}
+	previousManifest, err := readIncrementalManifest(manifestPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	var currentManifest *incrementalManifest
+	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
+		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, manifestPath))
+		if err != nil {
+			return nil, nil, err
+		}
+		if previousManifest != nil && previousManifest.Salt == currentManifest.Salt {
+			for path, hash := range previousManifest.Outputs {
+				currentManifest.Outputs[path] = hash
+			}
+		}
+	} else {
+		currentManifest = &incrementalManifest{
+			Version: 2,
+			Salt:    incrementalSalt(program, opts, manifestPath),
+			Files:   map[string]incrementalFileState{},
+			Outputs: map[string]string{},
+		}
+	}
+	previousOutputs := map[string]string{}
+	if previousManifest != nil && previousManifest.Salt == currentManifest.Salt {
+		previousOutputs = previousManifest.Outputs
+	}
+	writer.useHashes(filepath.FromSlash(dir), previousOutputs, currentManifest.Outputs)
 	if opts.EmitDeclarationOnly {
-		sourceFiles := projectSourceFiles(program)
-		timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
 		if !program.Options().GetEmitDeclarations() {
 			msg := "Option 'emitDeclarationOnly' cannot be specified without specifying option 'declaration' or option 'composite'."
 			return nil, []string{msg}, errors.New("compile: TypeScript diagnostics")
@@ -92,14 +125,18 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		if err != nil {
 			return nil, nil, err
 		}
+		timings.setHashSkips(writer.hashSkipCount())
+		pruneMissingOutputs(filepath.FromSlash(dir), currentManifest.Outputs)
+		if !sameIncrementalManifest(previousManifest, currentManifest) {
+			if err := writeIncrementalManifest(manifestPath, currentManifest); err != nil {
+				return nil, nil, err
+			}
+		}
 		timings.setEmittedEntries(len(emitted))
 		return &BuildResult{Outputs: map[string]string{}, EmittedFiles: emitted}, nil, nil
 	}
 
 	stopSelectionCleanupCopy := timings.startStage(incrementalSelectionCleanupCopyStage)
-	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
-	sourceFiles := projectSourceFiles(program)
-	timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
 	sourceOutputPaths := make([]string, len(sourceFiles))
 	for i, sourceFile := range sourceFiles {
 		sourceOutputPaths[i] = outputPathRelativeToDir(dir, pathTranslator.GetOutputPath(sourceFile.FileName()))
@@ -112,42 +149,11 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	opts.rojoCache = rojoCache
 
 	selectedFiles := sourceFiles
-	var previousManifest *incrementalManifest
-	var currentManifest *incrementalManifest
-	manifestPath := pathTranslator.BuildInfoOutputPath
-	if manifestPath == "" {
-		manifestPath = outputManifestPath(filepath.FromSlash(dir), opts.TsConfigPath)
-	}
-	previousManifest, err = readIncrementalManifest(manifestPath)
-	if err != nil {
-		stopSelectionCleanupCopy()
-		return nil, nil, err
-	}
 	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
-		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, pathTranslator.BuildInfoOutputPath))
-		if err != nil {
-			stopSelectionCleanupCopy()
-			return nil, nil, err
-		}
 		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
 		if opts.forceFullBuild {
 			selectedFiles = sourceFiles
 		}
-	} else {
-		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, manifestPath))
-		if err != nil {
-			stopSelectionCleanupCopy()
-			return nil, nil, err
-		}
-	}
-	if previousManifest != nil && previousManifest.Salt == currentManifest.Salt {
-		for path, hash := range previousManifest.Outputs {
-			currentManifest.Outputs[path] = hash
-		}
-	}
-	writer.useHashes(filepath.FromSlash(dir), currentManifest.Outputs, currentManifest.Outputs)
-	if previousManifest != nil {
-		writer.useHashes(filepath.FromSlash(dir), previousManifest.Outputs, currentManifest.Outputs)
 	}
 
 	copyFilesGate := loadCopyFilesGatePreBuild(copyFilesGateInputs{
@@ -243,6 +249,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	// reproduces the pre-parallel behavior for A/B timing.
 	wrote := make([]bool, len(relOuts))
 	jobs := make([]func() error, len(relOuts))
+	writePaths := make([]string, 0, len(relOuts)*2)
 	sourceFilesByOutput := make(map[string]*ast.SourceFile, len(selectedFiles))
 	for _, sourceFile := range selectedFiles {
 		relOut := outputPathRelativeToDir(dir, pathTranslator.GetOutputPath(sourceFile.FileName()))
@@ -280,6 +287,15 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			timings.recordOutputWrite(absOut+".map", mapWrote)
 			return err
 		}
+		absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
+		writePaths = append(writePaths, absOut)
+		if hasSourceMap {
+			writePaths = append(writePaths, absOut+".map")
+		}
+	}
+	if err := writer.prepare(writePaths); err != nil {
+		stopCompiledOutputWrites()
+		return nil, nil, err
 	}
 	err = parallelize(writeWorkers(), jobs)
 	stopCompiledOutputWrites()
@@ -308,6 +324,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	timings.setHashSkips(writer.hashSkipCount())
 
 	stopPersistence := timings.startStage(persistenceStage)
+	pruneMissingOutputs(filepath.FromSlash(dir), currentManifest.Outputs)
 	if currentManifest != nil && !sameIncrementalManifest(previousManifest, currentManifest) {
 		if err := writeIncrementalManifest(manifestPath, currentManifest); err != nil {
 			stopPersistence()
@@ -446,6 +463,9 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 		return nil, err
 	}
 	timings.addScheduledDeclarationWrites(len(pending))
+	if err := writer.prepare(paths); err != nil {
+		return nil, err
+	}
 	wrote := make([]bool, len(pending))
 	writeJobs := make([]func() error, len(pending))
 	for i, write := range pending {
@@ -480,6 +500,9 @@ func writeSidecarDeclarations(declarations []sidecarOutputFile, writeOnlyChanged
 		return nil, err
 	}
 	timings.addScheduledDeclarationWrites(len(declarations))
+	if err := writer.prepare(paths); err != nil {
+		return nil, err
+	}
 	wrote := make([]bool, len(declarations))
 	jobs := make([]func() error, len(declarations))
 	for i, declaration := range declarations {
