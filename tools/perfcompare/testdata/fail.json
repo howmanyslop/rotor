@@ -1,0 +1,1 @@
+{"schema":1,"machine":{"os":"Windows","version":"11","cpu":"fixture CPU","ram_bytes":17179869184,"storage":"SSD","power":"plugged in","run_order":["AB","BA"],"sidecar_timeout":"300s","environment":{"ROTOR_SIDECAR_TIMEOUT":"300s"}},"baseline":{"revision":"11d0bc2","command":"rotor build"},"candidate":{"revision":"candidate","command":"rotor build"},"records":[]}
