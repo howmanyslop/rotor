@@ -49,6 +49,42 @@ jobs:
           # real-package transformer test must run here, never skip.
           ROTOR_REQUIRE_TRANSFORMERS_FIXTURE: "1"
 
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up rotor toolchain
+        uses: ./.github/actions/setup
+
+      - name: Sidecar tests
+        shell: bash
+        working-directory: tools/sidecar
+        run: |
+          set -o pipefail
+          node --test test/*.test.js 2>&1 | tee "$RUNNER_TEMP/sidecar-test.log"
+
+      - name: Test
+        shell: bash
+        run: |
+          set -o pipefail
+          go test ./... -count=1 2>&1 | tee "$RUNNER_TEMP/go-test.log"
+        env:
+          ROTOR_REQUIRE_TRANSFORMERS_FIXTURE: "1"
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-logs
+          path: |
+            ${{ runner.temp }}/sidecar-test.log
+            ${{ runner.temp }}/go-test.log
+          if-no-files-found: ignore
+
   race:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 30
