@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strings"
@@ -173,9 +174,43 @@ func collectPerformanceTree(t *testing.T, root string) map[string][]byte {
 		for _, spelling := range performanceRootSpellings(root) {
 			redacted = bytes.ReplaceAll(redacted, []byte(spelling), []byte(performanceOutputRoot))
 		}
-		withOutputPrefix["out/"+path] = redacted
+		withOutputPrefix["out/"+path] = slashRedactedPerformancePaths(redacted)
 	}
 	return withOutputPrefix
+}
+
+// redactedPerformancePath matches the remainder of a path whose root redaction
+// has already replaced, up to the first delimiter. It is anchored so only text
+// directly following the placeholder can match, and the separator run is \\+
+// because a path embedded in JSON (the copyfiles manifest cache key) carries
+// escaped separators.
+var redactedPerformancePath = regexp.MustCompile(`^(?:\\+[^"|\\\s]+)+`)
+
+// slashRedactedPerformancePaths rewrites the separators inside already-redacted
+// paths to forward slashes. The remaining segments come from filepath.Join, so
+// they are native: the copyfiles manifest key is <ROOT>\out|<ROOT>\src on
+// Windows and <ROOT>/out|<ROOT>/src everywhere else. Only text following the
+// placeholder is touched, so genuine backslashes in emitted code survive.
+func slashRedactedPerformancePaths(contents []byte) []byte {
+	placeholder := []byte(performanceOutputRoot)
+	if !bytes.Contains(contents, placeholder) {
+		return contents
+	}
+	result := make([]byte, 0, len(contents))
+	for {
+		index := bytes.Index(contents, placeholder)
+		if index < 0 {
+			return append(result, contents...)
+		}
+		result = append(result, contents[:index+len(placeholder)]...)
+		contents = contents[index+len(placeholder):]
+		tail := redactedPerformancePath.Find(contents)
+		if tail == nil {
+			continue
+		}
+		result = append(result, bytes.ReplaceAll(bytes.ReplaceAll(tail, []byte(`\\`), []byte("/")), []byte(`\`), []byte("/"))...)
+		contents = contents[len(tail):]
+	}
 }
 
 func normalizePerformancePaths(paths []string, root string) []string {

@@ -139,3 +139,42 @@ func TestPerformanceOutputParityMutations(t *testing.T) {
 		t.Fatalf("map-key mutation diff = %q, want %q", got, want)
 	}
 }
+
+// TestSlashRedactedPerformancePaths pins the Windows shapes of the corpus
+// redaction, which no Linux run can reach: separators after the placeholder
+// come from filepath.Join, escaped when the path sits inside JSON.
+func TestSlashRedactedPerformancePaths(t *testing.T) {
+	root := performanceOutputRoot
+	for _, testCase := range []struct {
+		name     string
+		contents string
+		want     string
+	}{
+		{
+			name:     "slash separators are already normalized",
+			contents: `{"key":"` + root + `/out|` + root + `/src"}`,
+			want:     `{"key":"` + root + `/out|` + root + `/src"}`,
+		},
+		{
+			name:     "escaped native separators become slashes",
+			contents: `{"key":"` + root + `\\out|` + root + `\\src"}`,
+			want:     `{"key":"` + root + `/out|` + root + `/src"}`,
+		},
+		{
+			name:     "native separators become slashes at every depth",
+			contents: root + `\src\nested\alpha.ts`,
+			want:     root + `/src/nested/alpha.ts`,
+		},
+		{
+			name:     "backslashes outside a redacted path survive",
+			contents: `local escaped = "a\\b"` + "\n" + root + `\src`,
+			want:     `local escaped = "a\\b"` + "\n" + root + `/src`,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if got := string(slashRedactedPerformancePaths([]byte(testCase.contents))); got != testCase.want {
+				t.Fatalf("slashRedactedPerformancePaths() = %q, want %q", got, testCase.want)
+			}
+		})
+	}
+}
