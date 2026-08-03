@@ -75,14 +75,17 @@ func TestOverlayProgramOverlayWinsNegativeBaseCache(t *testing.T) {
 	if fs.FileExists(filePath) {
 		t.Fatal("base filesystem unexpectedly contains transformed file")
 	}
-	overlays[filePath] = "export const transformed = true;\n"
+	// Keyed the same way production does (normalizeOverlayPath): on Windows
+	// FromSlash turns the lookup path into backslashes, so a raw key here
+	// would never match.
+	overlays[normalizeOverlayPath(filePath, baseFS.UseCaseSensitiveFileNames())] = "export const transformed = true;\n"
 	text, ok := fs.ReadFile(filePath)
 
 	// Then
 	if !fs.FileExists(filePath) {
 		t.Fatal("overlay did not override cached missing-file metadata")
 	}
-	if !ok || text != overlays[filePath] {
+	if !ok || text != overlays[normalizeOverlayPath(filePath, baseFS.UseCaseSensitiveFileNames())] {
 		t.Fatalf("ReadFile(%q) = (%q, %t), want overlay text", filePath, text, ok)
 	}
 	baseFS.requireCalls(t, "FileExists", filePath, 1)

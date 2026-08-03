@@ -36,13 +36,16 @@ func SanitizeFSWithConfigPath(inner vfs.FS, configPath string) vfs.FS {
 	}
 
 	return wrapvfs.Wrap(inner, wrapvfs.Replacements{
-		ReadFile: func(path string) (string, bool) {
-			contents, ok := inner.ReadFile(path)
+		ReadFile: func(rawPath string) (string, bool) {
+			contents, ok := inner.ReadFile(rawPath)
 			if !ok {
 				return contents, ok
 			}
+			// vfs paths are slash-separated; the caller may pass native
+			// separators (Windows), so normalize before matching.
+			path := filepath.ToSlash(rawPath)
 			_, inExtendsChain := chainPaths[path]
-			if isTSConfigPath(path) || (configPath != "" && path == configPath) || inExtendsChain {
+			if isTSConfigPath(path) || (configPath != "" && path == filepath.ToSlash(configPath)) || inExtendsChain {
 				return SanitizeTSConfig(contents), true
 			}
 			if isCompilerTypesDTSPath(path) {

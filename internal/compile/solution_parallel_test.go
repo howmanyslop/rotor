@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -312,8 +313,11 @@ func TestSolutionCoordinatorReloadForWatchRetainsBuildersAndRebuildsConflicts(t 
 	secondConfig := filepath.Join(secondDir, "tsconfig.json")
 	for _, configPath := range []string{firstConfig, secondConfig} {
 		config := string(mustReadFile(t, configPath))
-		config = strings.Replace(config, filepath.Join(root, "out-first"), sharedOut, 1)
-		config = strings.Replace(config, filepath.Join(root, "out-second"), sharedOut, 1)
+		// writeMetadataSolutionProject embeds outDir with %q, so JSON-escaped
+		// forms are needed for the replacement to match on Windows (raw
+		// backslashes differ from the \\ escapes in the file text).
+		config = strings.Replace(config, strconv.Quote(filepath.Join(root, "out-first")), strconv.Quote(sharedOut), 1)
+		config = strings.Replace(config, strconv.Quote(filepath.Join(root, "out-second")), strconv.Quote(sharedOut), 1)
 		if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
 			t.Fatal(err)
 		}

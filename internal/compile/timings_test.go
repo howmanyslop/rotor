@@ -35,8 +35,8 @@ func TestBuildTimings(t *testing.T) {
 		// Given
 		setRepoSidecarPath(t)
 		closeSidecarSessions()
-		t.Cleanup(closeSidecarSessions)
 		dir := writeProject(t, "@scope/timings-transformer", "")
+		t.Cleanup(closeSidecarSessions)
 		writeSidecarPluginFixture(t, dir, "", `{
 	"compilerOptions": {
 		"allowSyntheticDefaultImports": true,

@@ -58,6 +58,9 @@ func stagePerformanceOutputFixture(t *testing.T) (string, performanceOutputTrans
 func runPerformanceOutputBinary(t *testing.T, fixture string) (performanceOutputCommandResult, error) {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "rotor")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	build := exec.Command("go", "build", "-o", binary, "./cmd/rotor")
 	build.Dir = performanceRepoRoot(t)
 	if output, err := build.CombinedOutput(); err != nil {

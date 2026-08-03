@@ -15,3 +15,5 @@ testdata/fuzz/** -text
 **/testdata/fuzz/** -text
 # This byte-parity fixture deliberately exercises CRLF and a UTF-8 BOM.
 testdata/forkparity/project/performance-output/tree/src/*.ts -text whitespace=-cr-at-eol
+# The $file macro inlines this text file byte-for-byte into Luau output.
+internal/compile/testdata/macros_model/src/notes.txt -text

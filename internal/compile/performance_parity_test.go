@@ -13,10 +13,12 @@ import (
 func TestPerformanceOutputByteParity(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
 
 	// Given
 	fixture, transcript, golden := stagePerformanceOutputFixture(t)
+	// Registered after staging so it runs before the fixture TempDir is
+	// removed (the sidecar worker holds the project dir open on Windows).
+	t.Cleanup(closeSidecarSessions)
 
 	// When
 	result, err := runPerformanceOutputBinary(t, fixture)
@@ -39,10 +41,10 @@ func TestPerformanceOutputByteParity(t *testing.T) {
 func TestDeclarationEmitRemainsPerSource(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
 
 	// Given
 	fixture, transcript, _ := stagePerformanceOutputFixture(t)
+	t.Cleanup(closeSidecarSessions)
 
 	// When
 	result, diagnostics, err := BuildProjectWithOptions(fixture, ProjectOptions{})
@@ -85,10 +87,10 @@ func TestDeclarationEmitRemainsPerSource(t *testing.T) {
 func TestDeclarationMapByteParity(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
 
 	// Given
 	fixture, _, golden := stagePerformanceOutputFixture(t)
+	t.Cleanup(closeSidecarSessions)
 
 	// When
 	_, diagnostics, err := BuildProjectWithOptions(fixture, ProjectOptions{})
@@ -111,10 +113,10 @@ func TestDeclarationMapByteParity(t *testing.T) {
 func TestPerformanceOutputParityMutations(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-	t.Cleanup(closeSidecarSessions)
 
 	// Given
 	fixture, _, golden := stagePerformanceOutputFixture(t)
+	t.Cleanup(closeSidecarSessions)
 	_, diagnostics, err := BuildProjectWithOptions(fixture, ProjectOptions{})
 	if err != nil {
 		t.Fatalf("build: %v (diagnostics: %v)", err, diagnostics)
