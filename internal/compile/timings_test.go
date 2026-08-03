@@ -7,6 +7,24 @@ import (
 )
 
 func TestBuildTimings(t *testing.T) {
+	t.Run("unchanged rebuild performs zero output writes", func(t *testing.T) {
+		dir := writeProject(t, "@scope/timings-warm", "")
+		if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+			t.Fatalf("seed build: %v (diags: %v)", err, diags)
+		}
+		timings := NewBuildTimings()
+
+		if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings}); err != nil {
+			t.Fatalf("warm build: %v (diags: %v)", err, diags)
+		}
+		if timings.Counts.ActualWrites != 0 {
+			t.Fatalf("actual writes = %d, want 0", timings.Counts.ActualWrites)
+		}
+		if timings.Counts.HashSkips == 0 {
+			t.Fatal("hash skips = 0, want at least one")
+		}
+	})
+
 	t.Run("pluginless build records zero sidecar and overlay stages", func(t *testing.T) {
 		// Given
 		dir := writeProject(t, "@scope/timings-pluginless", "")
@@ -14,7 +32,6 @@ func TestBuildTimings(t *testing.T) {
 
 		// When
 		_, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings})
-
 		// Then
 		if err != nil {
 			t.Fatalf("BuildProjectWithOptions: %v (diags: %v)", err, diags)
@@ -64,7 +81,6 @@ func TestBuildTimings(t *testing.T) {
 
 		// When
 		_, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings})
-
 		// Then
 		if err != nil {
 			t.Fatalf("BuildProjectWithOptions: %v (diags: %v)", err, diags)

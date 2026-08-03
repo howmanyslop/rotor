@@ -51,7 +51,7 @@ func TestBuildProjectIncrementalRebuildsChangedFilesAndImporters(t *testing.T) {
 		t.Fatalf("second build diagnostics: %v", diags)
 	}
 
-	if got, want := emittedFileBases(second), []string{"main.luau", "util.luau"}; !slices.Equal(got, want) {
+	if got, want := emittedFileBases(second), []string{"util.luau"}; !slices.Equal(got, want) {
 		t.Fatalf("second build emitted files = %v, want %v", got, want)
 	}
 

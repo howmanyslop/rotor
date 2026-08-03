@@ -114,12 +114,16 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	selectedFiles := sourceFiles
 	var previousManifest *incrementalManifest
 	var currentManifest *incrementalManifest
+	manifestPath := pathTranslator.BuildInfoOutputPath
+	if manifestPath == "" {
+		manifestPath = outputManifestPath(filepath.FromSlash(dir), opts.TsConfigPath)
+	}
+	previousManifest, err = readIncrementalManifest(manifestPath)
+	if err != nil {
+		stopSelectionCleanupCopy()
+		return nil, nil, err
+	}
 	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
-		previousManifest, err = readIncrementalManifest(pathTranslator.BuildInfoOutputPath)
-		if err != nil {
-			stopSelectionCleanupCopy()
-			return nil, nil, err
-		}
 		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, pathTranslator.BuildInfoOutputPath))
 		if err != nil {
 			stopSelectionCleanupCopy()
@@ -129,6 +133,21 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		if opts.forceFullBuild {
 			selectedFiles = sourceFiles
 		}
+	} else {
+		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, manifestPath))
+		if err != nil {
+			stopSelectionCleanupCopy()
+			return nil, nil, err
+		}
+	}
+	if previousManifest != nil && previousManifest.Salt == currentManifest.Salt {
+		for path, hash := range previousManifest.Outputs {
+			currentManifest.Outputs[path] = hash
+		}
+	}
+	writer.useHashes(filepath.FromSlash(dir), currentManifest.Outputs, currentManifest.Outputs)
+	if previousManifest != nil {
+		writer.useHashes(filepath.FromSlash(dir), previousManifest.Outputs, currentManifest.Outputs)
 	}
 
 	copyFilesGate := loadCopyFilesGatePreBuild(copyFilesGateInputs{
@@ -286,10 +305,11 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		return nil, nil, err
 	}
 	emittedFiles = append(emittedFiles, declFiles...)
+	timings.setHashSkips(writer.hashSkipCount())
 
 	stopPersistence := timings.startStage(persistenceStage)
 	if currentManifest != nil && !sameIncrementalManifest(previousManifest, currentManifest) {
-		if err := writeIncrementalManifest(pathTranslator.BuildInfoOutputPath, currentManifest); err != nil {
+		if err := writeIncrementalManifest(manifestPath, currentManifest); err != nil {
 			stopPersistence()
 			return nil, nil, err
 		}

@@ -1,7 +1,9 @@
 package compile
 
 import (
+	"context"
 	"path/filepath"
+	"runtime/trace"
 	"sync"
 	"time"
 )
@@ -42,8 +44,18 @@ type BuildTimingCounts struct {
 	ScheduledSourceMapWrites   int `json:"scheduledSourceMapWrites"`
 	ScheduledDeclarationWrites int `json:"scheduledDeclarationWrites"`
 	ActualWrites               int `json:"actualWrites"`
+	HashSkips                  int `json:"hashSkips"`
 	UniquePreparedDirectories  int `json:"uniquePreparedDirectories"`
 	EffectiveWriteWorkers      int `json:"effectiveWriteWorkers"`
+}
+
+func (timings *BuildTimings) setHashSkips(skips int) {
+	if timings == nil {
+		return
+	}
+	timings.mu.Lock()
+	defer timings.mu.Unlock()
+	timings.Counts.HashSkips = skips
 }
 
 type buildTimingStage uint8
@@ -67,12 +79,34 @@ func NewBuildTimings() *BuildTimings {
 }
 
 func (timings *BuildTimings) startStage(stage buildTimingStage) func() {
-	if timings == nil {
-		return func() {}
-	}
+	region := trace.StartRegion(context.Background(), stage.traceName())
 	started := time.Now()
 	return func() {
-		timings.addStageDuration(stage, time.Since(started))
+		region.End()
+		if timings != nil {
+			timings.addStageDuration(stage, time.Since(started))
+		}
+	}
+}
+
+func (stage buildTimingStage) traceName() string {
+	switch stage {
+	case initialProgramStage:
+		return "program creation and parse/load"
+	case incrementalSelectionCleanupCopyStage:
+		return "incremental selection and cleanup"
+	case projectContextStage:
+		return "project context"
+	case nativeDiagnosticsTransformRenderStage:
+		return "diagnostics and transform/render"
+	case compiledOutputWritesStage:
+		return "compiled output writes"
+	case declarationEmitWritesStage:
+		return "declaration emit/write"
+	case persistenceStage:
+		return "persistence"
+	default:
+		return "build"
 	}
 }
 

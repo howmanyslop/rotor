@@ -15,8 +15,10 @@ import (
 )
 
 type incrementalManifest struct {
-	Salt  string                          `json:"salt"`
-	Files map[string]incrementalFileState `json:"files"`
+	Version int                             `json:"version"`
+	Salt    string                          `json:"salt"`
+	Files   map[string]incrementalFileState `json:"files"`
+	Outputs map[string]string               `json:"outputs"`
 }
 
 type incrementalFileState struct {
@@ -36,8 +38,14 @@ func readIncrementalManifest(path string) (*incrementalManifest, error) {
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, nil
 	}
+	if manifest.Version != 2 {
+		return nil, nil
+	}
 	if manifest.Files == nil {
 		manifest.Files = map[string]incrementalFileState{}
+	}
+	if manifest.Outputs == nil {
+		manifest.Outputs = map[string]string{}
 	}
 	return &manifest, nil
 }
@@ -77,8 +85,10 @@ func sameIncrementalManifest(a, b *incrementalManifest) bool {
 
 func buildIncrementalManifest(program *compiler.Program, sourceFiles []*ast.SourceFile, salt string) (*incrementalManifest, error) {
 	manifest := &incrementalManifest{
-		Salt:  salt,
-		Files: make(map[string]incrementalFileState, len(sourceFiles)),
+		Version: 2,
+		Salt:    salt,
+		Files:   make(map[string]incrementalFileState, len(sourceFiles)),
+		Outputs: map[string]string{},
 	}
 	sourceSet := make(map[string]struct{}, len(sourceFiles))
 	for _, sourceFile := range sourceFiles {
@@ -110,7 +120,7 @@ func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTransla
 		LuaExtension         bool   `json:"luaExtension"`
 		Declaration          bool   `json:"declaration"`
 	}{
-		Version:              "rotor-incremental-v1",
+		Version:              "rotor-incremental-v2",
 		ConfigFilePath:       options.ConfigFilePath,
 		OutDir:               options.OutDir,
 		TsBuildInfoFile:      options.TsBuildInfoFile,
@@ -123,6 +133,15 @@ func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTransla
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+func outputManifestPath(projectDir, configPath string) string {
+	canonical, err := filepath.Abs(configPath)
+	if err != nil {
+		canonical = filepath.Clean(configPath)
+	}
+	sum := sha256.Sum256([]byte(filepath.ToSlash(canonical)))
+	return filepath.Join(projectDir, ".rotor", "cache", "output-manifests", hex.EncodeToString(sum[:])+".json")
 }
 
 func selectIncrementalSourceFiles(sourceFiles []*ast.SourceFile, current, previous *incrementalManifest) []*ast.SourceFile {

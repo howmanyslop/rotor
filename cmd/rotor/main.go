@@ -34,6 +34,7 @@ func main() {
 }
 
 func run(args []string) int {
+	applyRuntimePolicy()
 	if len(args) == 0 {
 		usage(os.Stderr)
 		return 1
@@ -152,6 +153,10 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  --allowCommentDirectives  allow @ts-ignore et al.")
 	fmt.Fprintln(w, "  --luau                    emit files with .luau extension (default true; --luau=false emits .lua)")
 	fmt.Fprintln(w, "  --cpuprofile <path>       write a pprof CPU profile of the build (diagnostics)")
+	fmt.Fprintln(w, "  --trace-out <path>        write a Go execution trace of the build (diagnostics)")
+	fmt.Fprintln(w, "  --blockprofile <path>     write a blocking profile sampled at 1 ms (diagnostics)")
+	fmt.Fprintln(w, "  --mutexprofile <path>     write a mutex contention profile at fraction 5 (diagnostics)")
+	fmt.Fprintln(w, "  --heapprofile <path>      write a heap profile after the build (diagnostics)")
 	fmt.Fprintln(w, "  --timings <path>          write aggregate one-shot build timings as JSON (not with --watch)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Diagnostics & watch DX (rotor extensions):")

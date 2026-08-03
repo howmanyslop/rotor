@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime/pprof"
 	"strings"
 	"time"
 
@@ -41,6 +40,10 @@ type buildArgs struct {
 	checkers            *int
 	jsonOut             bool   // rotor DX extension: emit a machine-readable result object
 	cpuprofile          string // rotor DX extension: write a pprof CPU profile here
+	traceOut            string
+	blockprofile        string
+	mutexprofile        string
+	heapprofile         string
 	timings             string
 	maxErrors           int  // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
 	bell                bool // rotor DX extension (watch): ring the bell on a fail<->pass flip
@@ -154,6 +157,33 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			continue
 		case "cpuprofile":
 			res.cpuprofile = takeValue()
+			if res.cpuprofile == "" {
+				return nil, errors.New("--cpuprofile requires a path")
+			}
+			continue
+		case "trace-out":
+			res.traceOut = takeValue()
+			if res.traceOut == "" {
+				return nil, errors.New("--trace-out requires a path")
+			}
+			continue
+		case "blockprofile":
+			res.blockprofile = takeValue()
+			if res.blockprofile == "" {
+				return nil, errors.New("--blockprofile requires a path")
+			}
+			continue
+		case "mutexprofile":
+			res.mutexprofile = takeValue()
+			if res.mutexprofile == "" {
+				return nil, errors.New("--mutexprofile requires a path")
+			}
+			continue
+		case "heapprofile":
+			res.heapprofile = takeValue()
+			if res.heapprofile == "" {
+				return nil, errors.New("--heapprofile requires a path")
+			}
 			continue
 		case "timings":
 			res.timings = takeValue()
@@ -261,6 +291,17 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 	if res.build && res.emitDeclarationOnly && res.opts.watch != nil && *res.opts.watch {
 		return nil, errors.New("--build --watch is incompatible with --emitDeclarationOnly (no Luau emit to incrementally watch)")
 	}
+	if res.opts.watch != nil && *res.opts.watch {
+		for flag, path := range map[string]string{
+			"--cpuprofile": res.cpuprofile, "--trace-out": res.traceOut,
+			"--blockprofile": res.blockprofile, "--mutexprofile": res.mutexprofile,
+			"--heapprofile": res.heapprofile, "--timings": res.timings,
+		} {
+			if path != "" {
+				return nil, fmt.Errorf("%s cannot be used with --watch", flag)
+			}
+		}
+	}
 
 	return res, nil
 }
@@ -317,24 +358,12 @@ func cmdBuild(args []string) int {
 		fmt.Println(version)
 		return 0
 	}
-	if parsed.timings != "" && parsed.opts.watch != nil && *parsed.opts.watch {
-		fmt.Fprintln(os.Stderr, "rotor build: --timings cannot be used with --watch")
+	profiles, err := startBuildProfiles(parsed)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
 		return 1
 	}
-
-	if parsed.cpuprofile != "" {
-		f, err := os.Create(parsed.cpuprofile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: cannot create cpu profile: %v\n", err)
-			return 1
-		}
-		defer f.Close()
-		if err := pprof.StartCPUProfile(f); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: cannot start cpu profile: %v\n", err)
-			return 1
-		}
-		defer pprof.StopCPUProfile()
-	}
+	defer profiles.stop()
 
 	projectPath := parsed.project
 	if parsed.buildPath != "" {
