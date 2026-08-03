@@ -514,6 +514,7 @@ func TestUsageIncludesConcurrencyControls(t *testing.T) {
 		"only with --build",
 		"--checkers <n>",
 		"build and check",
+		"UV_THREADPOOL_SIZE         configure the Node sidecar libuv pool (not Go output writers)",
 	} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("usage does not contain %q", want)
