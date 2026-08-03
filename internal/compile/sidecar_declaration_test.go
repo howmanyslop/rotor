@@ -35,7 +35,7 @@ module.exports = function () {
 func TestAfterDeclarationsOnly(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-dir := writeProject(t, "@scope/after-declarations-fixture", "")
+	dir := writeProject(t, "@scope/after-declarations-fixture", "")
 	t.Cleanup(closeSidecarSessions)
 	writeSidecarPluginFixture(t, dir, "", sidecarDeclarationConfig(`[{ "transform": "./plugins/declaration-marker.js", "afterDeclarations": true }]`))
 	if err := os.WriteFile(filepath.Join(dir, "plugins", "declaration-marker.js"), []byte(declarationMarkerPlugin), 0o644); err != nil {
@@ -61,7 +61,7 @@ dir := writeProject(t, "@scope/after-declarations-fixture", "")
 func TestTransformerParentFix(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-dir := writeProject(t, "@scope/parent-fix-fixture", "")
+	dir := writeProject(t, "@scope/parent-fix-fixture", "")
 	t.Cleanup(closeSidecarSessions)
 	plugin := `const ts = require("typescript");
 function inject(context) {
@@ -97,7 +97,7 @@ module.exports = function () { return { before: inject, after: requireParent }; 
 func TestDeclarationPathRewrite(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-dir := writeProject(t, "@scope/declaration-path-fixture", "")
+	dir := writeProject(t, "@scope/declaration-path-fixture", "")
 	t.Cleanup(closeSidecarSessions)
 	config := strings.Replace(
 		sidecarDeclarationConfig(`[]`),
@@ -128,7 +128,7 @@ dir := writeProject(t, "@scope/declaration-path-fixture", "")
 func TestTransformerSourceMapOriginalContent(t *testing.T) {
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
-dir := writeProject(t, "@scope/transformer-source-map-fixture", "")
+	dir := writeProject(t, "@scope/transformer-source-map-fixture", "")
 	t.Cleanup(closeSidecarSessions)
 	config := strings.Replace(sidecarDeclarationConfig(`[{ "transform": "./plugins/insert.js" }]`), `"declaration": true,`, `"declaration": true, "sourceMap": true,`, 1)
 	writeSidecarPluginFixture(t, dir, "", config)
