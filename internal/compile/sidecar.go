@@ -23,7 +23,6 @@ import (
 	"rotor/tsgo/tsoptions"
 	"rotor/tsgo/vfs"
 	"rotor/tsgo/vfs/osvfs"
-	"rotor/tsgo/vfs/wrapvfs"
 )
 
 // defaultSidecarResponseTimeout is intentionally generous: upstream rbxtsc
@@ -548,22 +547,7 @@ func newProjectProgramWithOverlay(projectDir, tsConfigPath string, overlays map[
 		configPath = filepath.ToSlash(abs)
 	}
 
-	baseFS := SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath)
-	caseSensitive := baseFS.UseCaseSensitiveFileNames()
-	fs := wrapvfs.Wrap(baseFS, wrapvfs.Replacements{
-		FileExists: func(path string) bool {
-			if _, ok := overlays[normalizeOverlayPath(path, caseSensitive)]; ok {
-				return true
-			}
-			return baseFS.FileExists(path)
-		},
-		ReadFile: func(path string) (string, bool) {
-			if text, ok := overlays[normalizeOverlayPath(path, caseSensitive)]; ok {
-				return text, true
-			}
-			return baseFS.ReadFile(path)
-		},
-	})
+	fs := newOverlayFS(osvfs.FS(), configPath, overlays)
 	return newProjectProgramFromFSWithOptions(dir, configPath, fs, checkers)
 }
 
