@@ -169,17 +169,60 @@ func collectPerformanceTree(t *testing.T, root string) map[string][]byte {
 	result := readPerformanceTree(t, filepath.Join(root, "out"))
 	withOutputPrefix := make(map[string][]byte, len(result))
 	for path, contents := range result {
-		withOutputPrefix["out/"+path] = bytes.ReplaceAll(contents, []byte(root), []byte(performanceOutputRoot))
+		redacted := contents
+		for _, spelling := range performanceRootSpellings(root) {
+			redacted = bytes.ReplaceAll(redacted, []byte(spelling), []byte(performanceOutputRoot))
+		}
+		withOutputPrefix["out/"+path] = redacted
 	}
 	return withOutputPrefix
 }
 
 func normalizePerformancePaths(paths []string, root string) []string {
+	spellings := performanceRootSpellings(root)
 	normalized := make([]string, len(paths))
 	for index, path := range paths {
-		normalized[index] = filepath.ToSlash(strings.ReplaceAll(path, root, performanceOutputRoot))
+		redacted := path
+		for _, spelling := range spellings {
+			redacted = strings.ReplaceAll(redacted, spelling, performanceOutputRoot)
+		}
+		normalized[index] = filepath.ToSlash(redacted)
 	}
 	return normalized
+}
+
+// performanceRootSpellings returns every spelling of root that can reach
+// emitted output, so redaction is separator-agnostic. Windows adds three
+// wrinkles the native path alone misses: emitted paths use forward slashes
+// while filepath.Join yields backslashes, TEMP resolves through 8.3 short
+// names (RUNNER~1), and paths embedded in JSON (.map files) have their
+// separators escaped. Longest first so a shorter spelling cannot shadow a
+// longer match.
+func performanceRootSpellings(root string) []string {
+	candidates := []string{root}
+	if resolved, err := filepath.EvalSymlinks(root); err == nil && resolved != root {
+		candidates = append(candidates, resolved)
+	}
+
+	seen := make(map[string]struct{}, len(candidates)*3)
+	spellings := make([]string, 0, len(candidates)*3)
+	add := func(spelling string) {
+		if spelling == "" {
+			return
+		}
+		if _, duplicate := seen[spelling]; duplicate {
+			return
+		}
+		seen[spelling] = struct{}{}
+		spellings = append(spellings, spelling)
+	}
+	for _, candidate := range candidates {
+		add(candidate)
+		add(filepath.ToSlash(candidate))
+		add(strings.ReplaceAll(candidate, `\`, `\\`))
+	}
+	slices.SortStableFunc(spellings, func(left, right string) int { return len(right) - len(left) })
+	return spellings
 }
 
 func clonePerformanceTree(tree map[string][]byte) map[string][]byte {
