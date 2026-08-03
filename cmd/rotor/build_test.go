@@ -715,7 +715,8 @@ func writeBuildableProject(t *testing.T, mainSrc string) string {
 }
 
 // captureStdout runs fn with os.Stdout redirected to a pipe and returns what it
-// wrote, plus fn's return value.
+// wrote, plus fn's return value. The pipe is drained concurrently (Windows
+// pipes buffer only ~4KB; reading after fn returns would deadlock).
 func captureStdout(t *testing.T, fn func() int) (string, int) {
 	t.Helper()
 	prev := os.Stdout
@@ -724,10 +725,16 @@ func captureStdout(t *testing.T, fn func() int) (string, int) {
 		t.Fatal(err)
 	}
 	os.Stdout = w
+	done := make(chan struct{})
+	var data []byte
+	go func() {
+		data, _ = io.ReadAll(r)
+		close(done)
+	}()
 	code := fn()
 	_ = w.Close()
 	os.Stdout = prev
-	data, _ := io.ReadAll(r)
+	<-done
 	return string(data), code
 }
 
@@ -1065,6 +1072,18 @@ func captureBuildOutput(t *testing.T, args []string) (string, string, int) {
 	}
 	os.Stdout = stdoutWriter
 	os.Stderr = stderrWriter
+	stdoutDone := make(chan struct{})
+	stderrDone := make(chan struct{})
+	var stdout []byte
+	var stderr []byte
+	go func() {
+		stdout, _ = io.ReadAll(stdoutReader)
+		close(stdoutDone)
+	}()
+	go func() {
+		stderr, _ = io.ReadAll(stderrReader)
+		close(stderrDone)
+	}()
 	code := cmdBuild(args)
 	if err := stdoutWriter.Close(); err != nil {
 		t.Fatal(err)
@@ -1074,14 +1093,8 @@ func captureBuildOutput(t *testing.T, args []string) (string, string, int) {
 	}
 	os.Stdout = previousStdout
 	os.Stderr = previousStderr
-	stdout, err := io.ReadAll(stdoutReader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	stderr, err := io.ReadAll(stderrReader)
-	if err != nil {
-		t.Fatal(err)
-	}
+	<-stdoutDone
+	<-stderrDone
 	return string(stdout), string(stderr), code
 }
 
