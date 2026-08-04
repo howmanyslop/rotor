@@ -347,12 +347,6 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 
 	stopPersistence := timings.startStage(persistenceStage)
 	pruneMissingOutputs(filepath.FromSlash(dir), currentManifest.Outputs)
-	if currentManifest != nil && !sameIncrementalManifest(previousManifest, currentManifest) {
-		if err := writeIncrementalManifest(manifestPath, currentManifest); err != nil {
-			stopPersistence()
-			return nil, nil, err
-		}
-	}
 	// rotor extension: keep the consolidated on-disk rotor.d.ts editor companion
 	// fresh for projects that reference any macro ($env / $asset / $nameof /
 	// $keys / $file / $git / $buildTime). Editors never see the synthetic
@@ -384,10 +378,15 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		if rojoCache != nil {
 			rojoCache.Persist()
 		}
-		if copyFilesGate.Persist == nil {
-			return nil
+		if copyFilesGate.Persist != nil {
+			if err := copyFilesGate.Persist(); err != nil {
+				return err
+			}
 		}
-		return copyFilesGate.Persist()
+		if currentManifest != nil && !sameIncrementalManifest(previousManifest, currentManifest) {
+			return writeIncrementalManifest(manifestPath, currentManifest)
+		}
+		return nil
 	}
 	if opts.pendingSolutionPersists != nil {
 		*opts.pendingSolutionPersists = append(*opts.pendingSolutionPersists, persist)

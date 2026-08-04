@@ -245,6 +245,41 @@ func TestBuildInfoFailureRollback(t *testing.T) {
 	}
 }
 
+func TestBuildInfoFailureAfterOutputPersistenceRollback(t *testing.T) {
+	dir := writeProject(t, "@scope/build-info-persistence-rollback-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+
+	buildInfoPath := filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")
+	prior, err := os.ReadFile(buildInfoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, "src", "main.ts"),
+		[]byte("export const value = 1;\nexport const name = $nameof(value);\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, RotorTypesFileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err == nil {
+		t.Fatal("expected rotor types persistence failure")
+	}
+	after, err := os.ReadFile(buildInfoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(prior) {
+		t.Fatal("build info changed after post-output persistence failure")
+	}
+}
+
 func TestDuplicateOutputGuard(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "out", "same.luau")
