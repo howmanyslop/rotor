@@ -380,7 +380,7 @@ func reportBuildPass(u *ui, result *compile.BuildResult, diags []compile.Diagnos
 	} else if result != nil {
 		stats.lastErrCount = 0
 		if result.WroteRotorTypes {
-			u.noteLine(compile.RotorTypesFileName + "  (generated — editor types for rotor macros)")
+			u.noteLine(compile.RotorTypesFileName + "  (generated — editor types for sloptor macros)")
 		}
 		if result.WroteLockfile {
 			u.noteLine(assets.LockfileName + "  (updated — uploaded new $asset assets)")

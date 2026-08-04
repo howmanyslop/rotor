@@ -38,7 +38,7 @@ func cmdBundle(args []string) int {
 			minify = true
 		case a == "-o" || a == "--output":
 			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "rotor bundle: %s requires a path\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor bundle: %s requires a path\n", a)
 				return 1
 			}
 			i++
@@ -49,7 +49,7 @@ func cmdBundle(args []string) int {
 			output = strings.TrimPrefix(a, "-o=")
 		case a == "--exclude":
 			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "rotor bundle: %s requires a glob\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor bundle: %s requires a glob\n", a)
 				return 1
 			}
 			i++
@@ -57,12 +57,12 @@ func cmdBundle(args []string) int {
 		case strings.HasPrefix(a, "--exclude="):
 			exclude = append(exclude, strings.TrimPrefix(a, "--exclude="))
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "rotor bundle: unknown flag %q\n\n", a)
+			fmt.Fprintf(os.Stderr, "sloptor bundle: unknown flag %q\n\n", a)
 			usage(os.Stderr)
 			return 1
 		default:
 			if entry != "" {
-				fmt.Fprintf(os.Stderr, "rotor bundle: unexpected extra argument %q\n\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor bundle: unexpected extra argument %q\n\n", a)
 				usage(os.Stderr)
 				return 1
 			}
@@ -70,7 +70,7 @@ func cmdBundle(args []string) int {
 		}
 	}
 	if entry == "" {
-		fmt.Fprintln(os.Stderr, "rotor bundle: an entry .luau/.lua file is required")
+		fmt.Fprintln(os.Stderr, "sloptor bundle: an entry .luau/.lua file is required")
 		usage(os.Stderr)
 		return 1
 	}
@@ -85,7 +85,7 @@ func cmdBundle(args []string) int {
 	if err != nil {
 		var pe *bundle.ParseError
 		if errors.As(err, &pe) {
-			errUI.failLine("rotor bundle: syntax error")
+			errUI.failLine("sloptor bundle: syntax error")
 			color := term.ColorEnabled(os.Stderr)
 			fmt.Fprint(os.Stderr, diagframe.RenderGroups(
 				[]diagframe.Group{{Path: pe.Path, Source: pe.Source, Lang: diagframe.Luau,
@@ -93,7 +93,7 @@ func cmdBundle(args []string) int {
 				diagframe.Options{Color: color, Link: color}, 0))
 			return 1
 		}
-		errUI.failLine(fmt.Sprintf("rotor bundle: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor bundle: %v", err))
 		return 1
 	}
 	// Display-only module tally: one `local function impl_<id>(` per bundled
@@ -104,7 +104,7 @@ func cmdBundle(args []string) int {
 	if minify {
 		minified, diags := cst.Minify(out)
 		if len(diags) != 0 {
-			errUI.failLine(fmt.Sprintf("rotor bundle: internal error minifying bundle: %s", diags[0].Message))
+			errUI.failLine(fmt.Sprintf("sloptor bundle: internal error minifying bundle: %s", diags[0].Message))
 			return 1
 		}
 		out = minified
@@ -115,7 +115,7 @@ func cmdBundle(args []string) int {
 		return 0
 	}
 	if err := os.WriteFile(output, []byte(out), 0o644); err != nil {
-		errUI.failLine(fmt.Sprintf("rotor bundle: cannot write %q: %v", output, err))
+		errUI.failLine(fmt.Sprintf("sloptor bundle: cannot write %q: %v", output, err))
 		return 1
 	}
 

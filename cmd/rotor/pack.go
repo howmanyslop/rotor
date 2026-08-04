@@ -29,7 +29,7 @@ func cmdPack(args []string) int {
 			rojoTree = true
 		case a == "--as":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "rotor pack: --as requires a format (luau|rbxmx|rbxm)")
+				fmt.Fprintln(os.Stderr, "sloptor pack: --as requires a format (luau|rbxmx|rbxm)")
 				return 1
 			}
 			i++
@@ -38,7 +38,7 @@ func cmdPack(args []string) int {
 			format = strings.TrimPrefix(a, "--as=")
 		case a == "-o" || a == "--output":
 			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "rotor pack: %s requires a path\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor pack: %s requires a path\n", a)
 				return 1
 			}
 			i++
@@ -49,7 +49,7 @@ func cmdPack(args []string) int {
 			output = strings.TrimPrefix(a, "-o=")
 		case a == "--entry":
 			if i+1 >= len(args) {
-				fmt.Fprintln(os.Stderr, "rotor pack: --entry requires an instance path")
+				fmt.Fprintln(os.Stderr, "sloptor pack: --entry requires an instance path")
 				return 1
 			}
 			i++
@@ -57,12 +57,12 @@ func cmdPack(args []string) int {
 		case strings.HasPrefix(a, "--entry="):
 			entry = strings.TrimPrefix(a, "--entry=")
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "rotor pack: unknown flag %q\n\n", a)
+			fmt.Fprintf(os.Stderr, "sloptor pack: unknown flag %q\n\n", a)
 			usage(os.Stderr)
 			return 1
 		default:
 			if project != "" {
-				fmt.Fprintf(os.Stderr, "rotor pack: unexpected extra argument %q\n\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor pack: unexpected extra argument %q\n\n", a)
 				usage(os.Stderr)
 				return 1
 			}
@@ -79,15 +79,15 @@ func cmdPack(args []string) int {
 	case "rbxm":
 		f = pack.FormatRbxm
 	default:
-		fmt.Fprintf(os.Stderr, "rotor pack: unknown format %q (want luau, rbxmx, or rbxm)\n", format)
+		fmt.Fprintf(os.Stderr, "sloptor pack: unknown format %q (want luau, rbxmx, or rbxm)\n", format)
 		return 1
 	}
 	if entry != "" && f != pack.FormatLuau {
-		fmt.Fprintln(os.Stderr, "rotor pack: --entry only applies to --as luau")
+		fmt.Fprintln(os.Stderr, "sloptor pack: --entry only applies to --as luau")
 		return 1
 	}
 	if output == "" && f != pack.FormatLuau {
-		fmt.Fprintf(os.Stderr, "rotor pack: --as %s needs an output path (-o <file.%s>)\n", format, format)
+		fmt.Fprintf(os.Stderr, "sloptor pack: --as %s needs an output path (-o <file.%s>)\n", format, format)
 		return 1
 	}
 
@@ -102,7 +102,7 @@ func cmdPack(args []string) int {
 	start := time.Now()
 	data, err := pack.Pack(pack.Options{Project: project, Format: f, Entry: entry, RojoTree: rojoTree})
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor pack: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor pack: %v", err))
 		return 1
 	}
 
@@ -111,7 +111,7 @@ func cmdPack(args []string) int {
 		return 0
 	}
 	if err := os.WriteFile(output, data, 0o644); err != nil {
-		errUI.failLine(fmt.Sprintf("rotor pack: cannot write %q: %v", output, err))
+		errUI.failLine(fmt.Sprintf("sloptor pack: cannot write %q: %v", output, err))
 		return 1
 	}
 

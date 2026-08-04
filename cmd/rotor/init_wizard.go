@@ -23,7 +23,7 @@ import (
 func runInitInteractive(dir, name string, in io.Reader, out io.Writer) int {
 	opts, ok, err := runInitWizard(in, out, initOptions{dir: dir, name: name, template: "game"})
 	if err != nil {
-		newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
+		newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: %v", err))
 		return 1
 	}
 	if !ok {

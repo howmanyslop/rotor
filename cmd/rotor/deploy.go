@@ -30,7 +30,7 @@ func cmdDeploy(args []string) int {
 // confirmation prompt and inspect output.
 func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "rotor deploy: missing subcommand (plan or apply)")
+		fmt.Fprintln(stderr, "sloptor deploy: missing subcommand (plan or apply)")
 		deployUsage(stderr)
 		return 1
 	}
@@ -40,7 +40,7 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	}
 	sub := args[0]
 	if sub != "plan" && sub != "apply" {
-		fmt.Fprintf(stderr, "rotor deploy: unknown subcommand %q (want plan or apply)\n", sub)
+		fmt.Fprintf(stderr, "sloptor deploy: unknown subcommand %q (want plan or apply)\n", sub)
 		deployUsage(stderr)
 		return 1
 	}
@@ -63,7 +63,7 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			allowDeletes = true
 		case a == "-e" || a == "--env":
 			if i+1 >= len(rest) {
-				fmt.Fprintf(stderr, "rotor deploy: %s requires an environment name\n", a)
+				fmt.Fprintf(stderr, "sloptor deploy: %s requires an environment name\n", a)
 				return 1
 			}
 			i++
@@ -73,12 +73,12 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		case strings.HasPrefix(a, "-e="):
 			env = strings.TrimPrefix(a, "-e=")
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(stderr, "rotor deploy: unknown flag %q\n\n", a)
+			fmt.Fprintf(stderr, "sloptor deploy: unknown flag %q\n\n", a)
 			deployUsage(stderr)
 			return 1
 		default:
 			if haveDir {
-				fmt.Fprintf(stderr, "rotor deploy: unexpected extra argument %q\n\n", a)
+				fmt.Fprintf(stderr, "sloptor deploy: unexpected extra argument %q\n\n", a)
 				deployUsage(stderr)
 				return 1
 			}
@@ -87,7 +87,7 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		}
 	}
 	if env == "" {
-		fmt.Fprintln(stderr, "rotor deploy: an environment is required (-e <env>)")
+		fmt.Fprintln(stderr, "sloptor deploy: an environment is required (-e <env>)")
 		return 1
 	}
 
@@ -100,36 +100,36 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	cfg, err := config.Load(projectDir)
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {
-			errUI.failLine(fmt.Sprintf("rotor deploy: no rotor.toml found in %s", projectDir))
+			errUI.failLine(fmt.Sprintf("sloptor deploy: no rotor.toml found in %s", projectDir))
 			return 1
 		}
-		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
 		return 1
 	}
 	for _, w := range cfg.Warnings {
-		errUI.warn("rotor deploy: " + w)
+		errUI.warn("sloptor deploy: " + w)
 	}
 	if errs := cfg.Validate(); len(errs) > 0 {
 		for _, e := range errs {
-			errUI.failLine(fmt.Sprintf("rotor deploy: config: %v", e))
+			errUI.failLine(fmt.Sprintf("sloptor deploy: config: %v", e))
 		}
 		return 1
 	}
 
 	resources, universeID, err := deploy.BuildResources(projectDir, cfg, env)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
 		return 1
 	}
 	statePath := deploy.StatePath(projectDir, env)
 	state, err := deploy.LoadState(statePath)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
 		return 1
 	}
 	plan, err := deploy.BuildPlan(resources, state, deploy.PlanOptions{AllowDeletes: allowDeletes})
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
 		return 1
 	}
 
@@ -140,7 +140,7 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 
 	// apply
 	if plan.BlockedDeletes > 0 {
-		errUI.failLine(fmt.Sprintf("rotor deploy: plan contains %s no longer in the config; re-run with --allow-deletes to remove them",
+		errUI.failLine(fmt.Sprintf("sloptor deploy: plan contains %s no longer in the config; re-run with --allow-deletes to remove them",
 			plural(plan.BlockedDeletes, "resource")))
 		return 1
 	}
@@ -155,12 +155,12 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	client, err := cloud.FromEnv()
 	if err != nil {
 		if errors.Is(err, cloud.ErrNoAPIKey) {
-			errUI.failLine("rotor deploy: ROBLOX_API_KEY is not set")
+			errUI.failLine("sloptor deploy: ROBLOX_API_KEY is not set")
 			fmt.Fprintln(stderr, "    create an Open Cloud API key at https://create.roblox.com/dashboard/credentials")
 			fmt.Fprintln(stderr, "    (scopes: universe + place publishing, badges, asset upload)")
 			return 1
 		}
-		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
 		return 1
 	}
 
@@ -169,7 +169,7 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stdout, "  %s  type the environment name to confirm: ", s.WarnBold(s.Glyphs().Warn))
 		line, _ := bufio.NewReader(stdin).ReadString('\n')
 		if strings.TrimSpace(line) != env {
-			errUI.failLine("rotor deploy: confirmation did not match; aborted (use --yes to skip)")
+			errUI.failLine("sloptor deploy: confirmation did not match; aborted (use --yes to skip)")
 			return 1
 		}
 	}
@@ -186,7 +186,7 @@ func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		OnStep:     func(r deploy.StepResult) { printDeployStep(stdout, s, r) },
 	})
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor deploy: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
 		return 1
 	}
 	printDeploySummary(stdout, s, result, time.Since(start))
@@ -264,7 +264,7 @@ func printDeploySummary(w io.Writer, s *term.Styler, r *deploy.ApplyResult, elap
 }
 
 func deployUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]")
+	fmt.Fprintln(w, "Usage: sloptor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  plan             show what apply would do (no network, no API key needed)")
 	fmt.Fprintln(w, "  apply            execute the plan against Open Cloud (needs ROBLOX_API_KEY)")

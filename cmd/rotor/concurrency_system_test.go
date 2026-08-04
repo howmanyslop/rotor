@@ -267,13 +267,13 @@ func normalizeConcurrencyOutput(value, tempRoot string) string {
 // redaction of the bare base component.
 func TestNormalizeConcurrencyOutputRedactsWindowsSpellings(t *testing.T) {
 	tempRoot := `C:\Users\RUNNER~1\AppData\Local\Temp\TestGraph1003578272\003`
-	value := "  rotor v0.0.0  -  003\n" +
+	value := "  sloptor v0.0.0  -  003\n" +
 		"  --> ../../../../Users/RUNNER~1/AppData/Local/Temp/TestGraph1003578272/003/left/src/value.ts:1:14\n" +
 		"  wrote TestGraph1003578272.json\n"
 
 	got := normalizeConcurrencyOutput(value, tempRoot)
 
-	want := "  rotor v0.0.0  -  <TEMP_ROOT>\n" +
+	want := "  sloptor v0.0.0  -  <TEMP_ROOT>\n" +
 		"  --> ../../../../<TEMP_ROOT>/left/src/value.ts:1:14\n" +
 		"  wrote TestGraph1003578272.json\n"
 	if got != want {

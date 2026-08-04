@@ -26,7 +26,7 @@ func cmdSourcemap(args []string) int {
 			return 0
 		case a == "-o" || a == "--output":
 			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "rotor sourcemap: %s requires a path\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor sourcemap: %s requires a path\n", a)
 				return 1
 			}
 			i++
@@ -36,12 +36,12 @@ func cmdSourcemap(args []string) int {
 		case strings.HasPrefix(a, "-o="):
 			output = strings.TrimPrefix(a, "-o=")
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "rotor sourcemap: unknown flag %q\n\n", a)
+			fmt.Fprintf(os.Stderr, "sloptor sourcemap: unknown flag %q\n\n", a)
 			usage(os.Stderr)
 			return 1
 		default:
 			if project != "" {
-				fmt.Fprintf(os.Stderr, "rotor sourcemap: unexpected extra argument %q\n\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor sourcemap: unexpected extra argument %q\n\n", a)
 				usage(os.Stderr)
 				return 1
 			}
@@ -60,7 +60,7 @@ func cmdSourcemap(args []string) int {
 	start := time.Now()
 	data, err := sourcemap.Generate(project)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor sourcemap: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor sourcemap: %v", err))
 		return 1
 	}
 	if output == "" {
@@ -68,7 +68,7 @@ func cmdSourcemap(args []string) int {
 		return 0
 	}
 	if err := os.WriteFile(output, data, 0o644); err != nil {
-		errUI.failLine(fmt.Sprintf("rotor sourcemap: cannot write %q: %v", output, err))
+		errUI.failLine(fmt.Sprintf("sloptor sourcemap: cannot write %q: %v", output, err))
 		return 1
 	}
 
