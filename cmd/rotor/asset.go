@@ -35,7 +35,7 @@ func cmdAsset(args []string) int {
 		case a == "--dry-run":
 			dryRun = true
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "rotor asset: unknown flag %q\n\n", a)
+			fmt.Fprintf(os.Stderr, "sloptor asset: unknown flag %q\n\n", a)
 			assetUsage(os.Stderr)
 			return 1
 		default:
@@ -45,14 +45,14 @@ func cmdAsset(args []string) int {
 			case dir == "":
 				dir = a
 			default:
-				fmt.Fprintf(os.Stderr, "rotor asset: unexpected extra argument %q\n\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor asset: unexpected extra argument %q\n\n", a)
 				assetUsage(os.Stderr)
 				return 1
 			}
 		}
 	}
 	if sub == "" {
-		fmt.Fprintln(os.Stderr, "rotor asset: expected a subcommand (sync or list)")
+		fmt.Fprintln(os.Stderr, "sloptor asset: expected a subcommand (sync or list)")
 		fmt.Fprintln(os.Stderr)
 		assetUsage(os.Stderr)
 		return 1
@@ -65,12 +65,12 @@ func cmdAsset(args []string) int {
 		return assetSync(dir, dryRun)
 	case "list":
 		if dryRun {
-			fmt.Fprintln(os.Stderr, "rotor asset: --dry-run only applies to sync")
+			fmt.Fprintln(os.Stderr, "sloptor asset: --dry-run only applies to sync")
 			return 1
 		}
 		return assetList(dir)
 	default:
-		fmt.Fprintf(os.Stderr, "rotor asset: unknown subcommand %q (want sync or list)\n\n", sub)
+		fmt.Fprintf(os.Stderr, "sloptor asset: unknown subcommand %q (want sync or list)\n\n", sub)
 		assetUsage(os.Stderr)
 		return 1
 	}
@@ -78,12 +78,12 @@ func cmdAsset(args []string) int {
 
 func assetUsage(w io.Writer) {
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintln(w, "  rotor asset sync [path] [--dry-run]")
+	fmt.Fprintln(w, "  sloptor asset sync [path] [--dry-run]")
 	fmt.Fprintln(w, "      scan the asset globs from rotor.toml, upload new/changed files")
 	fmt.Fprintln(w, "      via Open Cloud (decals + audio), record ids in rotor-lock.json, and")
 	fmt.Fprintln(w, "      regenerate the typed accessor modules (assets.luau / assets.d.ts);")
 	fmt.Fprintln(w, "      --dry-run prints the plan without uploading (no API key needed)")
-	fmt.Fprintln(w, "  rotor asset list [path]")
+	fmt.Fprintln(w, "  sloptor asset list [path]")
 	fmt.Fprintln(w, "      print the lockfile (path, asset id, content hash)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Uploading needs ROBLOX_API_KEY (an Open Cloud key with asset read/write scopes).")
@@ -104,29 +104,29 @@ func assetSync(dir string, dryRun bool) int {
 
 	cfg, err := config.Load(dir)
 	if errors.Is(err, config.ErrNotFound) {
-		errUI.failLine(fmt.Sprintf("rotor asset: no rotor.toml found in %q (asset sync needs an [assets] section)", dir))
+		errUI.failLine(fmt.Sprintf("sloptor asset: no rotor.toml found in %q (asset sync needs an [assets] section)", dir))
 		return 1
 	}
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor asset: %v", err))
 		return 1
 	}
 	for _, w := range cfg.Warnings {
-		errUI.warn("rotor asset: " + w)
+		errUI.warn("sloptor asset: " + w)
 	}
 	if cfg.Assets == nil || len(cfg.Assets.Paths) == 0 {
-		errUI.failLine("rotor asset: rotor.toml has no [assets] section (or assets.paths is empty)")
+		errUI.failLine("sloptor asset: rotor.toml has no [assets] section (or assets.paths is empty)")
 		return 1
 	}
 
 	scan, err := assets.Scan(dir, cfg.Assets.Paths)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor asset: %v", err))
 		return 1
 	}
 	lock, err := assets.LoadLockfile(dir)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor asset: %v", err))
 		return 1
 	}
 	plan := assets.BuildPlan(scan, lock)
@@ -175,22 +175,22 @@ func assetSync(dir string, dryRun bool) int {
 	case "group":
 		creator.GroupID = cfg.Assets.Creator.ID
 	default:
-		errUI.failLine(fmt.Sprintf("rotor asset: assets.creator.type must be \"user\" or \"group\" (got %q) in rotor.toml", cfg.Assets.Creator.Type))
+		errUI.failLine(fmt.Sprintf("sloptor asset: assets.creator.type must be \"user\" or \"group\" (got %q) in rotor.toml", cfg.Assets.Creator.Type))
 		return 1
 	}
 	if cfg.Assets.Creator.ID == 0 {
-		errUI.failLine("rotor asset: assets.creator.id is required in rotor.toml (the user or group that owns uploaded assets)")
+		errUI.failLine("sloptor asset: assets.creator.id is required in rotor.toml (the user or group that owns uploaded assets)")
 		return 1
 	}
 	client, err := cloud.FromEnv()
 	if errors.Is(err, cloud.ErrNoAPIKey) {
-		errUI.failLine("rotor asset: ROBLOX_API_KEY is not set")
+		errUI.failLine("sloptor asset: ROBLOX_API_KEY is not set")
 		fmt.Fprintln(os.Stderr, "    create an Open Cloud API key with the asset read/write scopes at")
 		fmt.Fprintln(os.Stderr, "    https://create.roblox.com/dashboard/credentials and export it as ROBLOX_API_KEY")
 		return 1
 	}
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor asset: %v", err))
 		return 1
 	}
 
@@ -205,7 +205,7 @@ func assetSync(dir string, dryRun bool) int {
 		},
 	})
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor asset: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor asset: %v", err))
 		return 1
 	}
 
@@ -246,7 +246,7 @@ func assetWriteOutputs(s *term.Styler, dir string, cfg *config.AssetsConfig, loc
 		lock,
 	)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor asset: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor asset: %v\n", err)
 		return 1
 	}
 	for _, p := range written {
@@ -262,11 +262,11 @@ func assetList(dir string) int {
 	s := u.s
 	lock, err := assets.LoadLockfile(dir)
 	if err != nil {
-		newUI(os.Stderr).failLine(fmt.Sprintf("rotor asset: %v", err))
+		newUI(os.Stderr).failLine(fmt.Sprintf("sloptor asset: %v", err))
 		return 1
 	}
 	if len(lock.Assets) == 0 {
-		fmt.Printf("  %s\n\n", s.Muted("no assets in "+assets.LockfileName+" (run `rotor asset sync` first)"))
+		fmt.Printf("  %s\n\n", s.Muted("no assets in "+assets.LockfileName+" (run `sloptor asset sync` first)"))
 		return 0
 	}
 	paths := make([]string, 0, len(lock.Assets))

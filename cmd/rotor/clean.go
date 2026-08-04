@@ -37,12 +37,12 @@ func cmdClean(args []string) int {
 			dryRun = true
 		default:
 			if strings.HasPrefix(a, "-") {
-				fmt.Fprintf(os.Stderr, "rotor clean: unknown flag %q\n\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor clean: unknown flag %q\n\n", a)
 				usage(os.Stderr)
 				return 1
 			}
 			if path != "" {
-				fmt.Fprintf(os.Stderr, "rotor clean: unexpected extra argument %q\n\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor clean: unexpected extra argument %q\n\n", a)
 				usage(os.Stderr)
 				return 1
 			}
@@ -57,7 +57,7 @@ func cmdClean(args []string) int {
 	// search). Without one there is nothing to clean deterministically.
 	tsConfigPath, err := findTsConfigPath(path)
 	if err != nil {
-		newUI(os.Stderr).failLine(fmt.Sprintf("rotor clean: %v", err))
+		newUI(os.Stderr).failLine(fmt.Sprintf("sloptor clean: %v", err))
 		return 1
 	}
 	dir := filepath.Dir(tsConfigPath)
@@ -90,7 +90,7 @@ func cmdClean(args []string) int {
 	for _, target := range targets {
 		n, present, err := cleanTarget(target, dryRun)
 		if err != nil {
-			out.failLine(fmt.Sprintf("rotor clean: cannot remove %s: %v", relDisplay(dir, target), err))
+			out.failLine(fmt.Sprintf("sloptor clean: cannot remove %s: %v", relDisplay(dir, target), err))
 			failed = true
 			continue
 		}

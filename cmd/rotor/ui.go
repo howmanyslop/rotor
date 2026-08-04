@@ -30,7 +30,7 @@ func newUI(w io.Writer) *ui {
 // banner prints the compact product header shown at the top of a command.
 func (u *ui) banner(sub string) {
 	g := u.s.Glyphs()
-	head := u.s.Accent(u.s.Bold("rotor")) + " " + u.s.Muted("v"+version)
+	head := u.s.Accent(u.s.Bold("sloptor")) + " " + u.s.Muted("v"+version)
 	if sub != "" {
 		head += "  " + u.s.Muted(g.Dot) + "  " + u.s.Info(sub)
 	}

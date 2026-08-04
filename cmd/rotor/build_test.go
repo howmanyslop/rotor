@@ -235,7 +235,7 @@ func TestUsageErrorsExitOne(t *testing.T) {
 				t.Errorf("cmdBuild(%v) exit = %d, want 1", tt.args, code)
 			}
 			firstLine := strings.SplitN(stderr, "\n", 2)[0]
-			wantFirstLine := "rotor build: " + tt.wantErr
+			wantFirstLine := "sloptor build: " + tt.wantErr
 			if firstLine != wantFirstLine {
 				t.Errorf("cmdBuild(%v) first stderr line = %q, want %q", tt.args, firstLine, wantFirstLine)
 			}

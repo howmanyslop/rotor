@@ -31,7 +31,7 @@ func cmdMinify(args []string) int {
 			return 0
 		case a == "-o" || a == "--output":
 			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "rotor minify: %s requires a path\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor minify: %s requires a path\n", a)
 				return 1
 			}
 			i++
@@ -43,12 +43,12 @@ func cmdMinify(args []string) int {
 		case a == "--no-index-field":
 			indexToField = false
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "rotor minify: unknown flag %q\n\n", a)
+			fmt.Fprintf(os.Stderr, "sloptor minify: unknown flag %q\n\n", a)
 			usage(os.Stderr)
 			return 1
 		default:
 			if input != "" {
-				fmt.Fprintf(os.Stderr, "rotor minify: unexpected extra argument %q\n\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor minify: unexpected extra argument %q\n\n", a)
 				usage(os.Stderr)
 				return 1
 			}
@@ -56,7 +56,7 @@ func cmdMinify(args []string) int {
 		}
 	}
 	if input == "" {
-		fmt.Fprintln(os.Stderr, "rotor minify: an input .luau/.lua file is required")
+		fmt.Fprintln(os.Stderr, "sloptor minify: an input .luau/.lua file is required")
 		usage(os.Stderr)
 		return 1
 	}
@@ -69,13 +69,13 @@ func cmdMinify(args []string) int {
 	start := time.Now()
 	src, err := os.ReadFile(input)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor minify: cannot read %q: %v", input, err))
+		errUI.failLine(fmt.Sprintf("sloptor minify: cannot read %q: %v", input, err))
 		return 1
 	}
 
 	minified, diags := cst.MinifyWith(string(src), cst.MinifyOptions{ConvertIndexToField: indexToField})
 	if len(diags) != 0 {
-		errUI.failLine(fmt.Sprintf("rotor minify: %s has %s", input, plural(len(diags), "syntax error")))
+		errUI.failLine(fmt.Sprintf("sloptor minify: %s has %s", input, plural(len(diags), "syntax error")))
 		spots := make([]diagframe.Spot, len(diags))
 		for i, d := range diags {
 			spots[i] = diagframe.Spot{Offset: d.Pos.Offset, Len: 1, Severity: diagframe.Error, Message: d.Message}
@@ -94,7 +94,7 @@ func cmdMinify(args []string) int {
 		return 0
 	}
 	if err := os.WriteFile(output, []byte(minified), 0o644); err != nil {
-		errUI.failLine(fmt.Sprintf("rotor minify: cannot write %q: %v", output, err))
+		errUI.failLine(fmt.Sprintf("sloptor minify: cannot write %q: %v", output, err))
 		return 1
 	}
 

@@ -271,27 +271,27 @@ func TestCmdCheckCheckers(t *testing.T) {
 		{
 			name:    "missing",
 			args:    []string{"--checkers"},
-			wantErr: `rotor check: invalid --checkers value "" (must be a positive integer)`,
+			wantErr: `sloptor check: invalid --checkers value "" (must be a positive integer)`,
 		},
 		{
 			name:    "zero",
 			args:    []string{"--checkers=0"},
-			wantErr: `rotor check: invalid --checkers value "0" (must be a positive integer)`,
+			wantErr: `sloptor check: invalid --checkers value "0" (must be a positive integer)`,
 		},
 		{
 			name:    "negative",
 			args:    []string{"--checkers", "-1"},
-			wantErr: `rotor check: invalid --checkers value "-1" (must be a positive integer)`,
+			wantErr: `sloptor check: invalid --checkers value "-1" (must be a positive integer)`,
 		},
 		{
 			name:    "non integer",
 			args:    []string{"--checkers=many"},
-			wantErr: `rotor check: invalid --checkers value "many" (must be a positive integer)`,
+			wantErr: `sloptor check: invalid --checkers value "many" (must be a positive integer)`,
 		},
 		{
 			name:    "builders unknown",
 			args:    []string{"--builders", "2"},
-			wantErr: `rotor check: unknown flag "--builders"`,
+			wantErr: `sloptor check: unknown flag "--builders"`,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

@@ -35,12 +35,12 @@ func migrateMain(args []string, stdout, stderr io.Writer) int {
 		case a == "--force" || a == "-f":
 			force = true
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(stderr, "rotor migrate: unknown flag %q\n\n", a)
+			fmt.Fprintf(stderr, "sloptor migrate: unknown flag %q\n\n", a)
 			migrateUsage(stderr)
 			return 1
 		default:
 			if dir != "" {
-				fmt.Fprintf(stderr, "rotor migrate: unexpected extra argument %q\n\n", a)
+				fmt.Fprintf(stderr, "sloptor migrate: unexpected extra argument %q\n\n", a)
 				migrateUsage(stderr)
 				return 1
 			}
@@ -65,15 +65,15 @@ func migrateMain(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if legacyPath == "" {
-		errUI.failLine(fmt.Sprintf("rotor migrate: no rotor.config.ts (or rotor.config.js) found in %s", dir))
+		errUI.failLine(fmt.Sprintf("sloptor migrate: no rotor.config.ts (or rotor.config.js) found in %s", dir))
 		fmt.Fprintln(stderr, "    migrate converts an existing TypeScript config to rotor.toml;")
-		fmt.Fprintln(stderr, "    there is nothing to migrate here. Use `rotor init` to start fresh.")
+		fmt.Fprintln(stderr, "    there is nothing to migrate here. Use `sloptor init` to start fresh.")
 		return 1
 	}
 
 	tomlPath := filepath.Join(dir, config.ConfigFileName)
 	if fileExists(tomlPath) && !force {
-		errUI.failLine(fmt.Sprintf("rotor migrate: %s already exists", config.ConfigFileName))
+		errUI.failLine(fmt.Sprintf("sloptor migrate: %s already exists", config.ConfigFileName))
 		fmt.Fprintln(stderr, "    refusing to overwrite it; re-run with --force to replace it.")
 		return 1
 	}
@@ -81,24 +81,24 @@ func migrateMain(args []string, stdout, stderr io.Writer) int {
 	cfg, err := config.LoadLegacyTS(dir)
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {
-			errUI.failLine(fmt.Sprintf("rotor migrate: no legacy config found in %s", dir))
+			errUI.failLine(fmt.Sprintf("sloptor migrate: no legacy config found in %s", dir))
 			return 1
 		}
-		errUI.failLine(fmt.Sprintf("rotor migrate: could not load %s: %v", filepath.Base(legacyPath), err))
+		errUI.failLine(fmt.Sprintf("sloptor migrate: could not load %s: %v", filepath.Base(legacyPath), err))
 		return 1
 	}
 	for _, w := range cfg.Warnings {
-		errUI.warn("rotor migrate: " + w)
+		errUI.warn("sloptor migrate: " + w)
 	}
 
 	body, err := config.MarshalTOML(cfg)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("rotor migrate: could not serialize config to TOML: %v", err))
+		errUI.failLine(fmt.Sprintf("sloptor migrate: could not serialize config to TOML: %v", err))
 		return 1
 	}
 	out := config.SchemaDirective + "\n\n" + body
 	if err := os.WriteFile(tomlPath, []byte(out), 0o644); err != nil {
-		errUI.failLine(fmt.Sprintf("rotor migrate: writing %s: %v", config.ConfigFileName, err))
+		errUI.failLine(fmt.Sprintf("sloptor migrate: writing %s: %v", config.ConfigFileName, err))
 		return 1
 	}
 	u.okLine("wrote "+config.ConfigFileName, "")
@@ -133,7 +133,7 @@ func backup(path string) error {
 }
 
 func migrateUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: rotor migrate [path] [--force]")
+	fmt.Fprintln(w, "Usage: sloptor migrate [path] [--force]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "  path       project directory containing rotor.config.ts (default \".\")")
 	fmt.Fprintln(w, "  -f, --force  overwrite an existing rotor.toml")

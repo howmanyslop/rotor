@@ -347,7 +347,7 @@ func resolveBool(negated, hasValue bool, value, name string) (bool, error) {
 func cmdBuild(args []string) (exitCode int) {
 	parsed, err := parseBuildArgs(args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor build: %v\n\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor build: %v\n\n", err)
 		usage(os.Stderr)
 		return 1
 	}
@@ -360,17 +360,17 @@ func cmdBuild(args []string) (exitCode int) {
 		return 0
 	}
 	if err := validateBuildDiagnosticPaths(parsed); err != nil {
-		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor build: %v\n", err)
 		return 1
 	}
 	profiles, err := startBuildProfiles(parsed)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor build: %v\n", err)
 		return 1
 	}
 	defer func() {
 		if err := profiles.stop(); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: finalize profiles: %v\n", err)
+			fmt.Fprintf(os.Stderr, "sloptor build: finalize profiles: %v\n", err)
 			exitCode = 1
 		}
 	}()
@@ -381,7 +381,7 @@ func cmdBuild(args []string) (exitCode int) {
 	}
 	tsConfigPath, err := findTsConfigPath(projectPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor build: %v\n", err)
 		return 1
 	}
 
@@ -389,7 +389,7 @@ func cmdBuild(args []string) (exitCode int) {
 	// argv. Absent CLI booleans (nil) never clobber `rbxts` values.
 	rbxtsOptions, err := readRbxtsOptionsChecked(tsConfigPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor build: %v\n", err)
 		return 1
 	}
 	opts := mergeProjectOptions(defaultProjectOptions, rbxtsOptions, &parsed.opts)
@@ -398,12 +398,12 @@ func cmdBuild(args []string) (exitCode int) {
 	opts.builders = parsed.builders
 	opts.checkers = parsed.checkers
 	if parsed.timings != "" && opts.watch {
-		fmt.Fprintln(os.Stderr, "rotor build: --timings cannot be used with --watch")
+		fmt.Fprintln(os.Stderr, "sloptor build: --timings cannot be used with --watch")
 		return 1
 	}
 	if parsed.timings != "" {
 		if err := prepareBuildTimingsPath(parsed.timings); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: cannot prepare timings output: %v\n", err)
+			fmt.Fprintf(os.Stderr, "sloptor build: cannot prepare timings output: %v\n", err)
 			return 1
 		}
 	}
@@ -426,7 +426,7 @@ func cmdBuild(args []string) (exitCode int) {
 	out.banner(filepath.Base(dir))
 
 	if opts.writeTransformedFiles {
-		out.warn("--writeTransformedFiles is not supported by rotor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
+		out.warn("--writeTransformedFiles is not supported by sloptor yet (rbxtsc transformer-plugin debug output; out of v1 scope) — ignoring")
 	}
 	if opts.watch {
 		if parsed.build {
@@ -463,7 +463,7 @@ func cmdBuild(args []string) (exitCode int) {
 	if timings != nil {
 		timings.SetOK(err == nil)
 		if writeErr := writeBuildTimings(parsed.timings, timings); writeErr != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: write timings: %v\n", writeErr)
+			fmt.Fprintf(os.Stderr, "sloptor build: write timings: %v\n", writeErr)
 			return 1
 		}
 	}
@@ -473,7 +473,7 @@ func cmdBuild(args []string) (exitCode int) {
 	}
 
 	if result.WroteRotorTypes {
-		out.noteLine(compile.RotorTypesFileName + "  (generated — editor types for rotor macros)")
+		out.noteLine(compile.RotorTypesFileName + "  (generated — editor types for sloptor macros)")
 	}
 	if result.WroteLockfile {
 		out.noteLine(assets.LockfileName + "  (updated — uploaded new $asset assets)")
@@ -691,7 +691,7 @@ func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions, solution bool, 
 	if timings != nil {
 		timings.SetOK(err == nil)
 		if writeErr := writeBuildTimings(timingPath, timings); writeErr != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: write timings: %v\n", writeErr)
+			fmt.Fprintf(os.Stderr, "sloptor build: write timings: %v\n", writeErr)
 			return 1
 		}
 	}

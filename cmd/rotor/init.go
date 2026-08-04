@@ -34,8 +34,8 @@ func cmdInit(args []string) int {
 			fmt.Println("Init flags:")
 			fmt.Println("  -t, --template game|package|plain   scaffold non-interactively from a template")
 			fmt.Println("  -y, --yes                           accept all defaults, no prompts")
-			fmt.Println("  --config                            add only rotor config to an existing project")
-			fmt.Println("  (run in a terminal with neither flag, rotor init starts an interactive wizard)")
+			fmt.Println("  --config                            add only sloptor config to an existing project")
+			fmt.Println("  (run in a terminal with neither flag, sloptor init starts an interactive wizard)")
 			return 0
 		case a == "-y" || a == "--yes":
 			yes = true
@@ -43,7 +43,7 @@ func cmdInit(args []string) int {
 			configOnly = true
 		case a == "-t" || a == "--template":
 			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "rotor init: %s requires a template name (game|package|plain)\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor init: %s requires a template name (game|package|plain)\n", a)
 				return 1
 			}
 			i++
@@ -53,12 +53,12 @@ func cmdInit(args []string) int {
 		case strings.HasPrefix(a, "-t="):
 			template = strings.TrimPrefix(a, "-t=")
 		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "rotor init: unknown flag %q\n\n", a)
+			fmt.Fprintf(os.Stderr, "sloptor init: unknown flag %q\n\n", a)
 			usage(os.Stderr)
 			return 1
 		default:
 			if dir != "" {
-				fmt.Fprintf(os.Stderr, "rotor init: unexpected extra argument %q\n\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor init: unexpected extra argument %q\n\n", a)
 				usage(os.Stderr)
 				return 1
 			}
@@ -73,13 +73,13 @@ func cmdInit(args []string) int {
 		template = "game"
 	}
 	if template != "game" && template != "package" && template != "plain" {
-		fmt.Fprintf(os.Stderr, "rotor init: unknown template %q (want game, package, or plain)\n", template)
+		fmt.Fprintf(os.Stderr, "sloptor init: unknown template %q (want game, package, or plain)\n", template)
 		return 1
 	}
 
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor init: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor init: %v\n", err)
 		return 1
 	}
 	name := filepath.Base(abs)
@@ -100,7 +100,7 @@ func cmdInit(args []string) int {
 			u.banner("init  " + name)
 			fmt.Fprintln(u.w)
 			u.okLine("already configured", config.ConfigFileName+" exists")
-			fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("rotor doctor"))
+			fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("sloptor doctor"))
 			return 0
 		}
 		return writeAdoptFiles(os.Stdout, dir, detectTemplate(dir))
@@ -187,11 +187,11 @@ func writeAdoptFiles(out io.Writer, dir, template string) int {
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
+			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: %v", err))
 			return 1
 		}
 		if err := os.WriteFile(path, []byte(f.content), 0o644); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: cannot write %q: %v", path, err))
+			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: cannot write %q: %v", path, err))
 			return 1
 		}
 		fmt.Fprintf(out, "  %s %s\n", u.s.Green("+"), f.path)
@@ -214,13 +214,13 @@ func mustAbs(dir string) string {
 func printAdoptNextSteps(u *ui, wrote int) {
 	fmt.Fprintln(u.w)
 	if wrote == 0 {
-		u.okLine("already had rotor config", "nothing to add")
+		u.okLine("already had sloptor config", "nothing to add")
 	} else {
-		u.okLine("added rotor config to an existing project", plural(wrote, "file"))
+		u.okLine("added sloptor config to an existing project", plural(wrote, "file"))
 	}
 	fmt.Fprintln(u.w)
 	fmt.Fprintf(u.w, "  %s\n", u.s.Bold("next steps"))
-	fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("rotor doctor"))
+	fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("sloptor doctor"))
 }
 
 // initOptions is everything the scaffold needs to render a project. The
@@ -324,8 +324,8 @@ return hello
 			{"aftman.toml", `# Tool versions for this project, managed by Aftman:
 #   https://github.com/LPGhatguy/aftman
 #
-# rotor bundle / minify / pack / sourcemap work without any of these; install
-# rojo if you want live sync into Studio or rotor's rbxm/rbxmx pack formats.
+# sloptor bundle / minify / pack / sourcemap work without any of these; install
+# rojo if you want live sync into Studio or sloptor's rbxm/rbxmx pack formats.
 
 [tools]
 # rojo = "rojo-rbx/rojo@7.6.1"
@@ -444,11 +444,11 @@ func writeInitFiles(out io.Writer, opts initOptions, files []initFile) int {
 	for _, f := range files {
 		path := filepath.Join(opts.dir, filepath.FromSlash(f.path))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
+			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: %v", err))
 			return 1
 		}
 		if err := os.WriteFile(path, []byte(f.content), 0o644); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: cannot write %q: %v", path, err))
+			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: cannot write %q: %v", path, err))
 			return 1
 		}
 		fmt.Fprintf(out, "  %s %s\n", u.s.Green("+"), f.path)
@@ -469,8 +469,8 @@ const tsHelloModule = `export function makeHello(name: string) {
 func rotorTOML(assets *assetsOptions, deploy *deployOptions) string {
 	var b strings.Builder
 	b.WriteString(config.SchemaDirective + "\n\n")
-	b.WriteString("# rotor project configuration — read by `rotor asset sync` and\n")
-	b.WriteString("# `rotor deploy`. Uncomment the sections you need.\n")
+	b.WriteString("# sloptor project configuration — read by `sloptor asset sync` and\n")
+	b.WriteString("# `sloptor deploy`. Uncomment the sections you need.\n")
 
 	if assets != nil {
 		b.WriteString("\n[assets]\n")
@@ -598,8 +598,8 @@ func packageJSON(opts initOptions) string {
 		Version: "0.1.0",
 		Private: opts.template == "game",
 		Scripts: map[string]string{
-			"build": "rotor build",
-			"watch": "rotor dev",
+			"build": "sloptor build",
+			"watch": "sloptor dev",
 		},
 		DevDependencies: map[string]string{
 			// compiler-types only publishes prerelease-tagged versions
@@ -747,8 +747,8 @@ func printInitNextSteps(u *ui, opts initOptions, n int) {
 		step("cd "+opts.dir, "")
 	}
 	if opts.template == "plain" {
-		step("rotor pack --as luau -o bundle.luau", "package the project into one script")
-		step("rotor sourcemap -o sourcemap.json", "generate a sourcemap for luau-lsp")
+		step("sloptor pack --as luau -o bundle.luau", "package the project into one script")
+		step("sloptor sourcemap -o sourcemap.json", "generate a sourcemap for luau-lsp")
 		return
 	}
 	pm := detectPackageManager(opts.dir)
@@ -757,8 +757,8 @@ func printInitNextSteps(u *ui, opts initOptions, n int) {
 	} else {
 		step("npm install", "(or bun install / pnpm install)")
 	}
-	step("rotor build", "compile to Luau")
-	step("rotor dev", "watch + serve to Studio")
+	step("sloptor build", "compile to Luau")
+	step("sloptor dev", "watch + serve to Studio")
 	if opts.linter != "" {
 		step(pm+" run lint", "lint the source")
 	}

@@ -38,7 +38,7 @@ func cmdAdd(args []string) int {
 			dev = true
 		default:
 			if strings.HasPrefix(a, "-") {
-				fmt.Fprintf(os.Stderr, "rotor add: unknown flag %q\n\n", a)
+				fmt.Fprintf(os.Stderr, "sloptor add: unknown flag %q\n\n", a)
 				usage(os.Stderr)
 				return 1
 			}
@@ -46,7 +46,7 @@ func cmdAdd(args []string) int {
 		}
 	}
 	if len(pkgs) == 0 {
-		fmt.Fprintln(os.Stderr, "rotor add: need at least one package (e.g. `rotor add @rbxts/services`)")
+		fmt.Fprintln(os.Stderr, "sloptor add: need at least one package (e.g. `sloptor add @rbxts/services`)")
 		usage(os.Stderr)
 		return 1
 	}
@@ -54,7 +54,7 @@ func cmdAdd(args []string) int {
 	pkgJSONPath := filepath.Join(dir, "package.json")
 	data, err := os.ReadFile(pkgJSONPath)
 	if err != nil {
-		newUI(os.Stderr).failLine(fmt.Sprintf("rotor add: no package.json in %s (run `rotor init` first)", absOrSelf(dir)))
+		newUI(os.Stderr).failLine(fmt.Sprintf("sloptor add: no package.json in %s (run `sloptor init` first)", absOrSelf(dir)))
 		return 1
 	}
 
@@ -65,7 +65,7 @@ func cmdAdd(args []string) int {
 
 	updated, added, skipped, err := addDependencies(data, depKey, pkgs)
 	if err != nil {
-		newUI(os.Stderr).failLine(fmt.Sprintf("rotor add: %v", err))
+		newUI(os.Stderr).failLine(fmt.Sprintf("sloptor add: %v", err))
 		return 1
 	}
 
@@ -79,7 +79,7 @@ func cmdAdd(args []string) int {
 	}
 
 	if err := os.WriteFile(pkgJSONPath, updated, 0o644); err != nil {
-		out.failLine(fmt.Sprintf("rotor add: cannot write package.json: %v", err))
+		out.failLine(fmt.Sprintf("sloptor add: cannot write package.json: %v", err))
 		return 1
 	}
 

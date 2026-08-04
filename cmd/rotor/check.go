@@ -82,7 +82,7 @@ func parseCheckArgs(args []string) (*checkArgs, error) {
 func cmdCheck(args []string) int {
 	parsed, err := parseCheckArgs(args)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor check: %v\n\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor check: %v\n\n", err)
 		usage(os.Stderr)
 		return 1 // usage errors exit 1 (rbxtsc parity; see main.go)
 	}
@@ -93,15 +93,15 @@ func cmdCheck(args []string) int {
 
 	dir, err := filepath.Abs(parsed.project)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor check: cannot resolve path %q: %v\n", parsed.project, err)
+		fmt.Fprintf(os.Stderr, "sloptor check: cannot resolve path %q: %v\n", parsed.project, err)
 		return 1
 	}
 	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "rotor check: %s is not a directory\n", dir)
+		fmt.Fprintf(os.Stderr, "sloptor check: %s is not a directory\n", dir)
 		return 1
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "tsconfig.json")); statErr != nil {
-		fmt.Fprintf(os.Stderr, "rotor check: no tsconfig.json found in %s\n", dir)
+		fmt.Fprintf(os.Stderr, "sloptor check: no tsconfig.json found in %s\n", dir)
 		return 1
 	}
 
@@ -111,7 +111,7 @@ func cmdCheck(args []string) int {
 	if _, statErr := os.Stat(filepath.Join(dir, "package.json")); statErr == nil {
 		if _, statErr := os.Stat(filepath.Join(dir, "node_modules")); statErr != nil {
 			fmt.Fprintf(os.Stderr,
-				"rotor check: warning: %s has a package.json but no node_modules — type packages (e.g. @rbxts/*) cannot be resolved; install dependencies first\n",
+				"sloptor check: warning: %s has a package.json but no node_modules — type packages (e.g. @rbxts/*) cannot be resolved; install dependencies first\n",
 				dir)
 		}
 	}
@@ -335,7 +335,7 @@ func refreshRotorTypesForCheck(dir string, fileNames []string, program *compiler
 			continue
 		}
 		if _, err := compile.WriteRotorTypes(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.RotorTypesFileName, err)
+			fmt.Fprintf(os.Stderr, "sloptor check: warning: cannot write %s: %v\n", compile.RotorTypesFileName, err)
 		}
 		return
 	}

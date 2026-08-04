@@ -28,7 +28,7 @@ func cmdDev(args []string) int {
 
 	parsed, err := parseBuildArgs(rest)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor dev: %v\n\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor dev: %v\n\n", err)
 		usage(os.Stderr)
 		return 1
 	}
@@ -39,7 +39,7 @@ func cmdDev(args []string) int {
 
 	tsConfigPath, err := findTsConfigPath(parsed.project)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "rotor dev: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor dev: %v\n", err)
 		return 1
 	}
 	opts := mergeProjectOptions(defaultProjectOptions, readRbxtsOptions(tsConfigPath), &parsed.opts)
