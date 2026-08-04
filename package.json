@@ -1,6 +1,6 @@
 {
   "name": "@rotor-rbx/rotor",
-  "version": "2.2.1-fork.6",
+  "version": "2.2.1-fork.7",
   "publishConfig": {
     "access": "public",
     "provenance": true
