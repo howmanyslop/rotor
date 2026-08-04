@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"runtime"
@@ -78,9 +79,9 @@ func (profiles *buildProfiles) create(path string) (*os.File, error) {
 	return file, err
 }
 
-func (profiles *buildProfiles) stop() {
+func (profiles *buildProfiles) stop() error {
 	if profiles == nil {
-		return
+		return nil
 	}
 	if profiles.tracing {
 		trace.Stop()
@@ -90,11 +91,14 @@ func (profiles *buildProfiles) stop() {
 		pprof.StopCPUProfile()
 		profiles.cpu = false
 	}
-	profiles.writeProfile("block", profiles.blockFile)
-	profiles.writeProfile("mutex", profiles.mutexFile)
-	profiles.writeProfile("heap", profiles.heapFile)
+	var errs []error
+	errs = append(errs, profiles.writeProfile("block", profiles.blockFile))
+	errs = append(errs, profiles.writeProfile("mutex", profiles.mutexFile))
+	errs = append(errs, profiles.writeProfile("heap", profiles.heapFile))
 	for _, file := range profiles.files {
-		_ = file.Close()
+		if err := file.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("close profile %q: %w", file.Name(), err))
+		}
 	}
 	profiles.files = nil
 	if profiles.blockFile != nil {
@@ -103,15 +107,17 @@ func (profiles *buildProfiles) stop() {
 	if profiles.mutexFile != nil {
 		runtime.SetMutexProfileFraction(0)
 	}
+	return errors.Join(errs...)
 }
 
-func (profiles *buildProfiles) writeProfile(name string, file *os.File) {
+func (profiles *buildProfiles) writeProfile(name string, file *os.File) error {
 	if file == nil {
-		return
+		return nil
 	}
 	if profile := pprof.Lookup(name); profile != nil {
 		if err := profile.WriteTo(file, 0); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: write %s profile: %v\n", name, err)
+			return fmt.Errorf("write %s profile: %w", name, err)
 		}
 	}
+	return nil
 }

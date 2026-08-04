@@ -343,7 +343,7 @@ func resolveBool(negated, hasValue bool, value, name string) (bool, error) {
 // Exit-code policy: usage errors exit 1, matching upstream
 // (`.fail(...)` sets exitCode 1, CLI/cli.ts L30-35 — rotor's earlier exit 2
 // convention was a documented divergence, removed in Phase 4).
-func cmdBuild(args []string) int {
+func cmdBuild(args []string) (exitCode int) {
 	parsed, err := parseBuildArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rotor build: %v\n\n", err)
@@ -363,7 +363,12 @@ func cmdBuild(args []string) int {
 		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
 		return 1
 	}
-	defer profiles.stop()
+	defer func() {
+		if err := profiles.stop(); err != nil {
+			fmt.Fprintf(os.Stderr, "rotor build: finalize profiles: %v\n", err)
+			exitCode = 1
+		}
+	}()
 
 	projectPath := parsed.project
 	if parsed.buildPath != "" {

@@ -177,6 +177,8 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  RBXTSC_WRITE_CONCURRENCY   override output-write workers (maximum 256)")
 	fmt.Fprintln(w, "  ROTOR_WRITE_WORKERS        Rotor-specific output-write worker override")
 	fmt.Fprintln(w, "  UV_THREADPOOL_SIZE         configure the Node sidecar libuv pool (not Go output writers)")
+	fmt.Fprintln(w, "  GOGC                       Go GC target percentage (default 400 when unset)")
+	fmt.Fprintln(w, "  GOMEMLIMIT                 Go memory limit (default 75% of effective memory when unset)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Color: auto-detected for terminals; NO_COLOR disables, FORCE_COLOR forces.")
 	fmt.Fprintln(w)
