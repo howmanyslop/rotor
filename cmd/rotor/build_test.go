@@ -387,6 +387,25 @@ func TestBuildFiniteDiagnosticsRejectAliasedPaths(t *testing.T) {
 	}
 }
 
+func TestBuildFiniteDiagnosticsRejectDanglingSymlinkAlias(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.prof")
+	alias := filepath.Join(dir, "alias.prof")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parseBuildArgs([]string{"--cpuprofile", target, "--trace-out", alias})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBuildDiagnosticPaths(parsed); err == nil {
+		t.Fatal("dangling symlink diagnostic alias accepted")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target stat error = %v, want not-exist", err)
+	}
+}
+
 func TestBuildWritesCombinedProfiles(t *testing.T) {
 	dir := writeBuildableProject(t, "")
 	profileDir := t.TempDir()

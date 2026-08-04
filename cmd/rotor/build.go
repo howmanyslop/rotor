@@ -508,22 +508,9 @@ func validateBuildDiagnosticPaths(args *buildArgs) error {
 		if output.path == "" {
 			continue
 		}
-		path, err := filepath.Abs(output.path)
+		path, info, err := resolveDiagnosticOutputPath(output.path)
 		if err != nil {
 			return fmt.Errorf("resolve %s output path: %w", output.name, err)
-		}
-		path = filepath.Clean(path)
-		info, statErr := os.Stat(path)
-		if statErr == nil {
-			if resolved, err := filepath.EvalSymlinks(path); err == nil {
-				path = resolved
-			}
-		} else if os.IsNotExist(statErr) {
-			if resolved, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
-				path = filepath.Join(resolved, filepath.Base(path))
-			}
-		} else {
-			return fmt.Errorf("stat %s output path: %w", output.name, statErr)
 		}
 		if !osvfs.FS().UseCaseSensitiveFileNames() {
 			path = strings.ToLower(path)
@@ -536,6 +523,44 @@ func validateBuildDiagnosticPaths(args *buildArgs) error {
 		seen = append(seen, resolvedOutput{name: output.name, path: path, info: info})
 	}
 	return nil
+}
+
+func resolveDiagnosticOutputPath(path string) (string, os.FileInfo, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", nil, err
+	}
+	path = filepath.Clean(path)
+	for range 255 {
+		info, err := os.Stat(path)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(path)
+			return resolved, info, err
+		}
+		if !os.IsNotExist(err) {
+			return "", nil, err
+		}
+		linkInfo, linkErr := os.Lstat(path)
+		if linkErr == nil && linkInfo.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return "", nil, err
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			path = filepath.Clean(target)
+			continue
+		}
+		if linkErr != nil && !os.IsNotExist(linkErr) {
+			return "", nil, linkErr
+		}
+		if parent, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+			path = filepath.Join(parent, filepath.Base(path))
+		}
+		return path, nil, nil
+	}
+	return "", nil, errors.New("too many symbolic links in diagnostic output path")
 }
 
 func newBuildOptionsReload(tsConfigPath string, parsed *buildArgs) func() (projectOptions, error) {
