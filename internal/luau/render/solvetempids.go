@@ -206,6 +206,21 @@ func solveTempIDs(state *RenderState, ast luau.NodeOrList) {
 			continue
 		}
 		scope := nodesToScopes[tempID]
+		if tempID.ExactName {
+			input := tempID.Name
+			i, ok := scope.lastTry[input]
+			if !ok {
+				i = 1
+			}
+			for scope.has(input) {
+				input = tempID.Name + "_" + strconv.Itoa(i)
+				i++
+			}
+			scope.setLastTry(input, i)
+			scope.addID(input)
+			state.seenTempNodes[tempID.ID] = input
+			continue
+		}
 		separator := "_"
 		if tempID.Name == "" {
 			separator = ""

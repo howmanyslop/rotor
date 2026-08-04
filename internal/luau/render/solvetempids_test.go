@@ -42,6 +42,29 @@ func TestTempIdsNamed(t *testing.T) {
 	}
 }
 
+func TestTempIdsExactNamed(t *testing.T) {
+	tmp := luau.ExactTempID("foo")
+	statements := luau.NewList[luau.Statement](
+		luau.NewVariableDeclaration(tmp, luau.Num(1)),
+	)
+	state := solveFor(statements)
+	if got := state.seenTempNodes[tmp.ID]; got != "foo" {
+		t.Errorf("exact temp = %q, want foo", got)
+	}
+}
+
+func TestTempIdsExactNamedAvoidCollision(t *testing.T) {
+	tmp := luau.ExactTempID("foo")
+	statements := luau.NewList[luau.Statement](
+		luau.NewVariableDeclaration(luau.ID("foo"), luau.Num(1)),
+		luau.NewVariableDeclaration(tmp, luau.Num(2)),
+	)
+	state := solveFor(statements)
+	if got := state.seenTempNodes[tmp.ID]; got != "foo_1" {
+		t.Errorf("exact temp = %q, want foo_1", got)
+	}
+}
+
 func TestTempIdsAvoidDeclaredLocals(t *testing.T) {
 	tmp := luau.TempID("foo")
 	stmts := luau.NewList[luau.Statement](

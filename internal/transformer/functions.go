@@ -130,7 +130,7 @@ func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
 		if name := node.AsFunctionExpression().Name(); name != nil {
 			if isSynchronousNonGeneratorFunctionExpression(node) && isDirectCallArgument(node) {
 				ValidateIdentifier(s, name)
-				identifier := luau.TempID(name.Text())
+				identifier := luau.ExactTempID(name.Text())
 				body := transformNamedFunctionExpressionBody(s, node, identifier)
 				s.Prereq(luau.NewFunctionDeclaration(
 					true,

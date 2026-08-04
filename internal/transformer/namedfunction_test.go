@@ -32,9 +32,9 @@ print(f(1))
 }
 
 func TestNamedFunctionExpression_direct_call_argument_emits_local_declaration(t *testing.T) {
-	want := `local function _doSomeBullshit()
+	want := `local function doSomeBullshit()
 end
-useEffect(_doSomeBullshit, {})
+useEffect(doSomeBullshit, {})
 `
 	if got := renderFunctionsFile(t, "src/namedcallarg.ts"); got != want {
 		t.Errorf("rendered output:\ngot:\n%s\nwant:\n%s", got, want)
@@ -60,10 +60,10 @@ local function after()
 	return 2
 end
 local _exp = before()
-local function _recurse(value)
-	return if value == 0 then 0 else _recurse(value - 1)
+local function recurse(value)
+	return if value == 0 then 0 else recurse(value - 1)
 end
-consume(_exp, _recurse, after())
+consume(_exp, recurse, after())
 `
 	if got := renderFunctionsFile(t, "src/namedcallordering.ts"); got != want {
 		t.Errorf("rendered output:\ngot:\n%s\nwant:\n%s", got, want)
@@ -105,10 +105,10 @@ until true
 }
 
 func TestNamedFunctionExpression_direct_call_argument_does_not_shadow_callee(t *testing.T) {
-	want := `local function _useEffect()
-	return _useEffect()
+	want := `local function useEffect_1()
+	return useEffect_1()
 end
-useEffect(_useEffect, {})
+useEffect(useEffect_1, {})
 `
 	if got := renderFunctionsFile(t, "src/namedcallcalleecollision.ts"); got != want {
 		t.Errorf("rendered output:\ngot:\n%s\nwant:\n%s", got, want)
@@ -117,10 +117,10 @@ useEffect(_useEffect, {})
 
 func TestNamedFunctionExpression_direct_call_argument_does_not_shadow_outer_const(t *testing.T) {
 	want := `local collide = 5
-local function _collide(value)
-	return if value == 0 then 0 else _collide(value - 1)
+local function collide_1(value)
+	return if value == 0 then 0 else collide_1(value - 1)
 end
-consume(collide, _collide, collide)
+consume(collide, collide_1, collide)
 print(collide)
 `
 	if got := renderFunctionsFile(t, "src/namedcalloutercollision.ts"); got != want {
@@ -128,36 +128,36 @@ print(collide)
 	}
 }
 
-func TestNamedFunctionExpression_direct_call_argument_avoids_generated_name_collision(t *testing.T) {
+func TestNamedFunctionExpression_direct_call_argument_ignores_noncolliding_generated_prefix(t *testing.T) {
 	want := `local function _collide(callback)
 	return callback()
 end
-local function _collide_1()
-	return _collide_1()
+local function collide()
+	return collide()
 end
-_collide(_collide_1)
+_collide(collide)
 `
 	if got := renderFunctionsFile(t, "src/namedcallgeneratedcollision.ts"); got != want {
 		t.Errorf("rendered output:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
-func TestNamedFunctionExpression_direct_call_argument_avoids_ambient_callee_collision(t *testing.T) {
-	want := `local function _collide_1()
-	return _collide_1()
+func TestNamedFunctionExpression_direct_call_argument_ignores_noncolliding_ambient_prefix(t *testing.T) {
+	want := `local function collide()
+	return collide()
 end
-_collide(_collide_1)
+_collide(collide)
 `
 	if got := renderFunctionsFile(t, "src/namedcallambientcollision.ts"); got != want {
 		t.Errorf("rendered output:\ngot:\n%s\nwant:\n%s", got, want)
 	}
 }
 
-func TestNamedFunctionExpression_direct_call_argument_avoids_nested_ambient_capture(t *testing.T) {
-	want := `local function _collide_1()
-	return _collide_1()
+func TestNamedFunctionExpression_direct_call_argument_ignores_noncolliding_nested_prefix(t *testing.T) {
+	want := `local function collide()
+	return collide()
 end
-consume(_collide_1)
+consume(collide)
 local function later()
 	return _collide()
 end
