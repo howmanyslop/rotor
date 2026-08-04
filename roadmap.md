@@ -169,7 +169,7 @@ in `outDir`, the fork-compatible `rbxts.rojocache.json` name protected from clea
 `.rotor/cache/rojo/` for Rotor's hashed resolver state, adjacent `.luau.map` files when
 source maps are enabled, and `*.rbxtsc.tsbuildinfo` for Rotor incremental state.
 `RBXTSC_WRITE_CONCURRENCY`, `ROTOR_WRITE_WORKERS`,
-`UV_THREADPOOL_SIZE`, and `ROTOR_PRESERVE_DTS_MAPS=1` are documented tuning and cleanup
+and `UV_THREADPOOL_SIZE` are documented tuning and cleanup
 controls, not tsconfig options.
 
 ## Phase 5 — Conformance ✅

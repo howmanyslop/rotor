@@ -153,6 +153,28 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
 		if opts.forceFullBuild {
 			selectedFiles = sourceFiles
+		} else if len(previousOutputs) > 0 {
+			selectedPaths := make(map[string]struct{}, len(selectedFiles))
+			for _, sourceFile := range selectedFiles {
+				selectedPaths[normalizeSourceFilePath(sourceFile.FileName())] = struct{}{}
+			}
+			for outputPath := range previousOutputs {
+				absolutePath := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(outputPath))
+				info, err := os.Lstat(absolutePath)
+				if err == nil && info.Mode().IsRegular() {
+					continue
+				}
+				inputPath := strings.TrimSuffix(absolutePath, ".map")
+				for _, candidate := range pathTranslator.GetInputPaths(inputPath) {
+					selectedPaths[normalizeSourceFilePath(candidate)] = struct{}{}
+				}
+			}
+			selectedFiles = selectedFiles[:0]
+			for _, sourceFile := range sourceFiles {
+				if _, ok := selectedPaths[normalizeSourceFilePath(sourceFile.FileName())]; ok {
+					selectedFiles = append(selectedFiles, sourceFile)
+				}
+			}
 		}
 	}
 
@@ -667,13 +689,7 @@ func isOutputFileOrphanedWithSourceMaps(pathTranslator *rojo.PathTranslator, out
 			return false
 		}
 	}
-	// `.d.ts.map` (and any `.map`) outputs have no direct reverse mapping, so
-	// they always look orphaned and get deleted on every build — and stay
-	// deleted after a no-op incremental build that writes nothing. When
-	// ROTOR_PRESERVE_DTS_MAPS=1, check the map's base path instead, keeping
-	// the map while its source exists (a map whose source was deleted is
-	// still cleaned up).
-	if os.Getenv("ROTOR_PRESERVE_DTS_MAPS") == "1" && strings.HasSuffix(outPath, ".map") {
+	if strings.HasSuffix(outPath, ".map") {
 		for _, inputPath := range pathTranslator.GetInputPaths(strings.TrimSuffix(outPath, ".map")) {
 			if _, err := os.Stat(inputPath); err == nil {
 				return false

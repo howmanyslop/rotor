@@ -177,7 +177,6 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  RBXTSC_WRITE_CONCURRENCY   override output-write workers (maximum 256)")
 	fmt.Fprintln(w, "  ROTOR_WRITE_WORKERS        Rotor-specific output-write worker override")
 	fmt.Fprintln(w, "  UV_THREADPOOL_SIZE         configure the Node sidecar libuv pool (not Go output writers)")
-	fmt.Fprintln(w, "  ROTOR_PRESERVE_DTS_MAPS=1  keep declaration maps while their .d.ts file still exists")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Color: auto-detected for terminals; NO_COLOR disables, FORCE_COLOR forces.")
 	fmt.Fprintln(w)

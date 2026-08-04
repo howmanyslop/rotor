@@ -496,20 +496,12 @@ func TestIsOutputFileOrphanedDTSMap(t *testing.T) {
 
 	pt := rojo.NewPathTranslator(srcDir, outDir, "", true, true)
 
-	t.Run("env unset keeps legacy deletion", func(t *testing.T) {
-		t.Setenv("ROTOR_PRESERVE_DTS_MAPS", "")
-		if !isOutputFileOrphaned(pt, mapPath) {
-			t.Fatal("expected .d.ts.map to be orphaned with env unset")
-		}
-	})
-	t.Run("env set preserves map while source exists", func(t *testing.T) {
-		t.Setenv("ROTOR_PRESERVE_DTS_MAPS", "1")
+	t.Run("preserves map while source exists", func(t *testing.T) {
 		if isOutputFileOrphaned(pt, mapPath) {
 			t.Fatal("expected .d.ts.map to be preserved when its source exists")
 		}
 	})
-	t.Run("env set still removes map when source is gone", func(t *testing.T) {
-		t.Setenv("ROTOR_PRESERVE_DTS_MAPS", "1")
+	t.Run("removes map when source is gone", func(t *testing.T) {
 		if err := os.Remove(sourcePath); err != nil {
 			t.Fatal(err)
 		}

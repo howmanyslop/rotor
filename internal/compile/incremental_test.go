@@ -81,6 +81,81 @@ func TestBuildProjectIncrementalRebuildsChangedFilesAndImporters(t *testing.T) {
 	_ = first
 }
 
+func TestBuildProjectIncrementalRecreatesMissingOutputs(t *testing.T) {
+	for _, relativePath := range []string{
+		"out/main.luau",
+		"out/main.luau.map",
+		"out/main.d.ts",
+		"out/main.d.ts.map",
+	} {
+		t.Run(relativePath, func(t *testing.T) {
+			allOutputs := []string{
+				"out/main.luau",
+				"out/main.luau.map",
+				"out/main.d.ts",
+				"out/main.d.ts.map",
+			}
+			dir := writeProject(t, "@scope/incremental-missing-output-fixture", "")
+			enableIncrementalBuilds(t, dir)
+
+			tsconfigPath := filepath.Join(dir, "tsconfig.json")
+			tsconfigBytes, err := os.ReadFile(tsconfigPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tsconfig := strings.Replace(
+				string(tsconfigBytes),
+				`"outDir": "out",`,
+				`"outDir": "out", "sourceMap": true, "declaration": true, "declarationMap": true,`,
+				1,
+			)
+			if err := os.WriteFile(tsconfigPath, []byte(tsconfig), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+				t.Fatalf("first build: %v (diags: %v)", err, diags)
+			}
+			old := time.Unix(100, 0)
+			for _, output := range allOutputs {
+				if err := os.Chtimes(filepath.Join(dir, filepath.FromSlash(output)), old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			path := filepath.Join(dir, filepath.FromSlash(relativePath))
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+
+			timings := NewBuildTimings()
+			if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings}); err != nil {
+				t.Fatalf("rebuild: %v (diags: %v)", err, diags)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("missing output was not recreated: %v", err)
+			}
+			if string(got) != string(want) {
+				t.Fatal("recreated output differs from the first build")
+			}
+			if timings.Counts.ActualWrites != 1 {
+				var changed []string
+				for _, output := range allOutputs {
+					info, statErr := os.Stat(filepath.Join(dir, filepath.FromSlash(output)))
+					if statErr != nil || !info.ModTime().Equal(old) {
+						changed = append(changed, output)
+					}
+				}
+				t.Fatalf("actual writes = %d, want 1; changed outputs = %v", timings.Counts.ActualWrites, changed)
+			}
+		})
+	}
+}
+
 func enableIncrementalBuilds(t *testing.T, dir string) {
 	t.Helper()
 	tsconfigPath := filepath.Join(dir, "tsconfig.json")
