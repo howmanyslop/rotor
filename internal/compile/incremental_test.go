@@ -185,6 +185,50 @@ func TestBuildProjectIncrementalInvalidatesEmitOptionChanges(t *testing.T) {
 	}
 }
 
+func TestBuildProjectIncrementalInvalidatesPathChanges(t *testing.T) {
+	dir := writeProject(t, "@scope/incremental-paths-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	for relativePath, contents := range map[string]string{
+		"src/main.ts": "import { value } from \"alias\";\nexport const result = value;\n",
+		"src/one.ts":  "export const value = 1;\n",
+		"src/two.ts":  "export const value = 2;\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(relativePath)), []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tsconfigPath := filepath.Join(dir, "tsconfig.json")
+	tsconfigBytes, err := os.ReadFile(tsconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsconfig := strings.Replace(
+		string(tsconfigBytes),
+		`"outDir": "out",`,
+		`"outDir": "out", "baseUrl": ".", "paths": {"alias": ["src/one"]},`,
+		1,
+	)
+	if err := os.WriteFile(tsconfigPath, []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v (diags: %v)", err, diags)
+	}
+
+	tsconfig = strings.Replace(tsconfig, `"src/one"`, `"src/two"`, 1)
+	if err := os.WriteFile(tsconfigPath, []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	timings := NewBuildTimings()
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings}); err != nil {
+		t.Fatalf("second build: %v (diags: %v)", err, diags)
+	}
+	if timings.Counts.SelectedSources == 0 {
+		t.Fatal("paths option change selected no sources")
+	}
+}
+
 func enableIncrementalBuilds(t *testing.T, dir string) {
 	t.Helper()
 	tsconfigPath := filepath.Join(dir, "tsconfig.json")

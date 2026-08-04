@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	stdjson "encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -13,6 +13,7 @@ import (
 	"rotor/tsgo/ast"
 	"rotor/tsgo/compiler"
 	"rotor/tsgo/core"
+	tsjson "rotor/tsgo/json"
 )
 
 type incrementalManifest struct {
@@ -36,7 +37,7 @@ func readIncrementalManifest(path string) (*incrementalManifest, error) {
 		return nil, err
 	}
 	var manifest incrementalManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
+	if err := stdjson.Unmarshal(data, &manifest); err != nil {
 		return nil, nil
 	}
 	if manifest.Version != 2 {
@@ -52,7 +53,7 @@ func readIncrementalManifest(path string) (*incrementalManifest, error) {
 }
 
 func writeIncrementalManifest(path string, manifest *incrementalManifest) error {
-	data, err := json.MarshalIndent(manifest, "", "\t")
+	data, err := stdjson.MarshalIndent(manifest, "", "\t")
 	if err != nil {
 		return err
 	}
@@ -107,9 +108,9 @@ func buildIncrementalManifest(program *compiler.Program, sourceFiles []*ast.Sour
 	return manifest, nil
 }
 
-func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTranslatorBuildInfoPath string) string {
+func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTranslatorBuildInfoPath string) (string, error) {
 	options := program.Options()
-	payload, _ := json.Marshal(struct {
+	payload, err := tsjson.Marshal(struct {
 		Version              string                `json:"version"`
 		CompilerOptions      *core.CompilerOptions `json:"compilerOptions"`
 		ConfigFilePath       string                `json:"configFilePath"`
@@ -140,13 +141,16 @@ func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTransla
 		NoOptimizedLoops:     opts.NoOptimizedLoops,
 		MinifyOutput:         opts.MinifyOutput,
 	})
+	if err != nil {
+		return "", err
+	}
 	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
 }
 
-func pruneMissingOutputs(projectDir string, outputs map[string]string) {
+func pruneMissingOutputs(writer *outputWriter, outputs map[string]string) {
 	for path := range outputs {
-		info, err := os.Lstat(filepath.Join(projectDir, filepath.FromSlash(path)))
+		info, err := writer.lstat(filepath.Join(writer.projectDir, filepath.FromSlash(path)))
 		if err != nil || !info.Mode().IsRegular() {
 			delete(outputs, path)
 		}

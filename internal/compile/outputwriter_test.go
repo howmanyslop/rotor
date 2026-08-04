@@ -77,6 +77,25 @@ func TestOutputWriterPrepareRejectsPathOutsideProject(t *testing.T) {
 	}
 }
 
+func TestOutputWriterLstatRejectsPathOutsideProject(t *testing.T) {
+	projectDir := t.TempDir()
+	stats := 0
+	writer := newOutputWriterWithOperations(outputWriterOperations{
+		lstat: func(string) (fs.FileInfo, error) {
+			stats++
+			return nil, os.ErrNotExist
+		},
+	}, true)
+	writer.useHashes(projectDir, map[string]string{}, map[string]string{})
+
+	if _, err := writer.lstat(filepath.Join(projectDir, "..", "outside.luau")); err == nil {
+		t.Fatal("lstat accepted an output outside the project")
+	}
+	if stats != 0 {
+		t.Fatalf("underlying stat calls = %d, want 0", stats)
+	}
+}
+
 func TestOutputWriterRejectsSymlinkEscape(t *testing.T) {
 	projectDir := t.TempDir()
 	outsideDir := t.TempDir()

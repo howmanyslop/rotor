@@ -85,9 +85,13 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err != nil {
 		return nil, nil, err
 	}
+	salt, err := incrementalSalt(program, opts, manifestPath)
+	if err != nil {
+		return nil, nil, err
+	}
 	var currentManifest *incrementalManifest
 	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
-		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, manifestPath))
+		currentManifest, err = buildIncrementalManifest(program, sourceFiles, salt)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -99,7 +103,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	} else {
 		currentManifest = &incrementalManifest{
 			Version: 2,
-			Salt:    incrementalSalt(program, opts, manifestPath),
+			Salt:    salt,
 			Files:   map[string]incrementalFileState{},
 			Outputs: map[string]string{},
 		}
@@ -129,7 +133,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			return nil, nil, err
 		}
 		timings.setHashSkips(writer.hashSkipCount())
-		pruneMissingOutputs(filepath.FromSlash(dir), currentManifest.Outputs)
+		pruneMissingOutputs(writer, currentManifest.Outputs)
 		if !sameIncrementalManifest(previousManifest, currentManifest) {
 			if err := writeIncrementalManifest(manifestPath, currentManifest); err != nil {
 				return nil, nil, err
@@ -163,7 +167,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			}
 			for outputPath := range previousOutputs {
 				absolutePath := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(outputPath))
-				info, err := os.Lstat(absolutePath)
+				info, err := writer.lstat(absolutePath)
 				if err == nil && info.Mode().IsRegular() {
 					continue
 				}
@@ -349,7 +353,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	timings.setHashSkips(writer.hashSkipCount())
 
 	stopPersistence := timings.startStage(persistenceStage)
-	pruneMissingOutputs(filepath.FromSlash(dir), currentManifest.Outputs)
+	pruneMissingOutputs(writer, currentManifest.Outputs)
 	// rotor extension: keep the consolidated on-disk rotor.d.ts editor companion
 	// fresh for projects that reference any macro ($env / $asset / $nameof /
 	// $keys / $file / $git / $buildTime). Editors never see the synthetic

@@ -72,13 +72,7 @@ func (writer *outputWriter) write(path string, text string, writeOnlyChanged boo
 	hash := hex.EncodeToString(sum[:])
 	key := writer.outputKey(path)
 	if previous, ok := writer.previous[key]; ok && previous == hash {
-		var info fs.FileInfo
-		var err error
-		if writer.root != nil {
-			info, err = writer.root.Lstat(key)
-		} else {
-			info, err = writer.operations.lstat(path)
-		}
+		info, err := writer.lstat(path)
 		if err == nil && info.Mode().IsRegular() {
 			writer.mu.Lock()
 			writer.current[key] = hash
@@ -111,6 +105,17 @@ func (writer *outputWriter) write(path string, text string, writeOnlyChanged boo
 	}
 	writer.recordHash(key, hash)
 	return true, nil
+}
+
+func (writer *outputWriter) lstat(path string) (fs.FileInfo, error) {
+	key := writer.outputKey(path)
+	if !filepath.IsLocal(filepath.FromSlash(key)) {
+		return nil, fmt.Errorf("compile: refusing to inspect output outside the project directory: %q", path)
+	}
+	if writer.root != nil {
+		return writer.root.Lstat(filepath.FromSlash(key))
+	}
+	return writer.operations.lstat(path)
 }
 
 func (writer *outputWriter) prepare(paths []string) error {
