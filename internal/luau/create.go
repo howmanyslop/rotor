@@ -62,6 +62,10 @@ func TempID(name string) *TemporaryIdentifier {
 	return &TemporaryIdentifier{Name: name, ID: int(lastTempID.Add(1))}
 }
 
+func ExactTempID(name string) *TemporaryIdentifier {
+	return &TemporaryIdentifier{Name: name, ID: int(lastTempID.Add(1)), ExactName: true}
+}
+
 func NewComputedIndex(expression IndexableExpression, index Expression) *ComputedIndexExpression {
 	n := &ComputedIndexExpression{}
 	n.Expression = adopt[IndexableExpression](n, expression)

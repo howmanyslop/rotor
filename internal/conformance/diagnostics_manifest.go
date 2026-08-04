@@ -30,8 +30,9 @@ type diagnosticFixtureProjectPlan struct {
 var skippedDiagnosticIDs = map[string]string{}
 
 var forkDiagnosticExpectations = map[string][]string{
-	"noSpreadDestructuring.1.ts": {},
-	"noSpreadDestructuring.2.ts": {"noRestSpreadingOfRobloxTypes"},
+	"noFunctionExpressionName.ts": {},
+	"noSpreadDestructuring.1.ts":  {},
+	"noSpreadDestructuring.2.ts":  {"noRestSpreadingOfRobloxTypes"},
 }
 
 var installConformanceDepsOnce struct {

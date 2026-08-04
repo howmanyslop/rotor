@@ -5,6 +5,12 @@ import (
 	"rotor/tsgo/ast"
 )
 
+type transformedFunctionBody struct {
+	parameters   *luau.List[luau.AnyIdentifier]
+	statements   *luau.List[luau.Statement]
+	hasDotDotDot bool
+}
+
 // ---------------------------------------------------------------------------
 // Functions — statements/transformFunctionDeclaration.ts,
 // expressions/transformFunctionExpression.ts, nodes/transformMethodDeclaration.ts
@@ -46,15 +52,7 @@ func transformFunctionDeclaration(s *State, node *ast.Node) *luau.List[luau.Stat
 		name = luau.ID("default")
 	}
 
-	parameters, statements, hasDotDotDot, varArgsData := transformParameters(s, node)
-	restParam := registerOptimizableVarArgsForFunction(s, node, varArgsData)
-	// parameter-default/destructure statements come FIRST in the body, then
-	// the transformed body. No implicit return is ever inserted: Luau
-	// functions return nil implicitly.
-	statements.PushList(TransformStatementList(s, declaration.Body, declaration.Body.AsBlock().Statements.Nodes, nil))
-	if restParam != nil {
-		s.unregisterOptimizableVarArgs(restParam)
-	}
+	body := transformFunctionBody(s, node)
 
 	localize := isExportDefault
 	if nameNode != nil {
@@ -71,7 +69,7 @@ func transformFunctionDeclaration(s *State, node *ast.Node) *luau.List[luau.Stat
 		if isAsync {
 			s.Diags.Add(DiagNoAsyncGeneratorFunctions(node))
 		}
-		statements = wrapStatementsAsGenerator(s, node, statements)
+		body.statements = wrapStatementsAsGenerator(s, node, body.statements)
 	}
 
 	// The async path REPLACES the FunctionDeclaration emit entirely: `local f
@@ -83,7 +81,7 @@ func transformFunctionDeclaration(s *State, node *ast.Node) *luau.List[luau.Stat
 	// TS.generator return.
 	if isAsync {
 		right := luau.NewCall(s.RuntimeLib(node, "async"), luau.NewList[luau.Expression](
-			luau.NewFunctionExpression(parameters, hasDotDotDot, statements)))
+			luau.NewFunctionExpression(body.parameters, body.hasDotDotDot, body.statements)))
 		if localize {
 			return luau.NewList[luau.Statement](luau.NewVariableDeclaration(name, right))
 		}
@@ -91,21 +89,10 @@ func transformFunctionDeclaration(s *State, node *ast.Node) *luau.List[luau.Stat
 	}
 
 	return luau.NewList[luau.Statement](
-		luau.NewFunctionDeclaration(localize, name, parameters, hasDotDotDot, statements))
+		luau.NewFunctionDeclaration(localize, name, body.parameters, body.hasDotDotDot, body.statements))
 }
 
-// transformFunctionExpression ports transformFunctionExpression.ts (L11-47):
-// FunctionExpression and ArrowFunction share one transform. Named function
-// expressions are banned (name dropped, transform continues). Arrow
-// expression bodies reuse the full return transform with prereqs captured
-// into the function body — that is the only implicit-return mechanism.
-func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
-	if ast.IsFunctionExpression(node) {
-		if name := node.AsFunctionExpression().Name(); name != nil {
-			s.Diags.Add(DiagNoFunctionExpressionName(name))
-		}
-	}
-
+func transformFunctionBody(s *State, node *ast.Node) transformedFunctionBody {
 	parameters, statements, hasDotDotDot, varArgsData := transformParameters(s, node)
 	restParam := registerOptimizableVarArgsForFunction(s, node, varArgsData)
 
@@ -124,6 +111,42 @@ func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
 		s.unregisterOptimizableVarArgs(restParam)
 	}
 
+	return transformedFunctionBody{
+		parameters:   parameters,
+		statements:   statements,
+		hasDotDotDot: hasDotDotDot,
+	}
+}
+
+// transformFunctionExpression ports transformFunctionExpression.ts (L11-47):
+// FunctionExpression and ArrowFunction share one transform. A direct,
+// synchronous named call argument is lifted to a local declaration; other
+// named expressions report a diagnostic and continue with the name dropped.
+// Arrow expression bodies reuse the full return transform with prereqs
+// captured into the function body — that is the only implicit-return
+// mechanism.
+func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
+	if ast.IsFunctionExpression(node) {
+		if name := node.AsFunctionExpression().Name(); name != nil {
+			if isSynchronousNonGeneratorFunctionExpression(node) && isDirectCallArgument(node) {
+				ValidateIdentifier(s, name)
+				identifier := luau.ExactTempID(name.Text())
+				body := transformNamedFunctionExpressionBody(s, node, identifier)
+				s.Prereq(luau.NewFunctionDeclaration(
+					true,
+					identifier,
+					body.parameters,
+					body.hasDotDotDot,
+					body.statements,
+				))
+				return identifier
+			}
+			s.Diags.Add(DiagNoFunctionExpressionName(name))
+		}
+	}
+
+	body := transformFunctionBody(s, node)
+
 	isAsync := ast.HasSyntacticModifier(node, ast.ModifierFlagsAsync)
 
 	var asteriskToken *ast.Node
@@ -134,10 +157,10 @@ func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
 		if isAsync {
 			s.Diags.Add(DiagNoAsyncGeneratorFunctions(node))
 		}
-		statements = wrapStatementsAsGenerator(s, node, statements)
+		body.statements = wrapStatementsAsGenerator(s, node, body.statements)
 	}
 
-	var expression luau.Expression = luau.NewFunctionExpression(parameters, hasDotDotDot, statements)
+	var expression luau.Expression = luau.NewFunctionExpression(body.parameters, body.hasDotDotDot, body.statements)
 
 	if isAsync {
 		expression = luau.NewCall(s.RuntimeLib(node, "async"), luau.NewList[luau.Expression](expression))

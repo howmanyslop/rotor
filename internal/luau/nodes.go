@@ -9,8 +9,9 @@ type Identifier struct {
 
 type TemporaryIdentifier struct {
 	base
-	Name string
-	ID   int
+	Name      string
+	ID        int
+	ExactName bool
 }
 
 type ComputedIndexExpression struct {

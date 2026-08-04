@@ -90,7 +90,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		return nil, nil, err
 	}
 	var currentManifest *incrementalManifest
-	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
+	if program.Options().IsIncremental() && pathTranslator.BuildInfoOutputPath != "" {
 		currentManifest, err = buildIncrementalManifest(program, sourceFiles, salt)
 		if err != nil {
 			return nil, nil, err
@@ -156,7 +156,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	opts.rojoCache = rojoCache
 
 	selectedFiles := sourceFiles
-	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
+	if program.Options().IsIncremental() && pathTranslator.BuildInfoOutputPath != "" {
 		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
 		if opts.forceFullBuild {
 			selectedFiles = sourceFiles
