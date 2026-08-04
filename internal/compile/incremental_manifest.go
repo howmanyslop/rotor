@@ -12,6 +12,7 @@ import (
 
 	"rotor/tsgo/ast"
 	"rotor/tsgo/compiler"
+	"rotor/tsgo/core"
 )
 
 type incrementalManifest struct {
@@ -109,19 +110,23 @@ func buildIncrementalManifest(program *compiler.Program, sourceFiles []*ast.Sour
 func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTranslatorBuildInfoPath string) string {
 	options := program.Options()
 	payload, _ := json.Marshal(struct {
-		Version              string `json:"version"`
-		ConfigFilePath       string `json:"configFilePath"`
-		OutDir               string `json:"outDir"`
-		TsBuildInfoFile      string `json:"tsBuildInfoFile"`
-		PathTranslatorTarget string `json:"pathTranslatorBuildInfoPath"`
-		Type                 string `json:"type"`
-		RojoConfigPath       string `json:"rojoConfigPath"`
-		IncludePath          string `json:"includePath"`
-		LuaExtension         bool   `json:"luaExtension"`
-		Declaration          bool   `json:"declaration"`
-		EmitDeclarationOnly  bool   `json:"emitDeclarationOnly"`
+		Version              string                `json:"version"`
+		CompilerOptions      *core.CompilerOptions `json:"compilerOptions"`
+		ConfigFilePath       string                `json:"configFilePath"`
+		OutDir               string                `json:"outDir"`
+		TsBuildInfoFile      string                `json:"tsBuildInfoFile"`
+		PathTranslatorTarget string                `json:"pathTranslatorBuildInfoPath"`
+		Type                 string                `json:"type"`
+		RojoConfigPath       string                `json:"rojoConfigPath"`
+		IncludePath          string                `json:"includePath"`
+		LuaExtension         bool                  `json:"luaExtension"`
+		Declaration          bool                  `json:"declaration"`
+		EmitDeclarationOnly  bool                  `json:"emitDeclarationOnly"`
+		NoOptimizedLoops     bool                  `json:"noOptimizedLoops"`
+		MinifyOutput         bool                  `json:"minifyOutput"`
 	}{
 		Version:              "rotor-incremental-v2",
+		CompilerOptions:      options,
 		ConfigFilePath:       options.ConfigFilePath,
 		OutDir:               options.OutDir,
 		TsBuildInfoFile:      options.TsBuildInfoFile,
@@ -132,6 +137,8 @@ func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTransla
 		LuaExtension:         !opts.LuaExtension,
 		Declaration:          options.Declaration.IsTrue(),
 		EmitDeclarationOnly:  opts.EmitDeclarationOnly,
+		NoOptimizedLoops:     opts.NoOptimizedLoops,
+		MinifyOutput:         opts.MinifyOutput,
 	})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])

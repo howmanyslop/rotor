@@ -156,6 +156,35 @@ func TestBuildProjectIncrementalRecreatesMissingOutputs(t *testing.T) {
 	}
 }
 
+func TestBuildProjectIncrementalInvalidatesEmitOptionChanges(t *testing.T) {
+	dir := writeProject(t, "@scope/incremental-options-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v (diags: %v)", err, diags)
+	}
+
+	tsconfigPath := filepath.Join(dir, "tsconfig.json")
+	tsconfigBytes, err := os.ReadFile(tsconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsconfig := strings.Replace(string(tsconfigBytes), `"outDir": "out",`, `"outDir": "out", "sourceMap": true,`, 1)
+	if err := os.WriteFile(tsconfigPath, []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	timings := NewBuildTimings()
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings}); err != nil {
+		t.Fatalf("second build: %v (diags: %v)", err, diags)
+	}
+	if timings.Counts.SelectedSources != 1 {
+		t.Fatalf("selected sources = %d, want 1", timings.Counts.SelectedSources)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "main.luau.map")); err != nil {
+		t.Fatalf("source map missing after sourceMap option change: %v", err)
+	}
+}
+
 func enableIncrementalBuilds(t *testing.T, dir string) {
 	t.Helper()
 	tsconfigPath := filepath.Join(dir, "tsconfig.json")
