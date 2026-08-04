@@ -57,6 +57,26 @@ func TestOutputHashMatchUsesLstatWithoutOpening(t *testing.T) {
 	}
 }
 
+func TestOutputWriterPrepareRejectsPathOutsideProject(t *testing.T) {
+	projectDir := t.TempDir()
+	writes := 0
+	writer := newOutputWriterWithOperations(outputWriterOperations{
+		mkdirAll: func(string, fs.FileMode) error {
+			writes++
+			return nil
+		},
+	}, true)
+	writer.useHashes(projectDir, map[string]string{}, map[string]string{})
+
+	err := writer.prepare([]string{filepath.Join(projectDir, "..", "outside", "main.luau")})
+	if err == nil {
+		t.Fatal("prepare accepted an output outside the project")
+	}
+	if writes != 0 {
+		t.Fatalf("mkdir calls = %d, want 0", writes)
+	}
+}
+
 func TestOutputDirectoryCreatedOnce(t *testing.T) {
 	var mkdirCalls atomic.Int32
 	var writeCalls atomic.Int32

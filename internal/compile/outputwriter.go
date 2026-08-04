@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -117,6 +118,12 @@ func (writer *outputWriter) hashSkipCount() int {
 }
 
 func (writer *outputWriter) prepareParent(path string) error {
+	if writer.projectDir != "" {
+		relative, err := filepath.Rel(writer.projectDir, filepath.Clean(path))
+		if err != nil || !filepath.IsLocal(relative) {
+			return fmt.Errorf("compile: refusing to prepare output outside the project directory: %q", path)
+		}
+	}
 	parent, err := filepath.Abs(filepath.Dir(path))
 	if err != nil {
 		return err
