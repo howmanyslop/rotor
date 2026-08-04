@@ -14,6 +14,7 @@ import (
 	"rotor/internal/compile"
 	"rotor/internal/logservice"
 	"rotor/internal/transformer"
+	"rotor/tsgo/vfs/osvfs"
 )
 
 // projectTypeChoices are the upstream --type choices (CLI/commands/build.ts
@@ -358,6 +359,10 @@ func cmdBuild(args []string) (exitCode int) {
 		fmt.Println(version)
 		return 0
 	}
+	if err := validateBuildDiagnosticPaths(parsed); err != nil {
+		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		return 1
+	}
 	profiles, err := startBuildProfiles(parsed)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
@@ -479,6 +484,39 @@ func cmdBuild(args []string) (exitCode int) {
 	}
 	out.buildSuccess(len(result.Outputs), len(result.EmittedFiles), copiedFiles, elapsed)
 	return 0
+}
+
+func validateBuildDiagnosticPaths(args *buildArgs) error {
+	outputs := []struct {
+		name string
+		path string
+	}{
+		{"--cpuprofile", args.cpuprofile},
+		{"--trace-out", args.traceOut},
+		{"--blockprofile", args.blockprofile},
+		{"--mutexprofile", args.mutexprofile},
+		{"--heapprofile", args.heapprofile},
+		{"--timings", args.timings},
+	}
+	seen := make(map[string]string, len(outputs))
+	for _, output := range outputs {
+		if output.path == "" {
+			continue
+		}
+		path, err := filepath.Abs(output.path)
+		if err != nil {
+			return fmt.Errorf("resolve %s output path: %w", output.name, err)
+		}
+		path = filepath.Clean(path)
+		if !osvfs.FS().UseCaseSensitiveFileNames() {
+			path = strings.ToLower(path)
+		}
+		if previous, ok := seen[path]; ok {
+			return fmt.Errorf("%s and %s cannot write to the same path", previous, output.name)
+		}
+		seen[path] = output.name
+	}
+	return nil
 }
 
 func newBuildOptionsReload(tsConfigPath string, parsed *buildArgs) func() (projectOptions, error) {

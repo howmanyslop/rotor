@@ -346,6 +346,21 @@ func TestBuildFiniteDiagnosticsRejectWatch(t *testing.T) {
 	}
 }
 
+func TestBuildFiniteDiagnosticsRejectDuplicatePaths(t *testing.T) {
+	for _, args := range [][]string{
+		{"--cpuprofile", "profile.out", "--trace-out", filepath.Join(".", "profile.out")},
+		{"--heapprofile", "profile.out", "--timings", "profile.out"},
+	} {
+		parsed, err := parseBuildArgs(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateBuildDiagnosticPaths(parsed); err == nil {
+			t.Fatalf("duplicate diagnostic paths accepted for %v", args)
+		}
+	}
+}
+
 func TestBuildWritesCombinedProfiles(t *testing.T) {
 	dir := writeBuildableProject(t, "")
 	profileDir := t.TempDir()
