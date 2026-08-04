@@ -2,7 +2,9 @@ package compile
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -17,10 +19,10 @@ type sourceTraceMap struct {
 }
 
 type traceMapping struct {
-	generatedLine   int
-	generatedColumn int
-	sourceLine      int
-	sourceColumn    int
+	generatedLine   int32
+	generatedColumn int32
+	sourceLine      int32
+	sourceColumn    int32
 }
 
 type rawSourceMap struct {
@@ -48,11 +50,19 @@ func newSourceTraceMap(raw, fileName, text string) (*sourceTraceMap, error) {
 		if !mapping.IsSourceMapping() {
 			continue
 		}
+		generatedColumn := int(mapping.GeneratedCharacter)
+		sourceColumn := int(mapping.SourceCharacter)
+		if mapping.GeneratedLine < 0 || mapping.GeneratedLine > math.MaxInt32 ||
+			generatedColumn < 0 || generatedColumn > math.MaxInt32 ||
+			mapping.SourceLine < 0 || mapping.SourceLine > math.MaxInt32 ||
+			sourceColumn < 0 || sourceColumn > math.MaxInt32 {
+			return nil, errors.New("parse transformer trace map: coordinate exceeds 32-bit range")
+		}
 		trace.mappings = append(trace.mappings, traceMapping{
-			generatedLine:   mapping.GeneratedLine,
-			generatedColumn: int(mapping.GeneratedCharacter),
-			sourceLine:      mapping.SourceLine,
-			sourceColumn:    int(mapping.SourceCharacter),
+			generatedLine:   int32(mapping.GeneratedLine),
+			generatedColumn: int32(generatedColumn),
+			sourceLine:      int32(mapping.SourceLine),
+			sourceColumn:    int32(sourceColumn),
 		})
 	}
 	if err := decoder.Error(); err != nil {
@@ -68,14 +78,14 @@ func (t *sourceTraceMap) OriginalSourceText() string { return t.text }
 func (t *sourceTraceMap) OriginalPosition(position transformer.SourcePosition) *transformer.SourcePosition {
 	index := sort.Search(len(t.mappings), func(index int) bool {
 		mapping := t.mappings[index]
-		return mapping.generatedLine > position.Line ||
-			mapping.generatedLine == position.Line && mapping.generatedColumn > position.Column
+		return int(mapping.generatedLine) > position.Line ||
+			int(mapping.generatedLine) == position.Line && int(mapping.generatedColumn) > position.Column
 	})
 	if index == 0 {
 		return nil
 	}
 	mapping := t.mappings[index-1]
-	return &transformer.SourcePosition{Line: mapping.sourceLine, Column: mapping.sourceColumn}
+	return &transformer.SourcePosition{Line: int(mapping.sourceLine), Column: int(mapping.sourceColumn)}
 }
 
 func rewriteSourceMapWithTrace(raw string, trace *sourceTraceMap) (string, error) {

@@ -1,15 +1,153 @@
 package compile
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sync"
 	"sync/atomic"
 	"testing"
 )
+
+func TestOutputHashMatchUsesLstatWithoutOpening(t *testing.T) {
+	projectDir := t.TempDir()
+	path := filepath.Join(projectDir, "out", "main.luau")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	contents := []byte("output")
+	if err := os.WriteFile(path, contents, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(contents)
+	hash := hex.EncodeToString(sum[:])
+	var reads atomic.Int32
+	var writes atomic.Int32
+	var lstats atomic.Int32
+	writer := newOutputWriterWithOperations(outputWriterOperations{
+		readFile: func(string) ([]byte, error) {
+			reads.Add(1)
+			return nil, errors.New("unexpected read")
+		},
+		mkdirAll: os.MkdirAll,
+		writeFile: func(string, []byte, fs.FileMode) error {
+			writes.Add(1)
+			return nil
+		},
+		lstat: func(path string) (fs.FileInfo, error) {
+			lstats.Add(1)
+			return os.Lstat(path)
+		},
+	}, true)
+	current := map[string]string{}
+	writer.useHashes(projectDir, map[string]string{"out/main.luau": hash}, current)
+
+	wrote, err := writer.write(path, string(contents), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wrote || reads.Load() != 0 || writes.Load() != 0 || lstats.Load() != 1 {
+		t.Fatalf("wrote=%v reads=%d writes=%d lstats=%d", wrote, reads.Load(), writes.Load(), lstats.Load())
+	}
+	if current["out/main.luau"] != hash || writer.hashSkipCount() != 1 {
+		t.Fatalf("current hashes = %v, skips = %d", current, writer.hashSkipCount())
+	}
+}
+
+func TestOutputWriterPrepareRejectsPathOutsideProject(t *testing.T) {
+	projectDir := t.TempDir()
+	writes := 0
+	writer := newOutputWriterWithOperations(outputWriterOperations{
+		mkdirAll: func(string, fs.FileMode) error {
+			writes++
+			return nil
+		},
+	}, true)
+	writer.useHashes(projectDir, map[string]string{}, map[string]string{})
+
+	err := writer.prepare([]string{filepath.Join(projectDir, "..", "outside", "main.luau")})
+	if err == nil {
+		t.Fatal("prepare accepted an output outside the project")
+	}
+	if writes != 0 {
+		t.Fatalf("mkdir calls = %d, want 0", writes)
+	}
+}
+
+func TestOutputWriterLstatRejectsPathOutsideProject(t *testing.T) {
+	projectDir := t.TempDir()
+	stats := 0
+	writer := newOutputWriterWithOperations(outputWriterOperations{
+		lstat: func(string) (fs.FileInfo, error) {
+			stats++
+			return nil, os.ErrNotExist
+		},
+	}, true)
+	writer.useHashes(projectDir, map[string]string{}, map[string]string{})
+
+	if _, err := writer.lstat(filepath.Join(projectDir, "..", "outside.luau")); err == nil {
+		t.Fatal("lstat accepted an output outside the project")
+	}
+	if stats != 0 {
+		t.Fatalf("underlying stat calls = %d, want 0", stats)
+	}
+}
+
+func TestOutputWriterRejectsSymlinkEscape(t *testing.T) {
+	projectDir := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.Symlink(outsideDir, filepath.Join(projectDir, "out")); err != nil {
+		t.Fatal(err)
+	}
+
+	writer := newOutputWriter()
+	if err := writer.useHashes(projectDir, map[string]string{}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.close() })
+	path := filepath.Join(projectDir, "out", "main.luau")
+	if err := writer.prepare([]string{path}); err == nil {
+		t.Fatal("prepare accepted a parent symlink outside the project")
+	}
+	if _, err := os.Stat(filepath.Join(outsideDir, "main.luau")); !os.IsNotExist(err) {
+		t.Fatalf("outside output stat error = %v, want not-exist", err)
+	}
+}
+
+func TestOutputWriterRejectsFinalSymlinkEscape(t *testing.T) {
+	projectDir := t.TempDir()
+	outDir := filepath.Join(projectDir, "out")
+	if err := os.Mkdir(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsidePath := filepath.Join(t.TempDir(), "outside.luau")
+	if err := os.WriteFile(outsidePath, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(outDir, "main.luau")
+	if err := os.Symlink(outsidePath, outputPath); err != nil {
+		t.Fatal(err)
+	}
+
+	writer := newOutputWriter()
+	if err := writer.useHashes(projectDir, map[string]string{}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.close() })
+	if _, err := writer.write(outputPath, "replacement", false); err == nil {
+		t.Fatal("write accepted a final symlink outside the project")
+	}
+	contents, err := os.ReadFile(outsidePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "original" {
+		t.Fatalf("outside output = %q, want original", contents)
+	}
+}
 
 func TestOutputDirectoryCreatedOnce(t *testing.T) {
 	var mkdirCalls atomic.Int32
@@ -43,6 +181,13 @@ func TestOutputDirectoryCreatedOnce(t *testing.T) {
 			return nil
 		}
 	}
+	paths := make([]string, outputs)
+	for index := range paths {
+		paths[index] = filepath.Join("out", "shared", fmt.Sprintf("%d.luau", index))
+	}
+	if err := writer.prepare(paths); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := parallelize(outputs, jobs); err != nil {
 		t.Fatalf("parallel writes: %v", err)
@@ -72,7 +217,8 @@ func TestOutputDirectoryUnchangedDoesNotCreate(t *testing.T) {
 		},
 	}, true)
 
-	wrote, err := writer.write(filepath.Join("out", "missing", "main.luau"), "unchanged", true)
+	path := filepath.Join("out", "missing", "main.luau")
+	wrote, err := writer.write(path, "unchanged", true)
 	if err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -106,25 +252,12 @@ func TestOutputDirectoryFailureMemoized(t *testing.T) {
 	}, true)
 
 	const outputs = 32
-	errs := make([]error, outputs)
-	var started sync.WaitGroup
-	started.Add(outputs)
-	ready := make(chan struct{})
-	go func() {
-		started.Wait()
-		close(ready)
-	}()
-	var completed sync.WaitGroup
-	completed.Add(outputs)
-	for index := range outputs {
-		go func() {
-			defer completed.Done()
-			started.Done()
-			<-ready
-			_, errs[index] = writer.write(filepath.Join("out", "blocked", fmt.Sprintf("%d.luau", index)), "output", true)
-		}()
+	paths := make([]string, outputs)
+	for index := range paths {
+		paths[index] = filepath.Join("out", "blocked", fmt.Sprintf("%d.luau", index))
 	}
-	completed.Wait()
+	first := writer.prepare(paths)
+	second := writer.prepare(paths)
 
 	if got := mkdirCalls.Load(); got != 1 {
 		t.Fatalf("MkdirAll calls = %d, want 1", got)
@@ -132,9 +265,9 @@ func TestOutputDirectoryFailureMemoized(t *testing.T) {
 	if got := writeCalls.Load(); got != 0 {
 		t.Fatalf("WriteFile calls = %d, want 0", got)
 	}
-	for index, err := range errs {
+	for index, err := range []error{first, second} {
 		if !errors.Is(err, failure) {
-			t.Errorf("write %d error = %v, want %v", index, err, failure)
+			t.Errorf("prepare %d error = %v, want %v", index, err, failure)
 		}
 	}
 }
@@ -158,6 +291,9 @@ func TestOutputDirectoryCaseCanonicalized(t *testing.T) {
 		filepath.Join("out", "Shared", "first.luau"),
 		filepath.Join("out", "shared", "second.luau"),
 	} {
+		if err := writer.prepare([]string{path}); err != nil {
+			t.Fatal(err)
+		}
 		wrote, err := writer.write(path, "output", true)
 		if err != nil {
 			t.Fatalf("write %q: %v", path, err)
@@ -171,9 +307,8 @@ func TestOutputDirectoryCaseCanonicalized(t *testing.T) {
 	}
 }
 
-func TestParallelWriteFailureSemantics(t *testing.T) {
+func TestBatchPrepareFailurePreventsWrites(t *testing.T) {
 	failure := errors.New("blocked parent")
-	otherStarted := make(chan struct{})
 	var otherWrites atomic.Int32
 	writer := newOutputWriterWithOperations(outputWriterOperations{
 		readFile: func(string) ([]byte, error) {
@@ -181,10 +316,8 @@ func TestParallelWriteFailureSemantics(t *testing.T) {
 		},
 		mkdirAll: func(path string, _ fs.FileMode) error {
 			if filepath.Base(path) == "failed" {
-				<-otherStarted
 				return failure
 			}
-			close(otherStarted)
 			return nil
 		},
 		writeFile: func(path string, _ []byte, _ fs.FileMode) error {
@@ -195,23 +328,13 @@ func TestParallelWriteFailureSemantics(t *testing.T) {
 		},
 	}, true)
 
-	jobs := make([]func() error, 16)
-	jobs[0] = func() error {
-		_, err := writer.write(filepath.Join("out", "failed", "first.luau"), "output", true)
-		return err
+	if err := writer.prepare([]string{
+		filepath.Join("out", "failed", "first.luau"),
+		filepath.Join("out", "other", "first.luau"),
+	}); !errors.Is(err, failure) {
+		t.Fatalf("prepare error = %v, want %v", err, failure)
 	}
-	jobs[1] = func() error {
-		_, err := writer.write(filepath.Join("out", "other", "first.luau"), "output", true)
-		return err
-	}
-	for index := 2; index < len(jobs); index++ {
-		jobs[index] = func() error { return nil }
-	}
-
-	if err := parallelize(2, jobs); !errors.Is(err, failure) {
-		t.Fatalf("parallel writes error = %v, want %v", err, failure)
-	}
-	if got := otherWrites.Load(); got != 1 {
-		t.Fatalf("started unrelated writes = %d, want 1", got)
+	if got := otherWrites.Load(); got != 0 {
+		t.Fatalf("writes after prepare failure = %d, want 0", got)
 	}
 }

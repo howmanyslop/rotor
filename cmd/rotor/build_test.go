@@ -68,8 +68,10 @@ func TestParseBuildArgs(t *testing.T) {
 	})
 
 	t.Run("plain boolean flags set true", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"--verbose", "--noInclude", "--logTruthyChanges",
-			"--writeOnlyChanged", "--writeTransformedFiles", "--allowCommentDirectives"})
+		got, err := parseBuildArgs([]string{
+			"--verbose", "--noInclude", "--logTruthyChanges",
+			"--writeOnlyChanged", "--writeTransformedFiles", "--allowCommentDirectives",
+		})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -316,6 +318,157 @@ func TestBuildTimingsFlag(t *testing.T) {
 			t.Errorf("failed-build timing ok = %t, want false", failedTimings.OK)
 		}
 	})
+}
+
+func TestBuildProfilingFlags(t *testing.T) {
+	args := []string{
+		"--trace-out", "trace.out",
+		"--blockprofile", "block.prof",
+		"--mutexprofile", "mutex.prof",
+		"--heapprofile", "heap.prof",
+	}
+	parsed, err := parseBuildArgs(args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.traceOut != "trace.out" || parsed.blockprofile != "block.prof" ||
+		parsed.mutexprofile != "mutex.prof" || parsed.heapprofile != "heap.prof" {
+		t.Fatalf("parsed profile paths = %#v", parsed)
+	}
+}
+
+func TestBuildFiniteDiagnosticsRejectWatch(t *testing.T) {
+	for _, flag := range []string{"--cpuprofile", "--trace-out", "--blockprofile", "--mutexprofile", "--heapprofile", "--timings"} {
+		_, err := parseBuildArgs([]string{"--watch", flag, "profile.out"})
+		if err == nil || !strings.Contains(err.Error(), "cannot be used with --watch") {
+			t.Errorf("parseBuildArgs with %s error = %v", flag, err)
+		}
+	}
+}
+
+func TestBuildFiniteDiagnosticsRejectDuplicatePaths(t *testing.T) {
+	for _, args := range [][]string{
+		{"--cpuprofile", "profile.out", "--trace-out", filepath.Join(".", "profile.out")},
+		{"--heapprofile", "profile.out", "--timings", "profile.out"},
+	} {
+		parsed, err := parseBuildArgs(args)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateBuildDiagnosticPaths(parsed); err == nil {
+			t.Fatalf("duplicate diagnostic paths accepted for %v", args)
+		}
+	}
+}
+
+func TestBuildFiniteDiagnosticsRejectAliasedPaths(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.prof")
+	if err := os.WriteFile(target, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, makeAlias := range map[string]func(string) error{
+		"symlink":  func(path string) error { return os.Symlink(target, path) },
+		"hardlink": func(path string) error { return os.Link(target, path) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			alias := filepath.Join(dir, name+".prof")
+			if err := makeAlias(alias); err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := parseBuildArgs([]string{"--cpuprofile", target, "--trace-out", alias})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateBuildDiagnosticPaths(parsed); err == nil {
+				t.Fatal("aliased diagnostic paths accepted")
+			}
+		})
+	}
+}
+
+func TestBuildFiniteDiagnosticsRejectDanglingSymlinkAlias(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.prof")
+	alias := filepath.Join(dir, "alias.prof")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := parseBuildArgs([]string{"--cpuprofile", target, "--trace-out", alias})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := validateBuildDiagnosticPaths(parsed); err == nil {
+		t.Fatal("dangling symlink diagnostic alias accepted")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Fatalf("target stat error = %v, want not-exist", err)
+	}
+}
+
+func TestBuildWritesCombinedProfiles(t *testing.T) {
+	dir := writeBuildableProject(t, "")
+	profileDir := t.TempDir()
+	paths := []string{
+		filepath.Join(profileDir, "cpu.prof"),
+		filepath.Join(profileDir, "trace.out"),
+		filepath.Join(profileDir, "block.prof"),
+		filepath.Join(profileDir, "mutex.prof"),
+		filepath.Join(profileDir, "heap.prof"),
+	}
+	args := []string{
+		"--cpuprofile", paths[0], "--trace-out", paths[1],
+		"--blockprofile", paths[2], "--mutexprofile", paths[3],
+		"--heapprofile", paths[4], dir,
+	}
+
+	_, _, code := captureBuildOutput(t, args)
+
+	if code != 0 {
+		t.Fatalf("profiled build exit = %d, want 0", code)
+	}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Errorf("profile %s: %v", filepath.Base(path), err)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("profile %s is empty", filepath.Base(path))
+		}
+	}
+}
+
+func TestFailedBuildFinalizesCombinedProfiles(t *testing.T) {
+	profileDir := t.TempDir()
+	paths := []string{
+		filepath.Join(profileDir, "cpu.prof"),
+		filepath.Join(profileDir, "trace.out"),
+		filepath.Join(profileDir, "block.prof"),
+		filepath.Join(profileDir, "mutex.prof"),
+		filepath.Join(profileDir, "heap.prof"),
+	}
+	args := []string{
+		"--cpuprofile", paths[0], "--trace-out", paths[1],
+		"--blockprofile", paths[2], "--mutexprofile", paths[3],
+		"--heapprofile", paths[4], filepath.Join(t.TempDir(), "missing"),
+	}
+
+	_, _, code := captureBuildOutput(t, args)
+
+	if code != 1 {
+		t.Fatalf("failed profiled build exit = %d, want 1", code)
+	}
+	for _, path := range paths {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Errorf("profile %s: %v", filepath.Base(path), err)
+			continue
+		}
+		if info.Size() == 0 {
+			t.Errorf("profile %s is empty", filepath.Base(path))
+		}
+	}
 }
 
 func assertTimingJSONShape(t *testing.T, data []byte) {
@@ -565,7 +718,6 @@ func TestBuildWatchConcurrencyOptions(t *testing.T) {
 	// When
 	reload := newBuildOptionsReload(configPath, parsed)
 	got, err := reload()
-
 	// Then
 	if err != nil {
 		t.Fatal(err)
@@ -605,7 +757,6 @@ func TestBuildSolutionPropagatesCheckers(t *testing.T) {
 				filepath.Join(root, "tsconfig.json"),
 				projectCompileOptions(filepath.Join(root, "tsconfig.json"), opts),
 			)
-
 			// Then
 			if err != nil {
 				t.Fatal(err)
@@ -1032,6 +1183,12 @@ func TestBuildTimingsNormalOutputUnchanged(t *testing.T) {
 	// When
 	firstStdout, firstStderr, firstCode := captureBuildOutput(t, []string{dir})
 	firstFiles := outputFileTree(t, filepath.Join(dir, "out"))
+	if err := os.RemoveAll(filepath.Join(dir, "out")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, ".rotor")); err != nil {
+		t.Fatal(err)
+	}
 	timingPath := filepath.Join(t.TempDir(), "build-timings.json")
 	secondStdout, secondStderr, secondCode := captureBuildOutput(t, []string{"--timings", timingPath, dir})
 	secondFiles := outputFileTree(t, filepath.Join(dir, "out"))

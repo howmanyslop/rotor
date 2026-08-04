@@ -5,7 +5,7 @@
 #   1. Bump internal/version/version.go + package.json in lockstep
 #   2. Commit
 #   3. Tag vX.Y.Z (must match the Version constant)
-#   4. Push the tag → release.yml + npm-publish.yml
+#   4. Push the tag → release.yml
 #
 # Usage:
 #   ./scripts/release.fish                 # interactive
@@ -1194,7 +1194,7 @@ function do_full_or_bump --argument-names mode
         return 0
     end
 
-    confirm "Push HEAD and $tag to $remote? This triggers release + npm-publish." 1
+    confirm "Push HEAD and $tag to $remote? This triggers release." 1
     or begin
         warn "Tag created locally but not pushed."
         info "Push later: git push $remote HEAD && git push $remote $tag"
@@ -1208,7 +1208,6 @@ function do_full_or_bump --argument-names mode
 
     info "Pushed $tag → $remote"
     info "Watch: gh run list --workflow=release.yml --limit 5"
-    info "       gh run list --workflow=npm-publish.yml --limit 5"
 end
 
 function do_tag_only

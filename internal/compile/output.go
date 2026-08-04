@@ -74,9 +74,49 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err != nil {
 		return nil, diags, err
 	}
+	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
+	sourceFiles := projectSourceFiles(program)
+	timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
+	manifestPath := pathTranslator.BuildInfoOutputPath
+	if manifestPath == "" {
+		manifestPath = outputManifestPath(filepath.FromSlash(dir), program.Options().ConfigFilePath)
+	}
+	previousManifest, err := readIncrementalManifest(manifestPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	salt, err := incrementalSalt(program, opts, manifestPath)
+	if err != nil {
+		return nil, nil, err
+	}
+	var currentManifest *incrementalManifest
+	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
+		currentManifest, err = buildIncrementalManifest(program, sourceFiles, salt)
+		if err != nil {
+			return nil, nil, err
+		}
+		if previousManifest != nil && previousManifest.Salt == currentManifest.Salt {
+			for path, hash := range previousManifest.Outputs {
+				currentManifest.Outputs[path] = hash
+			}
+		}
+	} else {
+		currentManifest = &incrementalManifest{
+			Version: 2,
+			Salt:    salt,
+			Files:   map[string]incrementalFileState{},
+			Outputs: map[string]string{},
+		}
+	}
+	previousOutputs := map[string]string{}
+	if previousManifest != nil && previousManifest.Salt == currentManifest.Salt {
+		previousOutputs = previousManifest.Outputs
+	}
+	if err := writer.useHashes(filepath.FromSlash(dir), previousOutputs, currentManifest.Outputs); err != nil {
+		return nil, nil, err
+	}
+	defer writer.close()
 	if opts.EmitDeclarationOnly {
-		sourceFiles := projectSourceFiles(program)
-		timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
 		if !program.Options().GetEmitDeclarations() {
 			msg := "Option 'emitDeclarationOnly' cannot be specified without specifying option 'declaration' or option 'composite'."
 			return nil, []string{msg}, errors.New("compile: TypeScript diagnostics")
@@ -92,14 +132,18 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		if err != nil {
 			return nil, nil, err
 		}
+		timings.setHashSkips(writer.hashSkipCount())
+		pruneMissingOutputs(writer, currentManifest.Outputs)
+		if !sameIncrementalManifest(previousManifest, currentManifest) {
+			if err := writeIncrementalManifest(manifestPath, currentManifest); err != nil {
+				return nil, nil, err
+			}
+		}
 		timings.setEmittedEntries(len(emitted))
 		return &BuildResult{Outputs: map[string]string{}, EmittedFiles: emitted}, nil, nil
 	}
 
 	stopSelectionCleanupCopy := timings.startStage(incrementalSelectionCleanupCopyStage)
-	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
-	sourceFiles := projectSourceFiles(program)
-	timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
 	sourceOutputPaths := make([]string, len(sourceFiles))
 	for i, sourceFile := range sourceFiles {
 		sourceOutputPaths[i] = outputPathRelativeToDir(dir, pathTranslator.GetOutputPath(sourceFile.FileName()))
@@ -112,22 +156,32 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	opts.rojoCache = rojoCache
 
 	selectedFiles := sourceFiles
-	var previousManifest *incrementalManifest
-	var currentManifest *incrementalManifest
 	if program.Options().Incremental.IsTrue() && pathTranslator.BuildInfoOutputPath != "" {
-		previousManifest, err = readIncrementalManifest(pathTranslator.BuildInfoOutputPath)
-		if err != nil {
-			stopSelectionCleanupCopy()
-			return nil, nil, err
-		}
-		currentManifest, err = buildIncrementalManifest(program, sourceFiles, incrementalSalt(program, opts, pathTranslator.BuildInfoOutputPath))
-		if err != nil {
-			stopSelectionCleanupCopy()
-			return nil, nil, err
-		}
 		selectedFiles = selectIncrementalSourceFiles(sourceFiles, currentManifest, previousManifest)
 		if opts.forceFullBuild {
 			selectedFiles = sourceFiles
+		} else if len(previousOutputs) > 0 {
+			selectedPaths := make(map[string]struct{}, len(selectedFiles))
+			for _, sourceFile := range selectedFiles {
+				selectedPaths[normalizeSourceFilePath(sourceFile.FileName())] = struct{}{}
+			}
+			for outputPath := range previousOutputs {
+				absolutePath := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(outputPath))
+				info, err := writer.lstat(absolutePath)
+				if err == nil && info.Mode().IsRegular() {
+					continue
+				}
+				inputPath := strings.TrimSuffix(absolutePath, ".map")
+				for _, candidate := range pathTranslator.GetInputPaths(inputPath) {
+					selectedPaths[normalizeSourceFilePath(candidate)] = struct{}{}
+				}
+			}
+			selectedFiles = selectedFiles[:0]
+			for _, sourceFile := range sourceFiles {
+				if _, ok := selectedPaths[normalizeSourceFilePath(sourceFile.FileName())]; ok {
+					selectedFiles = append(selectedFiles, sourceFile)
+				}
+			}
 		}
 	}
 
@@ -224,6 +278,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	// reproduces the pre-parallel behavior for A/B timing.
 	wrote := make([]bool, len(relOuts))
 	jobs := make([]func() error, len(relOuts))
+	writePaths := make([]string, 0, len(relOuts)*2)
 	sourceFilesByOutput := make(map[string]*ast.SourceFile, len(selectedFiles))
 	for _, sourceFile := range selectedFiles {
 		relOut := outputPathRelativeToDir(dir, pathTranslator.GetOutputPath(sourceFile.FileName()))
@@ -261,6 +316,15 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			timings.recordOutputWrite(absOut+".map", mapWrote)
 			return err
 		}
+		absOut := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(relOut))
+		writePaths = append(writePaths, absOut)
+		if hasSourceMap {
+			writePaths = append(writePaths, absOut+".map")
+		}
+	}
+	if err := writer.prepare(writePaths); err != nil {
+		stopCompiledOutputWrites()
+		return nil, nil, err
 	}
 	err = parallelize(writeWorkers(), jobs)
 	stopCompiledOutputWrites()
@@ -286,14 +350,10 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		return nil, nil, err
 	}
 	emittedFiles = append(emittedFiles, declFiles...)
+	timings.setHashSkips(writer.hashSkipCount())
 
 	stopPersistence := timings.startStage(persistenceStage)
-	if currentManifest != nil && !sameIncrementalManifest(previousManifest, currentManifest) {
-		if err := writeIncrementalManifest(pathTranslator.BuildInfoOutputPath, currentManifest); err != nil {
-			stopPersistence()
-			return nil, nil, err
-		}
-	}
+	pruneMissingOutputs(writer, currentManifest.Outputs)
 	// rotor extension: keep the consolidated on-disk rotor.d.ts editor companion
 	// fresh for projects that reference any macro ($env / $asset / $nameof /
 	// $keys / $file / $git / $buildTime). Editors never see the synthetic
@@ -325,10 +385,15 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		if rojoCache != nil {
 			rojoCache.Persist()
 		}
-		if copyFilesGate.Persist == nil {
-			return nil
+		if copyFilesGate.Persist != nil {
+			if err := copyFilesGate.Persist(); err != nil {
+				return err
+			}
 		}
-		return copyFilesGate.Persist()
+		if currentManifest != nil && !sameIncrementalManifest(previousManifest, currentManifest) {
+			return writeIncrementalManifest(manifestPath, currentManifest)
+		}
+		return nil
 	}
 	if opts.pendingSolutionPersists != nil {
 		*opts.pendingSolutionPersists = append(*opts.pendingSolutionPersists, persist)
@@ -426,6 +491,9 @@ func emitDeclarations(program *compiler.Program, selectedPaths map[string]struct
 		return nil, err
 	}
 	timings.addScheduledDeclarationWrites(len(pending))
+	if err := writer.prepare(paths); err != nil {
+		return nil, err
+	}
 	wrote := make([]bool, len(pending))
 	writeJobs := make([]func() error, len(pending))
 	for i, write := range pending {
@@ -460,6 +528,9 @@ func writeSidecarDeclarations(declarations []sidecarOutputFile, writeOnlyChanged
 		return nil, err
 	}
 	timings.addScheduledDeclarationWrites(len(declarations))
+	if err := writer.prepare(paths); err != nil {
+		return nil, err
+	}
 	wrote := make([]bool, len(declarations))
 	jobs := make([]func() error, len(declarations))
 	for i, declaration := range declarations {
@@ -624,13 +695,7 @@ func isOutputFileOrphanedWithSourceMaps(pathTranslator *rojo.PathTranslator, out
 			return false
 		}
 	}
-	// `.d.ts.map` (and any `.map`) outputs have no direct reverse mapping, so
-	// they always look orphaned and get deleted on every build — and stay
-	// deleted after a no-op incremental build that writes nothing. When
-	// ROTOR_PRESERVE_DTS_MAPS=1, check the map's base path instead, keeping
-	// the map while its source exists (a map whose source was deleted is
-	// still cleaned up).
-	if os.Getenv("ROTOR_PRESERVE_DTS_MAPS") == "1" && strings.HasSuffix(outPath, ".map") {
+	if strings.HasSuffix(outPath, ".map") {
 		for _, inputPath := range pathTranslator.GetInputPaths(strings.TrimSuffix(outPath, ".map")) {
 			if _, err := os.Stat(inputPath); err == nil {
 				return false

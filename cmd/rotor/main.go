@@ -34,6 +34,7 @@ func main() {
 }
 
 func run(args []string) int {
+	applyRuntimePolicy()
 	if len(args) == 0 {
 		usage(os.Stderr)
 		return 1
@@ -152,6 +153,10 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  --allowCommentDirectives  allow @ts-ignore et al.")
 	fmt.Fprintln(w, "  --luau                    emit files with .luau extension (default true; --luau=false emits .lua)")
 	fmt.Fprintln(w, "  --cpuprofile <path>       write a pprof CPU profile of the build (diagnostics)")
+	fmt.Fprintln(w, "  --trace-out <path>        write a Go execution trace of the build (diagnostics)")
+	fmt.Fprintln(w, "  --blockprofile <path>     write a blocking profile sampled at 1 ms (diagnostics)")
+	fmt.Fprintln(w, "  --mutexprofile <path>     write a mutex contention profile at fraction 5 (diagnostics)")
+	fmt.Fprintln(w, "  --heapprofile <path>      write a heap profile after the build (diagnostics)")
 	fmt.Fprintln(w, "  --timings <path>          write aggregate one-shot build timings as JSON (not with --watch)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Diagnostics & watch DX (rotor extensions):")
@@ -172,7 +177,8 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  RBXTSC_WRITE_CONCURRENCY   override output-write workers (maximum 256)")
 	fmt.Fprintln(w, "  ROTOR_WRITE_WORKERS        Rotor-specific output-write worker override")
 	fmt.Fprintln(w, "  UV_THREADPOOL_SIZE         configure the Node sidecar libuv pool (not Go output writers)")
-	fmt.Fprintln(w, "  ROTOR_PRESERVE_DTS_MAPS=1  keep declaration maps while their .d.ts file still exists")
+	fmt.Fprintln(w, "  GOGC                       Go GC target percentage (default 400 when unset)")
+	fmt.Fprintln(w, "  GOMEMLIMIT                 Go memory limit (default 75% of effective memory when unset)")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Color: auto-detected for terminals; NO_COLOR disables, FORCE_COLOR forces.")
 	fmt.Fprintln(w)

@@ -121,7 +121,7 @@ A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor need
 
 ## Build options
 
-`rotor build` accepts the rbxtsc-compatible flag surface (booleans accept `--flag`, `--flag=false`, `--no-flag`): `-p/--project`, `-b/--build [path]`, `--builders <n>`, `--checkers <n>`, `--emitDeclarationOnly`, `-w/--watch`, `--usePolling`, `--verbose`, `--noInclude`, `--logTruthyChanges`, `--writeOnlyChanged`, `--writeTransformedFiles` (parsed and ignored), `--optimizedLoops`, `--type game|model|package`, `-i/--includePath`, `--rojo`, `--allowCommentDirectives`, and `--luau`. Rotor adds `--cpuprofile`, `--minify`, `--max-errors`, `--json`, `--bell`, and `--no-clear`. `--emitDeclarationOnly` requires `--build`; `--build --watch` cannot be combined with declaration-only emit. Run `rotor build --help` for the rendered descriptions.
+`rotor build` accepts the rbxtsc-compatible flag surface (booleans accept `--flag`, `--flag=false`, `--no-flag`): `-p/--project`, `-b/--build [path]`, `--builders <n>`, `--checkers <n>`, `--emitDeclarationOnly`, `-w/--watch`, `--usePolling`, `--verbose`, `--noInclude`, `--logTruthyChanges`, `--writeOnlyChanged`, `--writeTransformedFiles` (parsed and ignored), `--optimizedLoops`, `--type game|model|package`, `-i/--includePath`, `--rojo`, `--allowCommentDirectives`, and `--luau`. Rotor adds `--cpuprofile`, `--trace-out`, `--blockprofile`, `--mutexprofile`, `--heapprofile`, `--timings`, `--minify`, `--max-errors`, `--json`, `--bell`, and `--no-clear`. `--emitDeclarationOnly` requires `--build`; `--build --watch` cannot be combined with declaration-only emit. The finite profiling and timing flags cannot be combined with `--watch`. Run `rotor build --help` for the rendered descriptions.
 
 Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; merge order: defaults < rbxts < command line.
 
@@ -130,6 +130,7 @@ Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; me
 - **`--minify`** — pass every emitted `.luau`/`.lua` source through the Luau minifier (comment/whitespace stripping + `t["x"]` → `t.x`) before writing. It is opt-in; declaration and `include/` files are never minified.
 - **Code-frame diagnostics** — TypeScript, transformer, and macro errors render as grouped code frames (source line + caret/underline, keyword highlighting, OSC 8 file links, an `✗ N errors in M files` footer). `--max-errors <n>` caps the rendered frames (default 50; `0` = all). In watch mode the screen clears before each rebuild (opt out with `--no-clear`), a `✗ N errors` banner persists on the idle line until the next green build, and `--bell` rings the terminal on a fail↔pass transition.
 - **`--json`** — emit one machine-readable result object (version, ok, files, durationMs, diagnostics with `file`/`line`/`col`/`severity`/`message`) instead of styled output. Also available on `rotor check`.
+- **One-shot diagnostics** — `--cpuprofile`, `--trace-out`, `--blockprofile`, `--mutexprofile`, `--heapprofile`, and `--timings` can be combined on one build. Rotor finalizes requested profiles even when the build fails, which keeps failed-build traces usable.
 
 ### Tsconfig schema publication
 
@@ -145,7 +146,7 @@ Use `"$schema": "./rbxts-tsconfig.schema.json"` in `tsconfig.json`. The `rbxts` 
 
 `rotor build --build` drains project references in dependency order. A coordinator tsconfig with only `references` is not compiled as a project of its own. `--emitDeclarationOnly` applies to the solution build and cannot be watched. `--build --watch` watches the solution's tsconfig extends chain and Rojo topology, invalidating dependent projects when a referenced project changes.
 
-With `compilerOptions.sourceMap: true`, Rotor writes an adjacent `.luau.map` for each Luau output. The map's `sourcesContent` is the original pre-transformer TypeScript, and source-map files are not counted as emitted Luau files. `ROTOR_PRESERVE_DTS_MAPS=1` keeps a declaration map while its corresponding `.d.ts` source still exists.
+With `compilerOptions.sourceMap: true`, Rotor writes an adjacent `.luau.map` for each Luau output. The map's `sourcesContent` is the original pre-transformer TypeScript, and source-map files are not counted as emitted Luau files. Declaration maps are kept while their corresponding source exists.
 
 Transformer plugins remain compatible with the fork's `compilerOptions.plugins` shape and run through Rotor's Node sidecar. `before` transformers run before `after` transformers; `afterDeclarations` runs only during declaration emit. A plugin's `shouldTransformSourceFile` hook can skip a file, and plugin loading failures are build diagnostics. Plugin-configured builds require Node.js and the project's own `typescript` package.
 
@@ -182,6 +183,8 @@ The write-worker controls are:
 - Without either override, Rotor uses 8 Go output-write workers. Positive fractional overrides are rounded down; invalid values fall through to the next setting or this default.
 
 `UV_THREADPOOL_SIZE` may still affect the Node sidecar's libuv thread pool, but it does not select Rotor's Go output-write worker count.
+
+Rotor uses `GOGC=400` when `GOGC` is unset. When `GOMEMLIMIT` is unset, Rotor uses 75% of effective memory, clamped from 512 MiB to 16 GiB; Linux accounts for finite cgroup v1/v2 limits, while macOS and Windows use the host memory reported by the OS. Explicit environment values always win.
 
 ## Production readiness
 

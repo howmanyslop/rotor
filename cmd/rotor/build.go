@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime/pprof"
 	"strings"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"rotor/internal/compile"
 	"rotor/internal/logservice"
 	"rotor/internal/transformer"
+	"rotor/tsgo/vfs/osvfs"
 )
 
 // projectTypeChoices are the upstream --type choices (CLI/commands/build.ts
@@ -41,6 +41,10 @@ type buildArgs struct {
 	checkers            *int
 	jsonOut             bool   // rotor DX extension: emit a machine-readable result object
 	cpuprofile          string // rotor DX extension: write a pprof CPU profile here
+	traceOut            string
+	blockprofile        string
+	mutexprofile        string
+	heapprofile         string
 	timings             string
 	maxErrors           int  // rotor DX extension: cap the number of rendered code frames (0 = unlimited; default 50)
 	bell                bool // rotor DX extension (watch): ring the bell on a fail<->pass flip
@@ -154,6 +158,33 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 			continue
 		case "cpuprofile":
 			res.cpuprofile = takeValue()
+			if res.cpuprofile == "" {
+				return nil, errors.New("--cpuprofile requires a path")
+			}
+			continue
+		case "trace-out":
+			res.traceOut = takeValue()
+			if res.traceOut == "" {
+				return nil, errors.New("--trace-out requires a path")
+			}
+			continue
+		case "blockprofile":
+			res.blockprofile = takeValue()
+			if res.blockprofile == "" {
+				return nil, errors.New("--blockprofile requires a path")
+			}
+			continue
+		case "mutexprofile":
+			res.mutexprofile = takeValue()
+			if res.mutexprofile == "" {
+				return nil, errors.New("--mutexprofile requires a path")
+			}
+			continue
+		case "heapprofile":
+			res.heapprofile = takeValue()
+			if res.heapprofile == "" {
+				return nil, errors.New("--heapprofile requires a path")
+			}
 			continue
 		case "timings":
 			res.timings = takeValue()
@@ -261,6 +292,17 @@ func parseBuildArgs(args []string) (*buildArgs, error) {
 	if res.build && res.emitDeclarationOnly && res.opts.watch != nil && *res.opts.watch {
 		return nil, errors.New("--build --watch is incompatible with --emitDeclarationOnly (no Luau emit to incrementally watch)")
 	}
+	if res.opts.watch != nil && *res.opts.watch {
+		for flag, path := range map[string]string{
+			"--cpuprofile": res.cpuprofile, "--trace-out": res.traceOut,
+			"--blockprofile": res.blockprofile, "--mutexprofile": res.mutexprofile,
+			"--heapprofile": res.heapprofile, "--timings": res.timings,
+		} {
+			if path != "" {
+				return nil, fmt.Errorf("%s cannot be used with --watch", flag)
+			}
+		}
+	}
 
 	return res, nil
 }
@@ -302,7 +344,7 @@ func resolveBool(negated, hasValue bool, value, name string) (bool, error) {
 // Exit-code policy: usage errors exit 1, matching upstream
 // (`.fail(...)` sets exitCode 1, CLI/cli.ts L30-35 — rotor's earlier exit 2
 // convention was a documented divergence, removed in Phase 4).
-func cmdBuild(args []string) int {
+func cmdBuild(args []string) (exitCode int) {
 	parsed, err := parseBuildArgs(args)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "rotor build: %v\n\n", err)
@@ -317,24 +359,21 @@ func cmdBuild(args []string) int {
 		fmt.Println(version)
 		return 0
 	}
-	if parsed.timings != "" && parsed.opts.watch != nil && *parsed.opts.watch {
-		fmt.Fprintln(os.Stderr, "rotor build: --timings cannot be used with --watch")
+	if err := validateBuildDiagnosticPaths(parsed); err != nil {
+		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
 		return 1
 	}
-
-	if parsed.cpuprofile != "" {
-		f, err := os.Create(parsed.cpuprofile)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: cannot create cpu profile: %v\n", err)
-			return 1
-		}
-		defer f.Close()
-		if err := pprof.StartCPUProfile(f); err != nil {
-			fmt.Fprintf(os.Stderr, "rotor build: cannot start cpu profile: %v\n", err)
-			return 1
-		}
-		defer pprof.StopCPUProfile()
+	profiles, err := startBuildProfiles(parsed)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "rotor build: %v\n", err)
+		return 1
 	}
+	defer func() {
+		if err := profiles.stop(); err != nil {
+			fmt.Fprintf(os.Stderr, "rotor build: finalize profiles: %v\n", err)
+			exitCode = 1
+		}
+	}()
 
 	projectPath := parsed.project
 	if parsed.buildPath != "" {
@@ -445,6 +484,83 @@ func cmdBuild(args []string) int {
 	}
 	out.buildSuccess(len(result.Outputs), len(result.EmittedFiles), copiedFiles, elapsed)
 	return 0
+}
+
+func validateBuildDiagnosticPaths(args *buildArgs) error {
+	outputs := []struct {
+		name string
+		path string
+	}{
+		{"--cpuprofile", args.cpuprofile},
+		{"--trace-out", args.traceOut},
+		{"--blockprofile", args.blockprofile},
+		{"--mutexprofile", args.mutexprofile},
+		{"--heapprofile", args.heapprofile},
+		{"--timings", args.timings},
+	}
+	type resolvedOutput struct {
+		name string
+		path string
+		info os.FileInfo
+	}
+	seen := make([]resolvedOutput, 0, len(outputs))
+	for _, output := range outputs {
+		if output.path == "" {
+			continue
+		}
+		path, info, err := resolveDiagnosticOutputPath(output.path)
+		if err != nil {
+			return fmt.Errorf("resolve %s output path: %w", output.name, err)
+		}
+		if !osvfs.FS().UseCaseSensitiveFileNames() {
+			path = strings.ToLower(path)
+		}
+		for _, previous := range seen {
+			if previous.path == path || previous.info != nil && info != nil && os.SameFile(previous.info, info) {
+				return fmt.Errorf("%s and %s cannot write to the same path", previous.name, output.name)
+			}
+		}
+		seen = append(seen, resolvedOutput{name: output.name, path: path, info: info})
+	}
+	return nil
+}
+
+func resolveDiagnosticOutputPath(path string) (string, os.FileInfo, error) {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", nil, err
+	}
+	path = filepath.Clean(path)
+	for range 255 {
+		info, err := os.Stat(path)
+		if err == nil {
+			resolved, err := filepath.EvalSymlinks(path)
+			return resolved, info, err
+		}
+		if !os.IsNotExist(err) {
+			return "", nil, err
+		}
+		linkInfo, linkErr := os.Lstat(path)
+		if linkErr == nil && linkInfo.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(path)
+			if err != nil {
+				return "", nil, err
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(path), target)
+			}
+			path = filepath.Clean(target)
+			continue
+		}
+		if linkErr != nil && !os.IsNotExist(linkErr) {
+			return "", nil, linkErr
+		}
+		if parent, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+			path = filepath.Join(parent, filepath.Base(path))
+		}
+		return path, nil, nil
+	}
+	return "", nil, errors.New("too many symbolic links in diagnostic output path")
 }
 
 func newBuildOptionsReload(tsConfigPath string, parsed *buildArgs) func() (projectOptions, error) {

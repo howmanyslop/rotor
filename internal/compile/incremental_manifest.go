@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
+	stdjson "encoding/json"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,11 +12,15 @@ import (
 
 	"rotor/tsgo/ast"
 	"rotor/tsgo/compiler"
+	"rotor/tsgo/core"
+	tsjson "rotor/tsgo/json"
 )
 
 type incrementalManifest struct {
-	Salt  string                          `json:"salt"`
-	Files map[string]incrementalFileState `json:"files"`
+	Version int                             `json:"version"`
+	Salt    string                          `json:"salt"`
+	Files   map[string]incrementalFileState `json:"files"`
+	Outputs map[string]string               `json:"outputs"`
 }
 
 type incrementalFileState struct {
@@ -33,17 +37,23 @@ func readIncrementalManifest(path string) (*incrementalManifest, error) {
 		return nil, err
 	}
 	var manifest incrementalManifest
-	if err := json.Unmarshal(data, &manifest); err != nil {
+	if err := stdjson.Unmarshal(data, &manifest); err != nil {
+		return nil, nil
+	}
+	if manifest.Version != 2 {
 		return nil, nil
 	}
 	if manifest.Files == nil {
 		manifest.Files = map[string]incrementalFileState{}
 	}
+	if manifest.Outputs == nil {
+		manifest.Outputs = map[string]string{}
+	}
 	return &manifest, nil
 }
 
 func writeIncrementalManifest(path string, manifest *incrementalManifest) error {
-	data, err := json.MarshalIndent(manifest, "", "\t")
+	data, err := stdjson.MarshalIndent(manifest, "", "\t")
 	if err != nil {
 		return err
 	}
@@ -77,8 +87,10 @@ func sameIncrementalManifest(a, b *incrementalManifest) bool {
 
 func buildIncrementalManifest(program *compiler.Program, sourceFiles []*ast.SourceFile, salt string) (*incrementalManifest, error) {
 	manifest := &incrementalManifest{
-		Salt:  salt,
-		Files: make(map[string]incrementalFileState, len(sourceFiles)),
+		Version: 2,
+		Salt:    salt,
+		Files:   make(map[string]incrementalFileState, len(sourceFiles)),
+		Outputs: map[string]string{},
 	}
 	sourceSet := make(map[string]struct{}, len(sourceFiles))
 	for _, sourceFile := range sourceFiles {
@@ -96,21 +108,26 @@ func buildIncrementalManifest(program *compiler.Program, sourceFiles []*ast.Sour
 	return manifest, nil
 }
 
-func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTranslatorBuildInfoPath string) string {
+func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTranslatorBuildInfoPath string) (string, error) {
 	options := program.Options()
-	payload, _ := json.Marshal(struct {
-		Version              string `json:"version"`
-		ConfigFilePath       string `json:"configFilePath"`
-		OutDir               string `json:"outDir"`
-		TsBuildInfoFile      string `json:"tsBuildInfoFile"`
-		PathTranslatorTarget string `json:"pathTranslatorBuildInfoPath"`
-		Type                 string `json:"type"`
-		RojoConfigPath       string `json:"rojoConfigPath"`
-		IncludePath          string `json:"includePath"`
-		LuaExtension         bool   `json:"luaExtension"`
-		Declaration          bool   `json:"declaration"`
+	payload, err := tsjson.Marshal(struct {
+		Version              string                `json:"version"`
+		CompilerOptions      *core.CompilerOptions `json:"compilerOptions"`
+		ConfigFilePath       string                `json:"configFilePath"`
+		OutDir               string                `json:"outDir"`
+		TsBuildInfoFile      string                `json:"tsBuildInfoFile"`
+		PathTranslatorTarget string                `json:"pathTranslatorBuildInfoPath"`
+		Type                 string                `json:"type"`
+		RojoConfigPath       string                `json:"rojoConfigPath"`
+		IncludePath          string                `json:"includePath"`
+		LuaExtension         bool                  `json:"luaExtension"`
+		Declaration          bool                  `json:"declaration"`
+		EmitDeclarationOnly  bool                  `json:"emitDeclarationOnly"`
+		NoOptimizedLoops     bool                  `json:"noOptimizedLoops"`
+		MinifyOutput         bool                  `json:"minifyOutput"`
 	}{
-		Version:              "rotor-incremental-v1",
+		Version:              "rotor-incremental-v2",
+		CompilerOptions:      options,
 		ConfigFilePath:       options.ConfigFilePath,
 		OutDir:               options.OutDir,
 		TsBuildInfoFile:      options.TsBuildInfoFile,
@@ -120,9 +137,33 @@ func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTransla
 		IncludePath:          opts.IncludePath,
 		LuaExtension:         !opts.LuaExtension,
 		Declaration:          options.Declaration.IsTrue(),
+		EmitDeclarationOnly:  opts.EmitDeclarationOnly,
+		NoOptimizedLoops:     opts.NoOptimizedLoops,
+		MinifyOutput:         opts.MinifyOutput,
 	})
+	if err != nil {
+		return "", err
+	}
 	sum := sha256.Sum256(payload)
-	return hex.EncodeToString(sum[:])
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func pruneMissingOutputs(writer *outputWriter, outputs map[string]string) {
+	for path := range outputs {
+		info, err := writer.lstat(filepath.Join(writer.projectDir, filepath.FromSlash(path)))
+		if err != nil || !info.Mode().IsRegular() {
+			delete(outputs, path)
+		}
+	}
+}
+
+func outputManifestPath(projectDir, configPath string) string {
+	canonical, err := filepath.Abs(configPath)
+	if err != nil {
+		canonical = filepath.Clean(configPath)
+	}
+	sum := sha256.Sum256([]byte(filepath.ToSlash(canonical)))
+	return filepath.Join(projectDir, ".rotor", "cache", "output-manifests", hex.EncodeToString(sum[:])+".json")
 }
 
 func selectIncrementalSourceFiles(sourceFiles []*ast.SourceFile, current, previous *incrementalManifest) []*ast.SourceFile {

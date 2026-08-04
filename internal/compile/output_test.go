@@ -245,6 +245,41 @@ func TestBuildInfoFailureRollback(t *testing.T) {
 	}
 }
 
+func TestBuildInfoFailureAfterOutputPersistenceRollback(t *testing.T) {
+	dir := writeProject(t, "@scope/build-info-persistence-rollback-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v", err)
+	}
+
+	buildInfoPath := filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")
+	prior, err := os.ReadFile(buildInfoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(dir, "src", "main.ts"),
+		[]byte("export const value = 1;\nexport const name = $nameof(value);\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, RotorTypesFileName), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := BuildProjectWithOptions(dir, ProjectOptions{}); err == nil {
+		t.Fatal("expected rotor types persistence failure")
+	}
+	after, err := os.ReadFile(buildInfoPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(prior) {
+		t.Fatal("build info changed after post-output persistence failure")
+	}
+}
+
 func TestDuplicateOutputGuard(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "out", "same.luau")
@@ -302,6 +337,28 @@ func TestBuildProjectWriteOnlyChangedSkipsUnchangedOutputs(t *testing.T) {
 		if !info.ModTime().Equal(old) {
 			t.Fatalf("%s modtime = %v, want preserved %v", path, info.ModTime(), old)
 		}
+	}
+}
+
+func TestBuildProjectHashMatchRecreatesMissingOutput(t *testing.T) {
+	dir := writeProject(t, "@scope/missing-output-fixture", "")
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v (diags: %v)", err, diags)
+	}
+	outputPath := filepath.Join(dir, "out", "main.luau")
+	if err := os.Remove(outputPath); err != nil {
+		t.Fatal(err)
+	}
+
+	result, diags, err := BuildProjectWithOptions(dir, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("second build: %v (diags: %v)", err, diags)
+	}
+	if len(result.EmittedFiles) != 1 || result.EmittedFiles[0] != outputPath {
+		t.Fatalf("emitted files = %v, want %s", result.EmittedFiles, outputPath)
+	}
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("recreated output: %v", err)
 	}
 }
 
@@ -379,6 +436,14 @@ func TestBuildProjectEmitsDeclarationsForPackage(t *testing.T) {
 
 	if len(result.EmittedFiles) != 2 {
 		t.Fatalf("EmittedFiles = %v, want compiled file + declaration", result.EmittedFiles)
+	}
+	timings := NewBuildTimings()
+	warm, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings})
+	if err != nil {
+		t.Fatalf("warm build: %v (diags: %v)", err, diags)
+	}
+	if len(warm.EmittedFiles) != 0 || timings.Counts.ActualWrites != 0 || timings.Counts.HashSkips < 2 {
+		t.Fatalf("warm emitted=%v counts=%+v", warm.EmittedFiles, timings.Counts)
 	}
 }
 
@@ -466,20 +531,12 @@ func TestIsOutputFileOrphanedDTSMap(t *testing.T) {
 
 	pt := rojo.NewPathTranslator(srcDir, outDir, "", true, true)
 
-	t.Run("env unset keeps legacy deletion", func(t *testing.T) {
-		t.Setenv("ROTOR_PRESERVE_DTS_MAPS", "")
-		if !isOutputFileOrphaned(pt, mapPath) {
-			t.Fatal("expected .d.ts.map to be orphaned with env unset")
-		}
-	})
-	t.Run("env set preserves map while source exists", func(t *testing.T) {
-		t.Setenv("ROTOR_PRESERVE_DTS_MAPS", "1")
+	t.Run("preserves map while source exists", func(t *testing.T) {
 		if isOutputFileOrphaned(pt, mapPath) {
 			t.Fatal("expected .d.ts.map to be preserved when its source exists")
 		}
 	})
-	t.Run("env set still removes map when source is gone", func(t *testing.T) {
-		t.Setenv("ROTOR_PRESERVE_DTS_MAPS", "1")
+	t.Run("removes map when source is gone", func(t *testing.T) {
 		if err := os.Remove(sourcePath); err != nil {
 			t.Fatal(err)
 		}

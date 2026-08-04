@@ -9,6 +9,21 @@ import (
 	"time"
 )
 
+func TestIncrementalManifestV1HardCutover(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "manifest.json")
+	if err := os.WriteFile(path, []byte(`{"salt":"old","files":{}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := readIncrementalManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest != nil {
+		t.Fatalf("v1 manifest accepted: %+v", manifest)
+	}
+}
+
 func TestBuildProjectIncrementalRebuildsChangedFilesAndImporters(t *testing.T) {
 	dir := writeProject(t, "@scope/incremental-fixture", "")
 	enableIncrementalBuilds(t, dir)
@@ -51,7 +66,7 @@ func TestBuildProjectIncrementalRebuildsChangedFilesAndImporters(t *testing.T) {
 		t.Fatalf("second build diagnostics: %v", diags)
 	}
 
-	if got, want := emittedFileBases(second), []string{"main.luau", "util.luau"}; !slices.Equal(got, want) {
+	if got, want := emittedFileBases(second), []string{"util.luau"}; !slices.Equal(got, want) {
 		t.Fatalf("second build emitted files = %v, want %v", got, want)
 	}
 
@@ -64,6 +79,154 @@ func TestBuildProjectIncrementalRebuildsChangedFilesAndImporters(t *testing.T) {
 	}
 
 	_ = first
+}
+
+func TestBuildProjectIncrementalRecreatesMissingOutputs(t *testing.T) {
+	for _, relativePath := range []string{
+		"out/main.luau",
+		"out/main.luau.map",
+		"out/main.d.ts",
+		"out/main.d.ts.map",
+	} {
+		t.Run(relativePath, func(t *testing.T) {
+			allOutputs := []string{
+				"out/main.luau",
+				"out/main.luau.map",
+				"out/main.d.ts",
+				"out/main.d.ts.map",
+			}
+			dir := writeProject(t, "@scope/incremental-missing-output-fixture", "")
+			enableIncrementalBuilds(t, dir)
+
+			tsconfigPath := filepath.Join(dir, "tsconfig.json")
+			tsconfigBytes, err := os.ReadFile(tsconfigPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tsconfig := strings.Replace(
+				string(tsconfigBytes),
+				`"outDir": "out",`,
+				`"outDir": "out", "sourceMap": true, "declaration": true, "declarationMap": true,`,
+				1,
+			)
+			if err := os.WriteFile(tsconfigPath, []byte(tsconfig), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+				t.Fatalf("first build: %v (diags: %v)", err, diags)
+			}
+			old := time.Unix(100, 0)
+			for _, output := range allOutputs {
+				if err := os.Chtimes(filepath.Join(dir, filepath.FromSlash(output)), old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			path := filepath.Join(dir, filepath.FromSlash(relativePath))
+			want, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+
+			timings := NewBuildTimings()
+			if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings}); err != nil {
+				t.Fatalf("rebuild: %v (diags: %v)", err, diags)
+			}
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("missing output was not recreated: %v", err)
+			}
+			if string(got) != string(want) {
+				t.Fatal("recreated output differs from the first build")
+			}
+			if timings.Counts.ActualWrites != 1 {
+				var changed []string
+				for _, output := range allOutputs {
+					info, statErr := os.Stat(filepath.Join(dir, filepath.FromSlash(output)))
+					if statErr != nil || !info.ModTime().Equal(old) {
+						changed = append(changed, output)
+					}
+				}
+				t.Fatalf("actual writes = %d, want 1; changed outputs = %v", timings.Counts.ActualWrites, changed)
+			}
+		})
+	}
+}
+
+func TestBuildProjectIncrementalInvalidatesEmitOptionChanges(t *testing.T) {
+	dir := writeProject(t, "@scope/incremental-options-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v (diags: %v)", err, diags)
+	}
+
+	tsconfigPath := filepath.Join(dir, "tsconfig.json")
+	tsconfigBytes, err := os.ReadFile(tsconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsconfig := strings.Replace(string(tsconfigBytes), `"outDir": "out",`, `"outDir": "out", "sourceMap": true,`, 1)
+	if err := os.WriteFile(tsconfigPath, []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	timings := NewBuildTimings()
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings}); err != nil {
+		t.Fatalf("second build: %v (diags: %v)", err, diags)
+	}
+	if timings.Counts.SelectedSources != 1 {
+		t.Fatalf("selected sources = %d, want 1", timings.Counts.SelectedSources)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "out", "main.luau.map")); err != nil {
+		t.Fatalf("source map missing after sourceMap option change: %v", err)
+	}
+}
+
+func TestBuildProjectIncrementalInvalidatesPathChanges(t *testing.T) {
+	dir := writeProject(t, "@scope/incremental-paths-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	for relativePath, contents := range map[string]string{
+		"src/main.ts": "import { value } from \"alias\";\nexport const result = value;\n",
+		"src/one.ts":  "export const value = 1;\n",
+		"src/two.ts":  "export const value = 2;\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(relativePath)), []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tsconfigPath := filepath.Join(dir, "tsconfig.json")
+	tsconfigBytes, err := os.ReadFile(tsconfigPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tsconfig := strings.Replace(
+		string(tsconfigBytes),
+		`"outDir": "out",`,
+		`"outDir": "out", "baseUrl": ".", "paths": {"alias": ["src/one"]},`,
+		1,
+	)
+	if err := os.WriteFile(tsconfigPath, []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v (diags: %v)", err, diags)
+	}
+
+	tsconfig = strings.Replace(tsconfig, `"src/one"`, `"src/two"`, 1)
+	if err := os.WriteFile(tsconfigPath, []byte(tsconfig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	timings := NewBuildTimings()
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings}); err != nil {
+		t.Fatalf("second build: %v (diags: %v)", err, diags)
+	}
+	if timings.Counts.SelectedSources == 0 {
+		t.Fatal("paths option change selected no sources")
+	}
 }
 
 func enableIncrementalBuilds(t *testing.T, dir string) {
