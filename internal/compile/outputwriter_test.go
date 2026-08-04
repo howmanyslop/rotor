@@ -77,6 +77,59 @@ func TestOutputWriterPrepareRejectsPathOutsideProject(t *testing.T) {
 	}
 }
 
+func TestOutputWriterRejectsSymlinkEscape(t *testing.T) {
+	projectDir := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.Symlink(outsideDir, filepath.Join(projectDir, "out")); err != nil {
+		t.Fatal(err)
+	}
+
+	writer := newOutputWriter()
+	if err := writer.useHashes(projectDir, map[string]string{}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.close() })
+	path := filepath.Join(projectDir, "out", "main.luau")
+	if err := writer.prepare([]string{path}); err == nil {
+		t.Fatal("prepare accepted a parent symlink outside the project")
+	}
+	if _, err := os.Stat(filepath.Join(outsideDir, "main.luau")); !os.IsNotExist(err) {
+		t.Fatalf("outside output stat error = %v, want not-exist", err)
+	}
+}
+
+func TestOutputWriterRejectsFinalSymlinkEscape(t *testing.T) {
+	projectDir := t.TempDir()
+	outDir := filepath.Join(projectDir, "out")
+	if err := os.Mkdir(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	outsidePath := filepath.Join(t.TempDir(), "outside.luau")
+	if err := os.WriteFile(outsidePath, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(outDir, "main.luau")
+	if err := os.Symlink(outsidePath, outputPath); err != nil {
+		t.Fatal(err)
+	}
+
+	writer := newOutputWriter()
+	if err := writer.useHashes(projectDir, map[string]string{}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.close() })
+	if _, err := writer.write(outputPath, "replacement", false); err == nil {
+		t.Fatal("write accepted a final symlink outside the project")
+	}
+	contents, err := os.ReadFile(outsidePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(contents) != "original" {
+		t.Fatalf("outside output = %q, want original", contents)
+	}
+}
+
 func TestOutputDirectoryCreatedOnce(t *testing.T) {
 	var mkdirCalls atomic.Int32
 	var writeCalls atomic.Int32

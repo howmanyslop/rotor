@@ -24,6 +24,8 @@ type outputWriterOperations struct {
 type outputWriter struct {
 	operations    outputWriterOperations
 	caseSensitive bool
+	secureRoot    bool
+	root          *os.Root
 	prepared      sync.Map
 	projectDir    string
 	previous      map[string]string
@@ -33,18 +35,28 @@ type outputWriter struct {
 }
 
 func newOutputWriter() *outputWriter {
-	return newOutputWriterWithOperations(outputWriterOperations{
+	writer := newOutputWriterWithOperations(outputWriterOperations{
 		readFile:  os.ReadFile,
 		mkdirAll:  os.MkdirAll,
 		writeFile: os.WriteFile,
 		lstat:     os.Lstat,
 	}, osvfs.FS().UseCaseSensitiveFileNames())
+	writer.secureRoot = true
+	return writer
 }
 
-func (writer *outputWriter) useHashes(projectDir string, previous, current map[string]string) {
+func (writer *outputWriter) useHashes(projectDir string, previous, current map[string]string) error {
 	writer.projectDir = filepath.Clean(projectDir)
 	writer.previous = previous
 	writer.current = current
+	if writer.secureRoot {
+		root, err := os.OpenRoot(writer.projectDir)
+		if err != nil {
+			return err
+		}
+		writer.root = root
+	}
+	return nil
 }
 
 func newOutputWriterWithOperations(operations outputWriterOperations, caseSensitive bool) *outputWriter {
@@ -60,7 +72,13 @@ func (writer *outputWriter) write(path string, text string, writeOnlyChanged boo
 	hash := hex.EncodeToString(sum[:])
 	key := writer.outputKey(path)
 	if previous, ok := writer.previous[key]; ok && previous == hash {
-		info, err := writer.operations.lstat(path)
+		var info fs.FileInfo
+		var err error
+		if writer.root != nil {
+			info, err = writer.root.Lstat(key)
+		} else {
+			info, err = writer.operations.lstat(path)
+		}
 		if err == nil && info.Mode().IsRegular() {
 			writer.mu.Lock()
 			writer.current[key] = hash
@@ -70,12 +88,25 @@ func (writer *outputWriter) write(path string, text string, writeOnlyChanged boo
 		}
 	}
 	if writeOnlyChanged {
-		if existing, err := writer.operations.readFile(path); err == nil && bytes.Equal(existing, contents) {
+		var existing []byte
+		var err error
+		if writer.root != nil {
+			existing, err = writer.root.ReadFile(key)
+		} else {
+			existing, err = writer.operations.readFile(path)
+		}
+		if err == nil && bytes.Equal(existing, contents) {
 			writer.recordHash(key, hash)
 			return false, nil
 		}
 	}
-	if err := writer.operations.writeFile(path, contents, 0o644); err != nil {
+	var err error
+	if writer.root != nil {
+		err = writer.root.WriteFile(key, contents, 0o644)
+	} else {
+		err = writer.operations.writeFile(path, contents, 0o644)
+	}
+	if err != nil {
 		return false, err
 	}
 	writer.recordHash(key, hash)
@@ -134,8 +165,24 @@ func (writer *outputWriter) prepareParent(path string) error {
 		key = strings.ToLower(key)
 	}
 	prepare := sync.OnceValue(func() error {
+		if writer.root != nil {
+			relative, err := filepath.Rel(writer.projectDir, parent)
+			if err != nil {
+				return err
+			}
+			return writer.root.MkdirAll(relative, 0o755)
+		}
 		return writer.operations.mkdirAll(parent, 0o755)
 	})
 	actual, _ := writer.prepared.LoadOrStore(key, prepare)
 	return actual.(func() error)()
+}
+
+func (writer *outputWriter) close() error {
+	if writer.root == nil {
+		return nil
+	}
+	err := writer.root.Close()
+	writer.root = nil
+	return err
 }

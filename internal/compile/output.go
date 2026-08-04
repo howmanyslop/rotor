@@ -108,7 +108,10 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if previousManifest != nil && previousManifest.Salt == currentManifest.Salt {
 		previousOutputs = previousManifest.Outputs
 	}
-	writer.useHashes(filepath.FromSlash(dir), previousOutputs, currentManifest.Outputs)
+	if err := writer.useHashes(filepath.FromSlash(dir), previousOutputs, currentManifest.Outputs); err != nil {
+		return nil, nil, err
+	}
+	defer writer.close()
 	if opts.EmitDeclarationOnly {
 		if !program.Options().GetEmitDeclarations() {
 			msg := "Option 'emitDeclarationOnly' cannot be specified without specifying option 'declaration' or option 'composite'."
