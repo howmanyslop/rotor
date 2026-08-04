@@ -361,6 +361,32 @@ func TestBuildFiniteDiagnosticsRejectDuplicatePaths(t *testing.T) {
 	}
 }
 
+func TestBuildFiniteDiagnosticsRejectAliasedPaths(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.prof")
+	if err := os.WriteFile(target, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, makeAlias := range map[string]func(string) error{
+		"symlink":  func(path string) error { return os.Symlink(target, path) },
+		"hardlink": func(path string) error { return os.Link(target, path) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			alias := filepath.Join(dir, name+".prof")
+			if err := makeAlias(alias); err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := parseBuildArgs([]string{"--cpuprofile", target, "--trace-out", alias})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateBuildDiagnosticPaths(parsed); err == nil {
+				t.Fatal("aliased diagnostic paths accepted")
+			}
+		})
+	}
+}
+
 func TestBuildWritesCombinedProfiles(t *testing.T) {
 	dir := writeBuildableProject(t, "")
 	profileDir := t.TempDir()

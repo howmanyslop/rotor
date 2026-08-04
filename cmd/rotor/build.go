@@ -498,7 +498,12 @@ func validateBuildDiagnosticPaths(args *buildArgs) error {
 		{"--heapprofile", args.heapprofile},
 		{"--timings", args.timings},
 	}
-	seen := make(map[string]string, len(outputs))
+	type resolvedOutput struct {
+		name string
+		path string
+		info os.FileInfo
+	}
+	seen := make([]resolvedOutput, 0, len(outputs))
 	for _, output := range outputs {
 		if output.path == "" {
 			continue
@@ -508,13 +513,27 @@ func validateBuildDiagnosticPaths(args *buildArgs) error {
 			return fmt.Errorf("resolve %s output path: %w", output.name, err)
 		}
 		path = filepath.Clean(path)
+		info, statErr := os.Stat(path)
+		if statErr == nil {
+			if resolved, err := filepath.EvalSymlinks(path); err == nil {
+				path = resolved
+			}
+		} else if os.IsNotExist(statErr) {
+			if resolved, err := filepath.EvalSymlinks(filepath.Dir(path)); err == nil {
+				path = filepath.Join(resolved, filepath.Base(path))
+			}
+		} else {
+			return fmt.Errorf("stat %s output path: %w", output.name, statErr)
+		}
 		if !osvfs.FS().UseCaseSensitiveFileNames() {
 			path = strings.ToLower(path)
 		}
-		if previous, ok := seen[path]; ok {
-			return fmt.Errorf("%s and %s cannot write to the same path", previous, output.name)
+		for _, previous := range seen {
+			if previous.path == path || previous.info != nil && info != nil && os.SameFile(previous.info, info) {
+				return fmt.Errorf("%s and %s cannot write to the same path", previous.name, output.name)
+			}
 		}
-		seen[path] = output.name
+		seen = append(seen, resolvedOutput{name: output.name, path: path, info: info})
 	}
 	return nil
 }
