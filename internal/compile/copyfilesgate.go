@@ -356,7 +356,7 @@ func loadCopyFilesGatePreBuild(inputs copyFilesGateInputs) copyFilesGateOutputs 
 // filesystems), leaving that source's outputs orphaned in outDir forever.
 func copyFilesChangedSnapshot(program *compiler.Program, selectedFiles []*ast.SourceFile) BuildStateSnapshot {
 	changedFiles := selectedFiles
-	if !program.Options().Incremental.IsTrue() {
+	if !program.Options().IsIncremental() {
 		changedFiles = program.SourceFiles()
 	}
 	changed := make(map[string]struct{}, len(changedFiles))

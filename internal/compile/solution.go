@@ -281,12 +281,15 @@ func (c *SolutionCoordinator) Invalidate(paths ...string) []string {
 			reverse[reference] = append(reverse[reference], project.ConfigPath)
 		}
 	}
+	direct := map[string]struct{}{}
 	queue := []string{}
 	for _, path := range paths {
 		absolute, err := filepath.Abs(path)
 		if err == nil {
-			if _, ok := c.states[filepath.Clean(absolute)]; ok {
-				queue = append(queue, filepath.Clean(absolute))
+			configPath := filepath.Clean(absolute)
+			if _, ok := c.states[configPath]; ok {
+				direct[configPath] = struct{}{}
+				queue = append(queue, configPath)
 			}
 		}
 	}
@@ -307,7 +310,13 @@ func (c *SolutionCoordinator) Invalidate(paths ...string) []string {
 			state.UpToDate = false
 			state.BlockedBy = ""
 			state.Err = nil
-			state.forceFullBuild = true
+			// Downstream projects must rebuild fully: their inputs (the
+			// referenced project's outputs) changed, which the per-project
+			// manifest cannot track. The directly invalidated project's own
+			// source changed, so its manifest stays trustworthy.
+			if _, ok := direct[project.ConfigPath]; !ok {
+				state.forceFullBuild = true
+			}
 			c.states[project.ConfigPath] = state
 			result = append(result, project.ConfigPath)
 		}
