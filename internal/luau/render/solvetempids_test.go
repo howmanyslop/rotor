@@ -54,6 +54,66 @@ func TestTempIdsAvoidDeclaredLocals(t *testing.T) {
 	}
 }
 
+func TestTempIdsAvoidLocalFunctionDeclarations(t *testing.T) {
+	tmp := luau.TempID("foo")
+	statements := luau.NewList[luau.Statement](
+		luau.NewFunctionDeclaration(
+			true,
+			luau.ID("_foo"),
+			luau.NewList[luau.AnyIdentifier](),
+			false,
+			luau.NewList[luau.Statement](),
+		),
+		luau.NewFunctionDeclaration(
+			true,
+			tmp,
+			luau.NewList[luau.AnyIdentifier](),
+			false,
+			luau.NewList[luau.Statement](),
+		),
+	)
+	state := solveFor(statements)
+	if got := state.seenTempNodes[tmp.ID]; got != "_foo_1" {
+		t.Errorf("temp = %q, want _foo_1 (collides with local function _foo)", got)
+	}
+}
+
+func TestTempIdsAvoidIdentifierUses(t *testing.T) {
+	tmp := luau.TempID("foo")
+	statements := luau.NewList[luau.Statement](
+		luau.NewVariableDeclaration(tmp, luau.Num(1)),
+		luau.NewCallStatement(luau.NewCall(
+			luau.ID("_foo"),
+			luau.NewList[luau.Expression](),
+		)),
+	)
+	state := solveFor(statements)
+	if got := state.seenTempNodes[tmp.ID]; got != "_foo_1" {
+		t.Errorf("temp = %q, want _foo_1 (collides with identifier use _foo)", got)
+	}
+}
+
+func TestTempIdsAvoidNestedIdentifierUses(t *testing.T) {
+	tmp := luau.TempID("foo")
+	statements := luau.NewList[luau.Statement](
+		luau.NewVariableDeclaration(tmp, luau.Num(1)),
+		luau.NewFunctionDeclaration(
+			true,
+			luau.ID("later"),
+			luau.NewList[luau.AnyIdentifier](),
+			false,
+			luau.NewList[luau.Statement](luau.NewCallStatement(luau.NewCall(
+				luau.ID("_foo"),
+				luau.NewList[luau.Expression](),
+			))),
+		),
+	)
+	state := solveFor(statements)
+	if got := state.seenTempNodes[tmp.ID]; got != "_foo_1" {
+		t.Errorf("root temp = %q, want _foo_1 (collides with nested identifier use _foo)", got)
+	}
+}
+
 func TestTempIdsScopedFunctionsDontCollide(t *testing.T) {
 	// two function expressions each with their own temp: both may use "_"
 	mk := func() (*luau.TemporaryIdentifier, luau.Statement) {

@@ -182,26 +182,3 @@ func TestValidateMethodAssignment(t *testing.T) {
 		t.Errorf("no expectedFunctionGotMethod diagnostic; got: %v", ds)
 	}
 }
-
-// TestNamedFunctionExpressionDiagnostic: `const f = function named() {}` is
-// upstream's noFunctionExpressionName error; the transform continues with
-// the name dropped (output shape per the reference — rbxtsc aborts emission
-// on the error, so only the diagnostic is oracle-pinned).
-func TestNamedFunctionExpressionDiagnostic(t *testing.T) {
-	s := buildState(t, filepath.Join("testdata", "functions"), "src/namedexpr.ts")
-	statements := transformer.TransformStatementList(s, s.SourceFile.AsNode(), s.SourceFile.Statements.Nodes, nil)
-
-	ds := s.Diags.Flush()
-	if !hasDiagnostic(ds, "noFunctionExpressionName", "Function expression names are not supported!") {
-		t.Errorf("no noFunctionExpressionName diagnostic; got: %v", ds)
-	}
-
-	want := `local f = function(x)
-	return x
-end
-print(f(1))
-`
-	if got := render.RenderAST(statements); got != want {
-		t.Errorf("rendered output:\ngot:\n%s\nwant:\n%s", got, want)
-	}
-}

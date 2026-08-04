@@ -52,6 +52,42 @@ func isFullyScopedNode(node luau.Node) bool {
 	return luau.IsFunctionLike(node)
 }
 
+func identifierListContains(identifiers *luau.List[luau.AnyIdentifier], target *luau.Identifier) bool {
+	if identifiers == nil {
+		return false
+	}
+	for current := identifiers.Head; current != nil; current = current.Next {
+		if current.Value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func isIdentifierDeclaration(identifier *luau.Identifier) bool {
+	switch parent := identifier.Parent().(type) {
+	case *luau.VariableDeclaration:
+		switch left := parent.Left.(type) {
+		case *luau.Identifier:
+			return left == identifier
+		case *luau.List[luau.AnyIdentifier]:
+			return identifierListContains(left, identifier)
+		}
+	case *luau.FunctionDeclaration:
+		return parent.Localize && parent.Name == identifier ||
+			identifierListContains(parent.Parameters, identifier)
+	case *luau.FunctionExpression:
+		return identifierListContains(parent.Parameters, identifier)
+	case *luau.MethodDeclaration:
+		return identifierListContains(parent.Parameters, identifier)
+	case *luau.ForStatement:
+		return identifierListContains(parent.IDs, identifier)
+	case *luau.NumericForStatement:
+		return parent.ID == identifier
+	}
+	return false
+}
+
 // isScopeEdge mirrors upstream: node is the head (head=true) or tail
 // (head=false) statement of its parent's statements list, or of an
 // IfStatement's else-list.
@@ -93,7 +129,7 @@ func isScopeEdge(node luau.Node, head bool) bool {
 
 // solveTempIDs ports reference/luau-ast/src/LuauRenderer/solveTempIds.ts:
 // assigns rendered names to TemporaryIdentifier nodes, scope-aware so they
-// never collide with declared locals or other temps.
+// never collide with source identifiers or other temps.
 func solveTempIDs(state *RenderState, ast luau.NodeOrList) {
 	var tempIDsToProcess []*luau.TemporaryIdentifier
 	nodesToScopes := map[*luau.TemporaryIdentifier]*tempScope{}
@@ -103,9 +139,19 @@ func solveTempIDs(state *RenderState, ast luau.NodeOrList) {
 	push := func() { scopeStack = append(scopeStack, newTempScope(peek())) }
 	pop := func() { scopeStack = scopeStack[:len(scopeStack)-1] }
 	registerID := func(name string) { peek().addID(name) }
+	reserveIdentifierUse := func(name string) {
+		for scope := peek(); scope != nil; scope = scope.parent {
+			scope.addID(name)
+		}
+	}
 
 	vis := &visitor{
 		before: func(node luau.Node) {
+			if declaration, ok := node.(*luau.FunctionDeclaration); ok && declaration.Localize {
+				if identifier, ok := declaration.Name.(*luau.Identifier); ok {
+					registerID(identifier.Name)
+				}
+			}
 			if isFullyScopedNode(node) {
 				push()
 			}
@@ -116,6 +162,12 @@ func solveTempIDs(state *RenderState, ast luau.NodeOrList) {
 			case *luau.TemporaryIdentifier:
 				nodesToScopes[n] = peek()
 				tempIDsToProcess = append(tempIDsToProcess, n)
+			case *luau.Identifier:
+				if isIdentifierDeclaration(n) {
+					registerID(n.Name)
+				} else {
+					reserveIdentifierUse(n.Name)
+				}
 			case *luau.VariableDeclaration:
 				switch l := n.Left.(type) {
 				case *luau.List[luau.AnyIdentifier]:
