@@ -297,7 +297,7 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 		dir:         dir,
 		projectType: projectType,
 		env:         dotenv.Load(envDir),
-		assets:      newAssetResolver(envDir),
+		assets:      newAssetResolver(envDir, opts.Census),
 		files:       newFileResolver(envDir),
 		stamps:      resolveStampProvider(envDir),
 		rojoContext: &transformer.RojoContext{
@@ -377,7 +377,10 @@ func createCrossProjectImportPathMap(program *compiler.Program, useLuauExtension
 // constructs an Open Cloud client via cloud.FromEnv (nil when ROBLOX_API_KEY
 // is unset). With no client/creator the resolver is deterministic and offline:
 // a $asset cache hit inlines, a cache miss errors with rotorAssetNotCached.
-func newAssetResolver(projectDir string) *assetresolve.Resolver {
+// offline suppresses the cloud client so a compile can never upload. A census
+// run must not: the lockfile persist lives only on the Build path
+// (output.go), so an upload here would be forgotten and repeated every run.
+func newAssetResolver(projectDir string, offline bool) *assetresolve.Resolver {
 	lock, err := assets.LoadLockfile(projectDir)
 	if err != nil {
 		// A corrupt lockfile shouldn't abort the build; start empty so every
@@ -397,22 +400,27 @@ func newAssetResolver(projectDir string) *assetresolve.Resolver {
 		}
 	}
 
-	// Only build a cloud client when a creator is configured (uploads need an
-	// owner anyway); cloud.FromEnv returns nil without ROBLOX_API_KEY.
-	var client assets.Cloud
-	if creator.UserID != 0 || creator.GroupID != 0 {
-		if c, err := cloud.FromEnv(); err == nil {
-			client = c
-		}
-	}
-
 	return assetresolve.New(assetresolve.Options{
 		ProjectDir: projectDir,
 		Base:       base,
 		Lockfile:   lock,
-		Client:     client,
+		Client:     assetCloudClient(creator, offline),
 		Creator:    creator,
 	})
+}
+
+// assetCloudClient builds the Open Cloud client for $asset cache misses. Only
+// build one when a creator is configured (uploads need an owner anyway);
+// cloud.FromEnv returns nil without ROBLOX_API_KEY. offline returns nil
+// unconditionally.
+func assetCloudClient(creator cloud.Creator, offline bool) assets.Cloud {
+	if offline || (creator.UserID == 0 && creator.GroupID == 0) {
+		return nil
+	}
+	if c, err := cloud.FromEnv(); err == nil {
+		return c
+	}
+	return nil
 }
 
 // resolveAgainst mirrors Node path.resolve(base, p) for the two-argument

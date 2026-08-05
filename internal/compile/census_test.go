@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"rotor/internal/cloud"
 	"rotor/internal/transformer"
 	"rotor/tsgo/ast"
 )
@@ -437,4 +438,25 @@ func treeSnapshot(t *testing.T, dir string) map[string]string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+func TestCensusAssetResolverNeverUploads(t *testing.T) {
+	// Given an Open Cloud key in the environment and a configured creator —
+	// the setup where a cache-missing $asset would upload
+	t.Setenv("ROBLOX_API_KEY", "not-a-real-key")
+	creator := cloud.Creator{UserID: 1}
+
+	// When the asset cloud client is built for a census run
+	censusClient := assetCloudClient(creator, true)
+
+	// Then it is absent, so a census can never upload. The lockfile persist
+	// lives only on the Build path, so an upload here would be forgotten and
+	// repeated on the next run.
+	if censusClient != nil {
+		t.Error("census asset resolver got a cloud client")
+	}
+	// And an ordinary build still gets one.
+	if assetCloudClient(creator, false) == nil {
+		t.Error("non-census asset resolver lost its cloud client")
+	}
 }
