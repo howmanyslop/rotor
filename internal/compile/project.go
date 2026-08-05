@@ -131,10 +131,7 @@ func newProjectProgramWithOptions(projectDir, tsConfigPath string, opts ProjectO
 		return "", nil, diags, err
 	}
 	if len(opts.Overlays) > 0 {
-		if err := rejectOverlaysWithSidecar(program); err != nil {
-			return "", nil, []string{err.Error()}, err
-		}
-		matched, err := matchOverlaysToProgram(program, opts.Overlays)
+		matched, err := matchProgramOverlays(program, opts)
 		if err != nil {
 			return "", nil, []string{err.Error()}, err
 		}
@@ -143,6 +140,24 @@ func newProjectProgramWithOptions(projectDir, tsConfigPath string, opts ProjectO
 		}
 	}
 	return dir, program, nil, nil
+}
+
+// matchProgramOverlays checks the overlays against the program they were
+// applied to, and reports how many of them landed on a file it holds.
+//
+// The two rules — every overlay must match something, and a project the sidecar
+// transforms cannot be overlaid at all — are scoped to one program when there
+// is only one, and to the whole solution when opts came from
+// CompileSolutionDiagnostics. See matchSolutionOverlaysToProgram for why they
+// cannot be applied per project under --build.
+func matchProgramOverlays(program *compiler.Program, opts ProjectOptions) (int, error) {
+	if opts.solutionOverlays != nil {
+		return matchSolutionOverlaysToProgram(program, opts.Overlays, opts.solutionOverlays)
+	}
+	if err := rejectOverlaysWithSidecar(program); err != nil {
+		return 0, err
+	}
+	return matchOverlaysToProgram(program, opts.Overlays)
 }
 
 // rejectOverlaysWithSidecar refuses the combination of ProjectOptions.Overlays
@@ -583,6 +598,15 @@ type ProjectOptions struct {
 	//   - Projects that route through the transformer sidecar cannot be
 	//     overlaid at all. See rejectOverlaysWithSidecar.
 	Overlays map[string]string
+
+	// solutionOverlays is set only by CompileSolutionDiagnostics, and only on
+	// the per-project options it derives. Its presence is what tells
+	// matchProgramOverlays that this program holds one project's share of a
+	// solution's files rather than all of them, so the "every overlay must
+	// match" rule is answered against the union of every project instead of
+	// this one. Nil — every other caller — is the single-project rule,
+	// unchanged.
+	solutionOverlays *solutionOverlayMatches
 
 	forceFullBuild bool
 }

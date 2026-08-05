@@ -133,6 +133,19 @@ func (c *censusCollector) record(sourceFile *ast.SourceFile, precheck prechecked
 	c.files = append(c.files, entry)
 }
 
+// absSlashPath normalizes a path the way the program holds file names, leaving
+// an empty path empty.
+func absSlashPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return filepath.ToSlash(path)
+	}
+	return filepath.ToSlash(abs)
+}
+
 // commentDirectiveInfos re-attaches the file and position to the comment
 // directive messages the precheck produced as bare strings. The stock path
 // renders these as plain strings and has nowhere to put a location, but a
@@ -169,7 +182,14 @@ func CompileProjectDiagnostics(projectDir string, opts ProjectOptions) (*Project
 	collector := &censusCollector{}
 	opts.census = collector
 
-	census := &ProjectDiagnostics{ProjectDir: projectDir, ConfigPath: opts.TsConfigPath}
+	// Both are overwritten below with what the program resolved. They are
+	// seeded in the same absolute, slash-separated form here so that a project
+	// which fails before it has a program still attributes its diagnostics the
+	// way every other project in a solution census does.
+	census := &ProjectDiagnostics{
+		ProjectDir: absSlashPath(projectDir),
+		ConfigPath: absSlashPath(opts.TsConfigPath),
+	}
 
 	dir, program, diags, err := newProjectProgramWithOptions(projectDir, opts.TsConfigPath, opts)
 	if err != nil {
