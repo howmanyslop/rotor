@@ -130,7 +130,38 @@ func newProjectProgramWithOptions(projectDir, tsConfigPath string, opts ProjectO
 	if err != nil {
 		return "", nil, diags, err
 	}
+	if len(opts.Overlays) > 0 {
+		if err := rejectOverlaysWithSidecar(program); err != nil {
+			return "", nil, []string{err.Error()}, err
+		}
+		matched, err := matchOverlaysToProgram(program, opts.Overlays)
+		if err != nil {
+			return "", nil, []string{err.Error()}, err
+		}
+		if opts.census != nil {
+			opts.census.overlayMatches = matched
+		}
+	}
 	return dir, program, nil, nil
+}
+
+// rejectOverlaysWithSidecar refuses the combination of ProjectOptions.Overlays
+// and any project that routes through the transformer sidecar.
+//
+// The sidecar sends file NAMES to the Node worker, which reads the text off
+// DISK itself, and prepareTransformerProgram then rebuilds the program from the
+// worker's transformed output alone — discarding opts.Overlays entirely. The
+// compile would silently report disk text. Threading overlays through the
+// sidecar protocol is a separate change; until then this is an error, not a
+// silent wrong answer.
+func rejectOverlaysWithSidecar(program *compiler.Program) error {
+	switch {
+	case projectUsesTransformerPlugins(program.CommandLine()):
+		return errors.New("compile: source overlays are not supported on projects with transformer plugins (the plugin sidecar reads source from disk)")
+	case declarationUsesPathAliases(program):
+		return errors.New("compile: source overlays are not supported on projects that emit declarations with baseUrl/paths (the declaration sidecar reads source from disk)")
+	}
+	return nil
 }
 
 // projectIsPackage ports the isPackage detection of createProjectData.ts
@@ -297,7 +328,7 @@ func newProjectContext(dir string, program *compiler.Program, opts ProjectOption
 		dir:         dir,
 		projectType: projectType,
 		env:         dotenv.Load(envDir),
-		assets:      newAssetResolver(envDir, opts.Census),
+		assets:      newAssetResolver(envDir, opts.census != nil),
 		files:       newFileResolver(envDir),
 		stamps:      resolveStampProvider(envDir),
 		rojoContext: &transformer.RojoContext{
@@ -522,16 +553,18 @@ type ProjectOptions struct {
 
 	EmitDeclarationOnly bool
 
-	// Census turns the four sequential compile gates (program-option
+	// census turns the four sequential compile gates (program-option
 	// diagnostics, the per-file precheck, the global checker diagnostics, the
 	// transform drain) into record-and-continue classifications, so every file
-	// is reported instead of the compile stopping at the first failure. Off by
-	// default: stock `rotor build` / `rotor check` behavior is unchanged.
-	// CompileProjectDiagnostics is the supported entry point.
-	Census bool
-
-	// census receives the per-file classifications when Census is set. Nil
-	// discards them.
+	// is reported instead of the compile stopping at the first failure, and
+	// receives the classifications.
+	//
+	// Deliberately unexported and with no exported setter:
+	// CompileProjectDiagnostics is the only entry point that may set it. Census
+	// mode transforms type-broken files, so its verdicts must never be able to
+	// reach a Build — an external caller flipping this on a build would get
+	// silently wrong Luau written to disk with zero diagnostics. Nil is stock
+	// `rotor build` / `rotor check` behavior, unchanged.
 	census *censusCollector
 
 	// Overlays replaces the on-disk text of individual source files for the
@@ -539,6 +572,16 @@ type ProjectOptions struct {
 	// keys are normalized the same way the sidecar's transformed-file overlay
 	// is). Nothing is written back to disk. Empty (the default) leaves the
 	// filesystem wrapping byte-for-byte as it was before overlays existed.
+	//
+	// Three limits, all enforced rather than silently tolerated:
+	//   - Overlays REPLACE files; they cannot ADD one. newOverlayFS overrides
+	//     FileExists and ReadFile, not directory enumeration, so a path the
+	//     tsconfig include never walks to is never asked for.
+	//   - A key naming no file in the resulting program is an error. See
+	//     matchOverlaysToProgram: a silently ignored overlay yields a clean
+	//     report on the UNMODIFIED tree, which a caller cannot detect.
+	//   - Projects that route through the transformer sidecar cannot be
+	//     overlaid at all. See rejectOverlaysWithSidecar.
 	Overlays map[string]string
 
 	forceFullBuild bool
@@ -666,42 +709,22 @@ type compiledProjectSourceFile struct {
 type precheckedProjectSourceFile struct {
 	tsDiags      []*ast.Diagnostic
 	commentDiags []string
-	// panicErr is set when the precheck itself panicked. The transform stage
-	// has always recovered its panics (transformAndRenderSourceMapDetailed);
-	// the precheck runs the tsgo checker inside a work-group goroutine and had
-	// no such boundary, so a checker assert killed the process instead of
-	// failing the file.
-	panicErr *InternalCompilerError
-}
-
-// runPrecheckGuarded runs one file's precheck behind a recover boundary,
-// turning a checker panic into a per-file typed error.
-func runPrecheckGuarded(fileName string, run func() precheckedProjectSourceFile) (result precheckedProjectSourceFile) {
-	defer func() {
-		if r := recover(); r != nil {
-			result = precheckedProjectSourceFile{panicErr: newInternalCompilerError(fileName, r)}
-		}
-	}()
-	return run()
 }
 
 func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, map[string]string, []DiagnosticInfo, error) {
 	ctx := context.Background()
 
-	// Census mode without a collector still gets the record-and-continue gate
-	// behavior; the records simply go nowhere.
-	if opts.Census && opts.census == nil {
-		opts.census = &censusCollector{}
-	}
+	// A non-nil collector is what turns census mode on; nil is stock.
+	census := opts.census
 
 	// Gate 1 of 4. Program-level option diagnostics fail the compile before any
 	// file is transformed, mirroring CompileFile. Census mode records them as
 	// project-level diagnostics and carries on.
 	if tsDiags := program.GetProgramDiagnostics(); len(tsDiags) > 0 {
-		if !opts.Census {
+		if census == nil {
 			return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 		}
-		opts.census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags))
+		census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags))
 	}
 
 	// compileFiles.ts L102 — note the TWO dots.
@@ -716,10 +739,16 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 	for _, group := range groups {
 		group := group
 		wg.Queue(func() {
+			// Deliberately unguarded: a recover() here would be worse than the
+			// crash it catches. GetSemanticDiagnostics takes the checker mutex
+			// and releases it without defer (tsgo/compiler/program.go,
+			// collectCheckerDiagnostics), so a recovered panic leaves the lock
+			// held and this goroutine deadlocks on the next file in its checker
+			// group — a loud crash traded for a silent hang. Gate 3's
+			// GetGlobalDiagnostics is unguarded for the same reason. Fixing the
+			// lock belongs in tools/mirror/overlay, not here.
 			for i, sourceFile := range group.files {
-				prechecks[group.indices[i]] = runPrecheckGuarded(sourceFile.FileName(), func() precheckedProjectSourceFile {
-					return precheckProjectSourceFile(ctx, program, sourceFile, opts)
-				})
+				prechecks[group.indices[i]] = precheckProjectSourceFile(ctx, program, sourceFile, opts)
 			}
 		})
 	}
@@ -730,11 +759,8 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 	// so a single type error suppresses the whole transform stage. Census mode
 	// keeps the diagnostics on the file and lets execution reach the
 	// transformer.
-	if !opts.Census {
+	if census == nil {
 		for _, precheck := range prechecks {
-			if precheck.panicErr != nil {
-				return nil, nil, nil, precheck.panicErr
-			}
 			if len(precheck.tsDiags) > 0 {
 				return nil, nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
 			}
@@ -744,12 +770,13 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 		}
 	}
 
-	// Gate 3 of 4.
+	// Gate 3 of 4. Unguarded on purpose, like the precheck above: this takes
+	// and releases the checker mutex without defer.
 	if tsDiags := program.GetGlobalDiagnostics(ctx); len(tsDiags) > 0 {
-		if !opts.Census {
+		if census == nil {
 			return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
 		}
-		opts.census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags))
+		census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags))
 	}
 
 	wg = core.NewWorkGroup(program.SingleThreaded() || len(groups) <= 1)
@@ -759,11 +786,6 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 			multi := transformer.NewMultiState()
 			for i, sourceFile := range group.files {
 				index := group.indices[i]
-				// A file whose precheck panicked has no usable checker state;
-				// transforming it would only panic again.
-				if prechecks[index].panicErr != nil {
-					continue
-				}
 				results[index] = compileProjectSourceFile(ctx, dir, program, pctx, sourceFile, opts, multi, progressLabels[index])
 			}
 		})
@@ -775,9 +797,16 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 	outputs := make(map[string]string, len(results))
 	sourceMaps := make(map[string]string, len(results))
 	for i, result := range results {
-		if opts.Census {
-			opts.census.record(sourceFiles[i], prechecks[i], result, result.transformed)
-			if result.err != nil {
+		if census != nil {
+			census.record(sourceFiles[i], prechecks[i], result)
+			// Only a file that actually transformed cleanly has output worth
+			// keeping. A file that never reached the transformer leaves a
+			// zero-value result, whose relOut is ""; a type-broken one has
+			// Luau the transformer derived from broken types, which it uses
+			// for truthiness, coercion and loop lowering. Census callers
+			// discard this map anyway — this is here so that a future caller
+			// that does not cannot write either to disk.
+			if !result.transformed || result.err != nil || len(prechecks[i].tsDiags) > 0 {
 				continue
 			}
 		} else if result.err != nil {

@@ -300,9 +300,18 @@ func infoFromTSDiag(d *ast.Diagnostic) DiagnosticInfo {
 	return info
 }
 
-// lineColIn resolves a byte offset into a 1-based line and column, counting
-// bytes exactly as the CLI's disk-reading lineColOf does so the two agree on
-// every non-overlay compile.
+// lineColIn resolves a byte offset into a 1-based line and column against the
+// source text the compile actually used — which is the only text the offset is
+// an index into.
+//
+// It does NOT always agree with the CLI's disk-reading lineColOf (build.go),
+// and where they differ this one is right. lineColOf re-reads raw disk bytes,
+// while a source file's Text() has had its BOM stripped and any UTF-16 content
+// decoded to UTF-8. A UTF-8 BOM shifts every column on the first line by three;
+// a UTF-16LE file makes the disk reader's answer meaningless. Under
+// ProjectOptions.Overlays the disk bytes are not the compiled text at all.
+// lineColOf's divergence is a pre-existing bug left alone here: moving it would
+// move `rotor build --json` output.
 func lineColIn(source string, offset int) (int, int) {
 	if offset < 0 || offset > len(source) {
 		return 0, 0

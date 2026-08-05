@@ -8,13 +8,16 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
 
+	"rotor/internal/assetresolve"
 	"rotor/internal/cloud"
 	"rotor/internal/transformer"
 	"rotor/tsgo/ast"
+	"rotor/tsgo/vfs/osvfs"
 )
 
 // writeCensusProject lays down a package-type project (no Rojo file needed)
@@ -144,49 +147,6 @@ func TestTransformPanicYieldsTypedInternalCompilerError(t *testing.T) {
 	// replaces, so existing output and goldens do not move.
 	if want := "internal compiler error: transformer: identifier has no symbol"; err.Error() != want {
 		t.Errorf("Error() = %q, want %q", err.Error(), want)
-	}
-}
-
-func TestPrecheckGuardRecoversPanicIntoTypedError(t *testing.T) {
-	// Given a precheck that panics — it runs inside a work-group goroutine,
-	// where an unrecovered panic takes the whole process down
-	const fileName = "/project/src/main.ts"
-
-	// When it is run behind the guard
-	result := runPrecheckGuarded(fileName, func() precheckedProjectSourceFile {
-		panic("checker exploded")
-	})
-
-	// Then the panic is captured as a typed error naming the file
-	if result.panicErr == nil {
-		t.Fatal("precheck panic was not captured")
-	}
-	if result.panicErr.FileName != fileName {
-		t.Errorf("FileName = %q, want %q", result.panicErr.FileName, fileName)
-	}
-	if result.panicErr.Value != "checker exploded" {
-		t.Errorf("Value = %v, want the panic value", result.panicErr.Value)
-	}
-	if len(result.panicErr.Stack) == 0 {
-		t.Error("Stack is empty")
-	}
-}
-
-func TestPrecheckGuardPassesThroughNormalResults(t *testing.T) {
-	// Given a precheck that returns normally
-	want := precheckedProjectSourceFile{commentDiags: []string{"a directive diagnostic"}}
-
-	// When it is run behind the guard
-	result := runPrecheckGuarded("/project/src/main.ts", func() precheckedProjectSourceFile {
-		return want
-	})
-
-	// Then the result is untouched
-	if result.panicErr != nil {
-		t.Fatalf("unexpected panic error: %v", result.panicErr)
-	}
-	if len(result.commentDiags) != 1 || result.commentDiags[0] != want.commentDiags[0] {
-		t.Errorf("commentDiags = %v, want %v", result.commentDiags, want.commentDiags)
 	}
 }
 
@@ -390,6 +350,129 @@ func TestCompileProjectDiagnosticsOverlayIntroducesTheFailure(t *testing.T) {
 	}
 }
 
+func TestCompileProjectOverlayNamingNoFileIsAnError(t *testing.T) {
+	// Given a project and an overlay for a file that is not in it — a typo, or
+	// a path outside the include set
+	dir := writeCensusProject(t, map[string]string{"clean.ts": censusFiles["clean.ts"]})
+	missing := filepath.Join(dir, "src", "typo.ts")
+
+	// When a census is asked for
+	_, err := CompileProjectDiagnostics(dir, ProjectOptions{
+		Overlays: map[string]string{missing: censusFiles["noany.ts"]},
+	})
+
+	// Then it refuses rather than censusing the unmodified tree and calling it
+	// green
+	if err == nil {
+		t.Fatal("an overlay matching no file in the program was accepted")
+	}
+	if !strings.Contains(err.Error(), "typo.ts") {
+		t.Errorf("error = %v, want it to name the unmatched overlay", err)
+	}
+}
+
+func TestCompileProjectRelativeOverlayKeyIsAnError(t *testing.T) {
+	// Given an overlay keyed relatively — the program holds absolute paths, so
+	// this can never match
+	dir := writeCensusProject(t, map[string]string{"clean.ts": censusFiles["clean.ts"]})
+
+	// When a census is asked for
+	_, err := CompileProjectDiagnostics(dir, ProjectOptions{
+		Overlays: map[string]string{"src/clean.ts": censusFiles["noany.ts"]},
+	})
+
+	// Then it refuses
+	if err == nil {
+		t.Fatal("a relative overlay key was accepted")
+	}
+}
+
+func TestCompileProjectOverlayKeysMatchAcrossSeparatorAndCase(t *testing.T) {
+	// Given overlay keys written the ways a consumer will actually write them
+	dir := writeCensusProject(t, map[string]string{"clean.ts": censusFiles["clean.ts"]})
+	slashed := filepath.ToSlash(filepath.Join(dir, "src", "clean.ts"))
+	backslashed := filepath.FromSlash(slashed)
+
+	keys := map[string]string{"slash-separated": slashed, "backslash-separated": backslashed}
+	if !osvfs.FS().UseCaseSensitiveFileNames() {
+		keys["upper-cased"] = strings.ToUpper(slashed)
+	}
+	for name, key := range keys {
+		t.Run(name, func(t *testing.T) {
+			// When the census runs over it
+			census, err := CompileProjectDiagnostics(dir, ProjectOptions{
+				Overlays: map[string]string{key: censusFiles["noany.ts"]},
+			})
+
+			// Then it matched, and is counted
+			if err != nil {
+				t.Fatalf("CompileProjectDiagnostics: %v", err)
+			}
+			if census.OverlayMatches != 1 {
+				t.Errorf("OverlayMatches = %d, want 1", census.OverlayMatches)
+			}
+			if got := censusByFile(census)["clean.ts"].Outcome; got != FileOutcomeTransformerDiagnostic {
+				t.Errorf("clean.ts outcome = %q, want %q — the overlay did not apply", got, FileOutcomeTransformerDiagnostic)
+			}
+		})
+	}
+}
+
+// addTransformerPlugin rewrites the fixture tsconfig to declare a transformer
+// plugin, which is all projectUsesTransformerPlugins reads.
+func addTransformerPlugin(t *testing.T, dir string) {
+	t.Helper()
+	configPath := filepath.Join(dir, "tsconfig.json")
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	patched := strings.Replace(string(data), `"compilerOptions": {`,
+		`"compilerOptions": {`+"\n\t\t"+`"plugins": [{ "transform": "rbxts-transformer-fixture" }],`, 1)
+	if patched == string(data) {
+		t.Fatal("tsconfig fixture shape changed; plugin injection did not apply")
+	}
+	if err := os.WriteFile(configPath, []byte(patched), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCompileProjectOverlaysWithTransformerPluginsAreRejected(t *testing.T) {
+	// Given a project with a transformer plugin, and an overlay
+	dir := writeCensusProject(t, map[string]string{"clean.ts": censusFiles["clean.ts"]})
+	addTransformerPlugin(t, dir)
+	cleanPath := filepath.Join(dir, "src", "clean.ts")
+
+	// When a census is asked for
+	_, err := CompileProjectDiagnostics(dir, ProjectOptions{
+		Overlays: map[string]string{cleanPath: censusFiles["noany.ts"]},
+	})
+
+	// Then it refuses. The sidecar sends file NAMES and reads disk itself, then
+	// rebuilds the program on its own overlays alone — so the overlays would be
+	// discarded and the census would report disk text as `ok`.
+	if err == nil {
+		t.Fatal("overlays combined with transformer plugins were accepted")
+	}
+	if !strings.Contains(err.Error(), "transformer plugin") {
+		t.Errorf("error = %v, want it to name the transformer-plugin limitation", err)
+	}
+}
+
+func TestCompileProjectTransformerPluginsWithoutOverlaysAreUntouched(t *testing.T) {
+	// Given the same project with no overlays — the guard must not fire on the
+	// stock path, which has its own (working) sidecar handling
+	dir := writeCensusProject(t, map[string]string{"clean.ts": censusFiles["clean.ts"]})
+	addTransformerPlugin(t, dir)
+
+	// When the program is built without overlays (stopping short of the sidecar
+	// itself, which needs Node)
+	if _, _, diags, err := newProjectProgramWithOptions(dir, "", ProjectOptions{}); err != nil {
+		// Then the overlay refusal did not fire
+		t.Fatalf("overlay-free run failed: %v (diags: %v)", err, diags)
+	}
+}
+
 func TestCompileProjectDiagnosticsWritesNothingToDisk(t *testing.T) {
 	// Given a project and a snapshot of its tree
 	dir := writeCensusProject(t, censusFiles)
@@ -438,6 +521,140 @@ func treeSnapshot(t *testing.T, dir string) map[string]string {
 		t.Fatal(err)
 	}
 	return out
+}
+
+// censusCompileOutputs runs the census gates over a project and hands back the
+// outputs map compileProjectSourceFiles built — the one
+// CompileProjectDiagnostics discards. Nothing else can see it, and it is the
+// map a caller who turned census mode on for a *build* would have written to
+// disk.
+func censusCompileOutputs(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	opts := ProjectOptions{census: &censusCollector{}}
+	absDir, program, diags, err := newProjectProgramWithOptions(dir, "", opts)
+	if err != nil {
+		t.Fatalf("newProjectProgramWithOptions: %v (diags: %v)", err, diags)
+	}
+	sourceFiles := projectSourceFiles(program)
+	program, sourceFiles, prepDiags, err := prepareProjectProgramForCompile(absDir, program, sourceFiles)
+	if err != nil {
+		t.Fatalf("prepareProjectProgramForCompile: %v (diags: %v)", err, prepDiags)
+	}
+	pctx, ctxDiags, err := newProjectContext(absDir, program, opts)
+	if err != nil {
+		t.Fatalf("newProjectContext: %v (diags: %v)", err, ctxDiags)
+	}
+	outputs, _, _, err := compileProjectSourceFiles(absDir, program, pctx, sourceFiles, opts)
+	if err != nil {
+		t.Fatalf("compileProjectSourceFiles: %v", err)
+	}
+	return outputs
+}
+
+func TestCensusNeverEmitsAnOutputForAFileThatDidNotTransform(t *testing.T) {
+	// Given a project with a file the transformer panics on, alongside a clean
+	// one — the panicking file leaves a zero-value result, whose relOut is ""
+	dir := writeCensusProject(t, map[string]string{
+		"clean.ts":     censusFiles["clean.ts"],
+		"panicking.ts": censusFiles["panicking.ts"],
+	})
+
+	// When the census gates run
+	outputs := censusCompileOutputs(t, dir)
+
+	// Then no entry was keyed on the empty output path
+	if text, ok := outputs[""]; ok {
+		t.Errorf(`outputs[""] = %q; a file that never transformed must not reach the map`, text)
+	}
+	if _, ok := outputs["out/clean.luau"]; !ok {
+		t.Errorf("out/clean.luau missing; outputs: %v", keys(outputs))
+	}
+}
+
+func TestCensusNeverEmitsAnOutputForATypeBrokenFile(t *testing.T) {
+	// Given a file TypeScript rejects but the transformer gets through — the
+	// transformer uses types for truthiness, coercion and loop lowering, so
+	// its Luau for a type-broken file can be silently wrong
+	dir := writeCensusProject(t, map[string]string{
+		"clean.ts":   censusFiles["clean.ts"],
+		"typebad.ts": censusFiles["typebad.ts"],
+	})
+
+	// When the census gates run
+	outputs := censusCompileOutputs(t, dir)
+
+	// Then its output is not in the map
+	if text, ok := outputs["out/typebad.luau"]; ok {
+		t.Errorf("out/typebad.luau = %q; type-broken output must not reach the map", text)
+	}
+	if _, ok := outputs["out/clean.luau"]; !ok {
+		t.Errorf("out/clean.luau missing; outputs: %v", keys(outputs))
+	}
+}
+
+func TestCensusCollectorAccumulatesProjectDiagnostics(t *testing.T) {
+	// Given a collector
+	collector := &censusCollector{}
+
+	// When project-level diagnostics arrive from more than one gate — gate 1's
+	// program options and gate 3's global checker diagnostics both land here
+	collector.addProjectDiagnostics([]DiagnosticInfo{{Message: "gate 1"}})
+	collector.addProjectDiagnostics(nil)
+	collector.addProjectDiagnostics([]DiagnosticInfo{{Message: "gate 3a"}, {Message: "gate 3b"}})
+
+	// Then all of them are kept, in order
+	want := []string{"gate 1", "gate 3a", "gate 3b"}
+	if len(collector.diagnostics) != len(want) {
+		t.Fatalf("diagnostics = %+v, want %d entries", collector.diagnostics, len(want))
+	}
+	for i, message := range want {
+		if collector.diagnostics[i].Message != message {
+			t.Errorf("diagnostics[%d] = %q, want %q", i, collector.diagnostics[i].Message, message)
+		}
+	}
+}
+
+// assetResolverClientIsNil reads the resolver's unexported cloud client. It is
+// the only observable difference between an offline and an online resolver, and
+// the whole point of the census wiring.
+func assetResolverClientIsNil(resolver *assetresolve.Resolver) bool {
+	return reflect.ValueOf(resolver).Elem().FieldByName("client").IsNil()
+}
+
+func TestProjectContextGivesTheCensusAnOfflineAssetResolver(t *testing.T) {
+	// Given an Open Cloud key and a configured creator — the setup where a
+	// cache-missing $asset would upload
+	t.Setenv("ROBLOX_API_KEY", "not-a-real-key")
+	dir := writeCensusProject(t, map[string]string{"clean.ts": censusFiles["clean.ts"]})
+	if err := os.WriteFile(filepath.Join(dir, "rotor.toml"),
+		[]byte("[assets.creator]\ntype = \"user\"\nid = 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	absDir, program, diags, err := newProjectProgram(dir, "")
+	if err != nil {
+		t.Fatalf("newProjectProgram: %v (diags: %v)", err, diags)
+	}
+
+	// When a project context is built for a census and for a build
+	censusCtx, diags, err := newProjectContext(absDir, program, ProjectOptions{census: &censusCollector{}})
+	if err != nil {
+		t.Fatalf("newProjectContext (census): %v (diags: %v)", err, diags)
+	}
+	buildCtx, diags, err := newProjectContext(absDir, program, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("newProjectContext (build): %v (diags: %v)", err, diags)
+	}
+
+	// Then only the build one can reach the cloud. The lockfile persist lives
+	// only on the Build path, so a census upload would be forgotten and
+	// repeated on every run.
+	if !assetResolverClientIsNil(censusCtx.assets) {
+		t.Error("the census project context got a cloud client")
+	}
+	if assetResolverClientIsNil(buildCtx.assets) {
+		t.Error("the build project context lost its cloud client")
+	}
 }
 
 func TestCensusAssetResolverNeverUploads(t *testing.T) {

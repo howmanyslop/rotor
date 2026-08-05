@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"errors"
 	"path/filepath"
 
 	"rotor/tsgo/ast"
@@ -73,14 +74,20 @@ type ProjectDiagnostics struct {
 	Diagnostics []DiagnosticInfo
 	// Transformed counts the entries of Files whose Transformed is true.
 	Transformed int
+	// OverlayMatches counts the ProjectOptions.Overlays keys that named a file
+	// the program actually holds. A key that matches nothing fails the run, so
+	// a consumer can assert this equals the number of overlays it sent and know
+	// its edit was really compiled.
+	OverlayMatches int
 }
 
 // censusCollector accumulates a census while compileProjectSourceFiles runs.
 // ProjectOptions carries it out of band, the way rojoCache and
 // pendingSolutionPersists are carried.
 type censusCollector struct {
-	files       []FileDiagnostics
-	diagnostics []DiagnosticInfo
+	files          []FileDiagnostics
+	diagnostics    []DiagnosticInfo
+	overlayMatches int
 }
 
 func (c *censusCollector) addProjectDiagnostics(diags []DiagnosticInfo) {
@@ -88,11 +95,11 @@ func (c *censusCollector) addProjectDiagnostics(diags []DiagnosticInfo) {
 }
 
 // record classifies one file from its precheck and transform results.
-func (c *censusCollector) record(sourceFile *ast.SourceFile, precheck precheckedProjectSourceFile, result compiledProjectSourceFile, transformed bool) {
+func (c *censusCollector) record(sourceFile *ast.SourceFile, precheck precheckedProjectSourceFile, result compiledProjectSourceFile) {
 	entry := FileDiagnostics{
 		FileName:    sourceFile.FileName(),
 		Outcome:     FileOutcomeOK,
-		Transformed: transformed,
+		Transformed: result.transformed,
 	}
 
 	if len(precheck.tsDiags) > 0 {
@@ -101,34 +108,51 @@ func (c *censusCollector) record(sourceFile *ast.SourceFile, precheck prechecked
 	}
 	if len(precheck.commentDiags) > 0 {
 		entry.Outcome = FileOutcomeTransformerDiagnostic
-		entry.Diagnostics = append(entry.Diagnostics, stringDiagnostics(precheck.commentDiags)...)
+		entry.Diagnostics = append(entry.Diagnostics, commentDirectiveInfos(sourceFile, precheck.commentDiags)...)
 	}
 	if len(result.diags) > 0 {
 		entry.Outcome = FileOutcomeTransformerDiagnostic
 		entry.Diagnostics = append(entry.Diagnostics, result.diags...)
 	}
-	switch {
-	case precheck.panicErr != nil:
-		entry.Outcome = FileOutcomeInternalCompilerError
-		entry.InternalError = precheck.panicErr
-	case result.err != nil:
-		if ice, ok := result.err.(*InternalCompilerError); ok {
+	if result.err != nil {
+		var ice *InternalCompilerError
+		if errors.As(result.err, &ice) {
 			entry.Outcome = FileOutcomeInternalCompilerError
 			entry.InternalError = ice
-			break
-		}
-		// Anything else the transform stage failed with (a macro registration
-		// failure, for one) is rotor rejecting the file, same class as a
-		// transformer diagnostic.
-		if entry.Outcome != FileOutcomeTransformerDiagnostic {
+		} else {
+			// Anything else the transform stage failed with (a macro
+			// registration failure, for one) is rotor rejecting the file, same
+			// class as a transformer diagnostic.
 			entry.Outcome = FileOutcomeTransformerDiagnostic
-		}
-		if len(result.diags) == 0 {
-			entry.Diagnostics = append(entry.Diagnostics, DiagnosticInfo{Message: result.err.Error(), FileName: entry.FileName})
+			if len(result.diags) == 0 {
+				entry.Diagnostics = append(entry.Diagnostics, DiagnosticInfo{Message: result.err.Error(), FileName: entry.FileName})
+			}
 		}
 	}
 
 	c.files = append(c.files, entry)
+}
+
+// commentDirectiveInfos re-attaches the file and position to the comment
+// directive messages the precheck produced as bare strings. The stock path
+// renders these as plain strings and has nowhere to put a location, but a
+// census entry already knows its file — serializing it as `"file": ""` at
+// line 0 would be throwing away what the caller needs. The messages are
+// unchanged. The ts-nocheck pragma has no directive range, so the message
+// commentDirectiveDiagnostics appends for it carries the file only.
+func commentDirectiveInfos(sourceFile *ast.SourceFile, messages []string) []DiagnosticInfo {
+	fileName := sourceFile.FileName()
+	infos := make([]DiagnosticInfo, 0, len(messages))
+	for i, message := range messages {
+		info := DiagnosticInfo{Message: message, FileName: fileName}
+		if i < len(sourceFile.CommentDirectives) {
+			loc := sourceFile.CommentDirectives[i].Loc
+			info.Offset, info.Len = loc.Pos(), loc.Len()
+			info.Line, info.Col = lineColIn(sourceFile.Text(), info.Offset)
+		}
+		infos = append(infos, info)
+	}
+	return infos
 }
 
 // CompileProjectDiagnostics compiles every file of the project rooted at
@@ -139,14 +163,11 @@ func (c *censusCollector) record(sourceFile *ast.SourceFile, precheck prechecked
 //
 // The returned *ProjectDiagnostics is never nil. A non-nil error means the
 // project could not be set up far enough to census it (an unreadable tsconfig,
-// a missing Rojo project); the diagnostics collected before that point are
-// still in the result.
+// a missing Rojo project, an overlay that matched nothing); the diagnostics
+// collected before that point are still in the result.
 func CompileProjectDiagnostics(projectDir string, opts ProjectOptions) (*ProjectDiagnostics, error) {
 	collector := &censusCollector{}
-	opts.Census = true
 	opts.census = collector
-	// Never emit the include folder: the census must not touch disk.
-	opts.EmitIncludeFiles = false
 
 	census := &ProjectDiagnostics{ProjectDir: projectDir, ConfigPath: opts.TsConfigPath}
 
@@ -163,6 +184,7 @@ func CompileProjectDiagnostics(projectDir string, opts ProjectOptions) (*Project
 	_, infos, err := compileProjectProgram(dir, program, opts)
 
 	census.Files = collector.files
+	census.OverlayMatches = collector.overlayMatches
 	census.Diagnostics = append(census.Diagnostics, collector.diagnostics...)
 	for _, file := range census.Files {
 		if file.Transformed {
