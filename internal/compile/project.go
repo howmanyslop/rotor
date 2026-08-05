@@ -24,6 +24,7 @@ import (
 	"rotor/tsgo/core"
 	"rotor/tsgo/outputpaths"
 	"rotor/tsgo/tspath"
+	"rotor/tsgo/vfs"
 	"rotor/tsgo/vfs/cachedvfs"
 	"rotor/tsgo/vfs/osvfs"
 )
@@ -117,7 +118,14 @@ func newProjectProgramWithOptions(projectDir, tsConfigPath string, opts ProjectO
 	// no content blowup) behind thread-safe SyncMaps — the same wrapper tsgo's
 	// own project/LSP host uses. Safe because a build never mutates its source
 	// tree mid-pass, so cached file metadata cannot go stale.
-	fs := cachedvfs.From(SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath))
+	// Source overrides (ProjectOptions.Overlays) go through the same overlay FS
+	// the sidecar builds its transformed-source program on. The unwrapped path
+	// stays the default so a build without overlays keeps exactly the previous
+	// filesystem stack.
+	var fs vfs.FS = cachedvfs.From(SanitizeFSWithConfigPath(bundled.WrapFS(osvfs.FS()), configPath))
+	if len(opts.Overlays) > 0 {
+		fs = newOverlayFS(osvfs.FS(), configPath, normalizeOverlays(opts.Overlays))
+	}
 	program, diags, err := newProjectProgramFromFSWithOptions(dir, configPath, fs, opts.Checkers)
 	if err != nil {
 		return "", nil, diags, err
@@ -505,6 +513,13 @@ type ProjectOptions struct {
 	MinifyOutput bool
 
 	EmitDeclarationOnly bool
+
+	// Overlays replaces the on-disk text of individual source files for the
+	// lifetime of one compile, keyed by absolute path (any separator style —
+	// keys are normalized the same way the sidecar's transformed-file overlay
+	// is). Nothing is written back to disk. Empty (the default) leaves the
+	// filesystem wrapping byte-for-byte as it was before overlays existed.
+	Overlays map[string]string
 
 	forceFullBuild bool
 }
