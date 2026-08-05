@@ -42,9 +42,9 @@ func writeCensusSolutionProject(t *testing.T, dir, pkgName string, references []
 
 // solutionCensusByDir keys a solution census by the project's directory name,
 // which is what the fixtures name projects by.
-func solutionCensusByDir(projects []*ProjectDiagnostics) map[string]*ProjectDiagnostics {
-	byDir := make(map[string]*ProjectDiagnostics, len(projects))
-	for _, project := range projects {
+func solutionCensusByDir(solution *SolutionDiagnostics) map[string]*ProjectDiagnostics {
+	byDir := make(map[string]*ProjectDiagnostics, len(solution.Projects))
+	for _, project := range solution.Projects {
 		byDir[filepath.Base(filepath.FromSlash(project.ProjectDir))] = project
 	}
 	return byDir
@@ -62,7 +62,7 @@ func TestCompileSolutionDiagnosticsAttributesEveryProject(t *testing.T) {
 	})
 
 	// When the solution census runs
-	projects, err := CompileSolutionDiagnostics(filepath.Join(root, "tsconfig.json"), ProjectOptions{})
+	solution, err := CompileSolutionDiagnostics(filepath.Join(root, "tsconfig.json"), ProjectOptions{})
 	if err != nil {
 		t.Fatalf("CompileSolutionDiagnostics: %v", err)
 	}
@@ -70,14 +70,14 @@ func TestCompileSolutionDiagnosticsAttributesEveryProject(t *testing.T) {
 	// Then every project is reported separately, carrying its own files and its
 	// own attribution — one flat census could not say which project a file
 	// belonged to
-	if len(projects) != 2 {
-		t.Fatalf("projects = %d, want 2", len(projects))
+	if len(solution.Projects) != 2 {
+		t.Fatalf("projects = %d, want 2", len(solution.Projects))
 	}
-	byDir := solutionCensusByDir(projects)
+	byDir := solutionCensusByDir(solution)
 	for _, name := range []string{"alpha", "beta"} {
 		project, ok := byDir[name]
 		if !ok {
-			t.Fatalf("%s missing from the census: %+v", name, projects)
+			t.Fatalf("%s missing from the census: %+v", name, solution.Projects)
 		}
 		if !strings.HasSuffix(filepath.ToSlash(project.ConfigPath), name+"/tsconfig.json") {
 			t.Errorf("%s ConfigPath = %q, want it to name that project's tsconfig", name, project.ConfigPath)
@@ -109,7 +109,7 @@ func TestCompileSolutionDiagnosticsFailingProjectDoesNotStopTheRest(t *testing.T
 	})
 
 	// When the solution census runs
-	projects, err := CompileSolutionDiagnostics(filepath.Join(root, "tsconfig.json"), ProjectOptions{})
+	solution, err := CompileSolutionDiagnostics(filepath.Join(root, "tsconfig.json"), ProjectOptions{})
 
 	// Then the failure is reported, and the dependent project is censused
 	// anyway. A build blocks dependents of a failed project; a census that did
@@ -118,17 +118,17 @@ func TestCompileSolutionDiagnosticsFailingProjectDoesNotStopTheRest(t *testing.T
 	if err == nil {
 		t.Fatal("a project that could not be set up did not fail the run")
 	}
-	byDir := solutionCensusByDir(projects)
+	byDir := solutionCensusByDir(solution)
 	broken, ok := byDir["broken"]
 	if !ok {
-		t.Fatalf("broken missing from the census: %+v", projects)
+		t.Fatalf("broken missing from the census: %+v", solution.Projects)
 	}
 	if len(broken.Diagnostics) == 0 {
 		t.Error("the failing project carries no diagnostic explaining why")
 	}
 	app, ok := byDir["app"]
 	if !ok {
-		t.Fatalf("app missing from the census: %+v", projects)
+		t.Fatalf("app missing from the census: %+v", solution.Projects)
 	}
 	if got := censusByFile(app)["app.ts"].Outcome; got != FileOutcomeTransformerDiagnostic {
 		t.Errorf("app.ts outcome = %q, want %q — the dependent project was not censused", got, FileOutcomeTransformerDiagnostic)
@@ -147,7 +147,7 @@ func TestCompileSolutionDiagnosticsOverlayLandsInTheOwningProject(t *testing.T) 
 	})
 
 	// When one project's file is overlaid with something that fails
-	projects, err := CompileSolutionDiagnostics(filepath.Join(root, "tsconfig.json"), ProjectOptions{
+	solution, err := CompileSolutionDiagnostics(filepath.Join(root, "tsconfig.json"), ProjectOptions{
 		Overlays: map[string]string{
 			filepath.Join(root, "beta", "src", "beta.ts"): censusFiles["noany.ts"],
 		},
@@ -158,7 +158,10 @@ func TestCompileSolutionDiagnosticsOverlayLandsInTheOwningProject(t *testing.T) 
 
 	// Then the overlay applies to that project only, and is counted there. An
 	// overlay is keyed by absolute path precisely so it routes to one project.
-	byDir := solutionCensusByDir(projects)
+	byDir := solutionCensusByDir(solution)
+	if solution.OverlayMatches != 1 {
+		t.Errorf("solution OverlayMatches = %d, want 1", solution.OverlayMatches)
+	}
 	if got := censusByFile(byDir["beta"])["beta.ts"].Outcome; got != FileOutcomeTransformerDiagnostic {
 		t.Errorf("beta.ts outcome = %q, want %q — the overlay did not apply", got, FileOutcomeTransformerDiagnostic)
 	}

@@ -39,6 +39,15 @@ func (m *solutionOverlayMatches) record(matched map[string]struct{}) {
 	}
 }
 
+// count is how many DISTINCT overlay keys some project matched. Summing the
+// per-project counts would not answer this: a referenced project's sources are
+// in its dependents' programs too, so one overlay can match several projects.
+func (m *solutionOverlayMatches) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.matched)
+}
+
 // unmatched returns the caller's overlay keys, in their original spelling, that
 // no project matched.
 func (m *solutionOverlayMatches) unmatched(overlays map[string]string) []string {
@@ -101,27 +110,48 @@ func (d *solutionCensusDrainer) Drain(project SolutionProject) (*BuildResult, []
 	return &BuildResult{Outputs: map[string]string{}}, nil, nil
 }
 
+// SolutionDiagnostics is the census for a whole solution.
+//
+// Per-project attribution needed nothing added to ProjectDiagnostics: it
+// already carries ProjectDir and ConfigPath, so a slice of them says which
+// project every census belongs to. One number does not survive the split,
+// which is why this type exists rather than a bare slice — see OverlayMatches.
+type SolutionDiagnostics struct {
+	// Projects is one census per project, in dependency order (references
+	// first). Every project that produced a census is here, including after a
+	// failure.
+	Projects []*ProjectDiagnostics
+	// OverlayMatches counts the DISTINCT ProjectOptions.Overlays keys that
+	// named a file some project's program held, so a consumer can assert it
+	// equals the number of overlays it sent.
+	//
+	// It is deliberately not the sum of the projects' OverlayMatches. A
+	// referenced project's source files appear in its dependents' programs as
+	// well (TypeScript redirects a project reference to source), so one overlay
+	// legitimately matches in several projects and the sum over-counts.
+	OverlayMatches int
+}
+
 // CompileSolutionDiagnostics is CompileProjectDiagnostics for a solution: it
 // censuses every project the entry tsconfig references (and everything they
-// reference, transitively), in dependency order, and returns one
-// *ProjectDiagnostics per project.
+// reference, transitively), in dependency order.
 //
-// ProjectDiagnostics already carries ProjectDir and ConfigPath, so the slice
-// needs no new type to say which project a census belongs to. It carries no
-// per-project error, though, so a project that could not be set up at all has
-// that failure folded into its Diagnostics — exactly the conversion
-// `rotor diagnostics` already does at the top level — and the first such
-// failure is returned as the run's error once every project has been censused.
+// ProjectDiagnostics carries no per-project error, so a project that could not
+// be set up at all has that failure folded into its Diagnostics — exactly the
+// conversion `rotor diagnostics` already does at the top level — and the first
+// such failure is returned as the run's error once every project has been
+// censused.
 //
 // Like the single-project entry point it writes nothing: no outDir, no include
 // folder, no rotor.d.ts, no .tsbuildinfo.
 //
-// A non-nil error does NOT mean the returned slice is empty or useless. Every
-// project that produced a census is in it.
-func CompileSolutionDiagnostics(tsConfigPath string, entry ProjectOptions) ([]*ProjectDiagnostics, error) {
+// A non-nil error does NOT mean the result is empty or useless. Every project
+// that produced a census is in it.
+func CompileSolutionDiagnostics(tsConfigPath string, entry ProjectOptions) (*SolutionDiagnostics, error) {
+	solution := &SolutionDiagnostics{}
 	graph, err := BuildSolutionGraph(tsConfigPath, entry)
 	if err != nil {
-		return nil, err
+		return solution, err
 	}
 
 	// The same cross-project import path map a solution BUILD computes. Without
@@ -139,20 +169,21 @@ func CompileSolutionDiagnostics(tsConfigPath string, entry ProjectOptions) ([]*P
 	}
 	coordinator, err := newSolutionCoordinator(graph, drainer, metadata, effectiveSolutionBuilders(entry))
 	if err != nil {
-		return nil, err
+		return solution, err
 	}
 	if _, _, err := coordinator.Drain(); err != nil {
-		return nil, err
+		return solution, err
 	}
 
-	projects := make([]*ProjectDiagnostics, 0, len(graph.Projects))
+	solution.Projects = make([]*ProjectDiagnostics, 0, len(graph.Projects))
+	solution.OverlayMatches = drainer.overlayMatches.count()
 	var firstErr error
 	for _, project := range graph.Projects {
 		census, ok := drainer.censuses[project.ConfigPath]
 		if !ok {
 			continue
 		}
-		projects = append(projects, census)
+		solution.Projects = append(solution.Projects, census)
 		if projectErr := drainer.errs[project.ConfigPath]; projectErr != nil && firstErr == nil {
 			firstErr = projectErr
 		}
@@ -161,10 +192,10 @@ func CompileSolutionDiagnostics(tsConfigPath string, entry ProjectOptions) ([]*P
 		// Deliberately ahead of the overlay check: a project that never built a
 		// program contributed no files to match against, so reporting its
 		// overlays as unmatched would name a symptom instead of the cause.
-		return projects, firstErr
+		return solution, firstErr
 	}
 	if unmatched := drainer.overlayMatches.unmatched(entry.Overlays); len(unmatched) > 0 {
-		return projects, fmt.Errorf("compile: overlay matches no file in the solution: %s", strings.Join(unmatched, ", "))
+		return solution, fmt.Errorf("compile: overlay matches no file in the solution: %s", strings.Join(unmatched, ", "))
 	}
-	return projects, nil
+	return solution, nil
 }
