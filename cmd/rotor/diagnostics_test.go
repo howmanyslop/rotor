@@ -601,7 +601,11 @@ func TestParseDiagnosticsArgs(t *testing.T) {
 		},
 		{name: "help short", args: []string{"-h"}, wantProject: ".", wantHelp: true},
 		{name: "help long", args: []string{"--help", "--nope"}, wantProject: ".", wantHelp: true},
-		{name: "unknown flag", args: []string{"--builders", "2"}, wantErr: `unknown flag "--builders"`},
+		// --builders is no longer unknown; see
+		// TestParseDiagnosticsArgsRejectsBuildersWithoutBuild for what it does
+		// on its own now. --watch is a build flag this command has no meaning
+		// for.
+		{name: "unknown flag", args: []string{"--watch"}, wantErr: `unknown flag "--watch"`},
 	}
 
 	for _, tt := range tests {
@@ -659,7 +663,7 @@ func TestWriteDiagnosticsTextRendersEveryFailingFile(t *testing.T) {
 
 	// When it is rendered as text
 	var out, errOut strings.Builder
-	writeDiagnosticsText(&out, &errOut, census, nil, 7*time.Millisecond)
+	writeDiagnosticsText(&out, &errOut, []*compile.ProjectDiagnostics{census}, nil, 7*time.Millisecond, false)
 
 	// Then every failing file is named with its outcome, the clean one is not,
 	// multi-line diagnostics are flattened, and the summary counts them
@@ -694,7 +698,7 @@ func TestWriteDiagnosticsTextRoutesFailureToStderr(t *testing.T) {
 
 	// When it is rendered as text
 	var out, errOut strings.Builder
-	writeDiagnosticsText(&out, &errOut, census, errors.New("setup failed"), time.Millisecond)
+	writeDiagnosticsText(&out, &errOut, []*compile.ProjectDiagnostics{census}, errors.New("setup failed"), time.Millisecond, false)
 
 	// Then nothing lands in the stdout census stream, and the failure carries
 	// the command prefix every other failure of this command uses
