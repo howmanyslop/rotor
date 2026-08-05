@@ -514,6 +514,18 @@ type ProjectOptions struct {
 
 	EmitDeclarationOnly bool
 
+	// Census turns the four sequential compile gates (program-option
+	// diagnostics, the per-file precheck, the global checker diagnostics, the
+	// transform drain) into record-and-continue classifications, so every file
+	// is reported instead of the compile stopping at the first failure. Off by
+	// default: stock `rotor build` / `rotor check` behavior is unchanged.
+	// CompileProjectDiagnostics is the supported entry point.
+	Census bool
+
+	// census receives the per-file classifications when Census is set. Nil
+	// discards them.
+	census *censusCollector
+
 	// Overlays replaces the on-disk text of individual source files for the
 	// lifetime of one compile, keyed by absolute path (any separator style —
 	// keys are normalized the same way the sidecar's transformed-file overlay
@@ -636,6 +648,11 @@ type compiledProjectSourceFile struct {
 	sourceMap string
 	diags     []DiagnosticInfo
 	err       error
+	// transformed records that the transformer ran to completion and returned
+	// a verdict on this file — diagnostics included. Only a panic, or a
+	// failure before the transform started, leaves it false. Census mode
+	// reports the total so a silently shrinking census is visible.
+	transformed bool
 }
 
 type precheckedProjectSourceFile struct {
@@ -663,10 +680,20 @@ func runPrecheckGuarded(fileName string, run func() precheckedProjectSourceFile)
 func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, map[string]string, []DiagnosticInfo, error) {
 	ctx := context.Background()
 
-	// Program-level option diagnostics fail the compile before any file is
-	// transformed, mirroring CompileFile.
+	// Census mode without a collector still gets the record-and-continue gate
+	// behavior; the records simply go nowhere.
+	if opts.Census && opts.census == nil {
+		opts.census = &censusCollector{}
+	}
+
+	// Gate 1 of 4. Program-level option diagnostics fail the compile before any
+	// file is transformed, mirroring CompileFile. Census mode records them as
+	// project-level diagnostics and carries on.
 	if tsDiags := program.GetProgramDiagnostics(); len(tsDiags) > 0 {
-		return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+		if !opts.Census {
+			return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+		}
+		opts.census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags))
 	}
 
 	// compileFiles.ts L102 — note the TWO dots.
@@ -690,19 +717,31 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 	}
 	wg.RunAndWait()
 
-	for _, precheck := range prechecks {
-		if precheck.panicErr != nil {
-			return nil, nil, nil, precheck.panicErr
-		}
-		if len(precheck.tsDiags) > 0 {
-			return nil, nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
-		}
-		if len(precheck.commentDiags) > 0 {
-			return nil, nil, stringDiagnostics(precheck.commentDiags), errors.New("compile: comment directive diagnostics")
+	// Gate 2 of 4, the one that matters most: this returns at the FIRST file
+	// with type errors, before the transform work group below is ever queued —
+	// so a single type error suppresses the whole transform stage. Census mode
+	// keeps the diagnostics on the file and lets execution reach the
+	// transformer.
+	if !opts.Census {
+		for _, precheck := range prechecks {
+			if precheck.panicErr != nil {
+				return nil, nil, nil, precheck.panicErr
+			}
+			if len(precheck.tsDiags) > 0 {
+				return nil, nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
+			}
+			if len(precheck.commentDiags) > 0 {
+				return nil, nil, stringDiagnostics(precheck.commentDiags), errors.New("compile: comment directive diagnostics")
+			}
 		}
 	}
+
+	// Gate 3 of 4.
 	if tsDiags := program.GetGlobalDiagnostics(ctx); len(tsDiags) > 0 {
-		return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+		if !opts.Census {
+			return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+		}
+		opts.census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags))
 	}
 
 	wg = core.NewWorkGroup(program.SingleThreaded() || len(groups) <= 1)
@@ -711,16 +750,29 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 		wg.Queue(func() {
 			multi := transformer.NewMultiState()
 			for i, sourceFile := range group.files {
-				results[group.indices[i]] = compileProjectSourceFile(ctx, dir, program, pctx, sourceFile, opts, multi, progressLabels[group.indices[i]])
+				index := group.indices[i]
+				// A file whose precheck panicked has no usable checker state;
+				// transforming it would only panic again.
+				if prechecks[index].panicErr != nil {
+					continue
+				}
+				results[index] = compileProjectSourceFile(ctx, dir, program, pctx, sourceFile, opts, multi, progressLabels[index])
 			}
 		})
 	}
 	wg.RunAndWait()
 
+	// Gate 4 of 4: the transform drain. Census mode accumulates every file's
+	// outcome instead of returning at the first error.
 	outputs := make(map[string]string, len(results))
 	sourceMaps := make(map[string]string, len(results))
-	for _, result := range results {
-		if result.err != nil {
+	for i, result := range results {
+		if opts.Census {
+			opts.census.record(sourceFiles[i], prechecks[i], result, result.transformed)
+			if result.err != nil {
+				continue
+			}
+		} else if result.err != nil {
 			return nil, nil, result.diags, result.err
 		}
 		outputs[result.relOut] = result.text
@@ -815,6 +867,7 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 			result.err = err
 			return
 		}
+		result.transformed = true
 		if len(diags) > 0 {
 			result.diags = diags
 			result.err = errors.New("compile: transformer diagnostics")
