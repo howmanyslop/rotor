@@ -12,20 +12,6 @@ import (
 	"rotor/internal/compile"
 )
 
-// `rotor diagnostics` reports what happened to EVERY file of a project instead
-// of stopping at the first failure, optionally over in-memory source
-// overrides. It is the census counterpart of `rotor check`: check is
-// typecheck-only and never runs the transformer, while build stops at the
-// first gate that trips.
-//
-// It is strictly read-only. It routes through compile.CompileProjectDiagnostics
-// (the write-free path), never emits the include folder, and — unlike
-// `rotor check` — never refreshes rotor.d.ts.
-//
-// Exit code, deliberately unlike build and check: 0 whenever a census was
-// produced, even one full of diagnostics, and 1 only when no census could be
-// produced at all. This command reports; it does not gate. Callers read `ok`
-// and the per-file outcomes to decide what to do about the contents.
 type diagnosticsArgs struct {
 	project  string
 	jsonOut  bool
@@ -56,6 +42,11 @@ func parseDiagnosticsArgs(args []string) (*diagnosticsArgs, error) {
 			continue
 		}
 
+		// One or two leading dashes name a flag; "---project" does not.
+		if strings.HasPrefix(a, "---") {
+			return nil, fmt.Errorf("unknown flag %q", a)
+		}
+
 		name := strings.TrimLeft(a, "-")
 		value, hasValue := "", false
 		if eq := strings.IndexByte(name, '='); eq >= 0 {
@@ -64,10 +55,11 @@ func parseDiagnosticsArgs(args []string) (*diagnosticsArgs, error) {
 		}
 		switch name {
 		case "p", "project":
-			if !hasValue {
-				if i+1 >= len(args) {
-					return nil, fmt.Errorf("flag %q needs a value", a)
-				}
+			// build.go's takeValue semantics: a flag-like next token is NOT a
+			// value. Consuming it unconditionally made `--project --json` set
+			// the project to "--json", walk up to the cwd, and census a
+			// different project with no error and no JSON.
+			if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
 				i++
 				value = args[i]
 			}
@@ -125,10 +117,33 @@ type jsonFileDiagnostics struct {
 // file), and the census adds the per-file array plus the transformed count.
 type jsonDiagnosticsResult struct {
 	jsonResult
-	Transformed     int                   `json:"transformed"`
+	Transformed int `json:"transformed"`
+	// OverlayMatches counts the stdin overlays that named a file the program
+	// actually holds. An overlay that matches nothing fails the run, so a
+	// consumer can assert this equals the number it sent.
+	OverlayMatches  int                   `json:"overlayMatches"`
 	FileDiagnostics []jsonFileDiagnostics `json:"fileDiagnostics"`
 }
 
+// cmdDiagnostics reports what happened to EVERY file of a project instead of
+// stopping at the first failure, optionally over in-memory source overrides.
+// It is the census counterpart of `rotor check`: check is typecheck-only and
+// never runs the transformer, while build stops at the first gate that trips.
+//
+// It is strictly read-only. It routes through compile.CompileProjectDiagnostics
+// (the write-free path), never emits the include folder, and — unlike
+// `rotor check` — never refreshes rotor.d.ts.
+//
+// Overlays arrive as JSON on stdin, which must be closed (or a terminal) or
+// the read blocks. They REPLACE the text of files already in the program;
+// they cannot add one, and a key naming no file in the program fails the run.
+// Projects with transformer plugins cannot be overlaid at all — the plugin
+// sidecar reads source from disk.
+//
+// Exit code, deliberately unlike build and check: 0 whenever a census was
+// produced, even one full of diagnostics, and 1 only when no census could be
+// produced at all. This command reports; it does not gate. Callers read `ok`
+// and the per-file outcomes to decide what to do about the contents.
 func cmdDiagnostics(args []string) int {
 	parsed, err := parseDiagnosticsArgs(args)
 	if err != nil {
@@ -157,9 +172,15 @@ func cmdDiagnostics(args []string) int {
 	// The tsconfig `rbxts` key still decides the project's SHAPE — type, Rojo
 	// project, include path — without which some projects cannot be censused
 	// at all. allowCommentDirectives is the one option deliberately not
-	// honored: a census that let @ts-ignore suppress diagnostics would
-	// silently under-report, which is the single failure this command exists
-	// to prevent.
+	// honored.
+	//
+	// Note what that does and does not buy. It does NOT stop @ts-ignore from
+	// suppressing type errors: the directive is honored inside the checker and
+	// no flag rotor sets undoes that. What it does is add rotor's own
+	// "comment directives are not supported" diagnostic, so a file leaning on
+	// them shows up as transformerDiagnostic instead of passing as `ok`. The
+	// cost is a divergence from `rotor build` for a project that legitimately
+	// sets allowCommentDirectives: true.
 	rbxtsOptions, err := readRbxtsOptionsChecked(tsConfigPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sloptor diagnostics: %v\n", err)
@@ -179,7 +200,7 @@ func cmdDiagnostics(args []string) int {
 	if parsed.jsonOut {
 		writeDiagnosticsJSON(os.Stdout, census, censusErr, elapsed)
 	} else {
-		writeDiagnosticsText(os.Stdout, census, censusErr, elapsed)
+		writeDiagnosticsText(os.Stdout, os.Stderr, census, censusErr, elapsed)
 	}
 	if censusErr != nil {
 		return 1
@@ -205,8 +226,13 @@ func readDiagnosticsRequest(r io.Reader) (diagnosticsRequest, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return request, nil
 	}
-	if err := json.Unmarshal(data, &request); err != nil {
-		return request, fmt.Errorf("parse overlay request from stdin: %w", err)
+	// Unknown fields are rejected: a typo'd wrapper key would otherwise parse
+	// to an empty overlay set and census the unmodified tree, reporting green
+	// on source the caller never asked about.
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&request); err != nil {
+		return diagnosticsRequest{}, fmt.Errorf("parse overlay request from stdin: %w", err)
 	}
 	return request, nil
 }
@@ -221,6 +247,7 @@ func writeDiagnosticsJSON(w io.Writer, census *compile.ProjectDiagnostics, censu
 			Diagnostics: []jsonDiagnostic{},
 		},
 		Transformed:     census.Transformed,
+		OverlayMatches:  census.OverlayMatches,
 		FileDiagnostics: []jsonFileDiagnostics{},
 	}
 	for _, d := range census.Diagnostics {
@@ -274,11 +301,15 @@ func diagnosticsJSONDiagnostic(d compile.DiagnosticInfo) jsonDiagnostic {
 	return jd
 }
 
-func writeDiagnosticsText(w io.Writer, census *compile.ProjectDiagnostics, censusErr error, elapsed time.Duration) {
+// writeDiagnosticsText renders the census as text on w. A failure to produce
+// one at all is not census output, so it goes to errw with the same
+// "sloptor diagnostics: " prefix every other failure of this command carries —
+// never into the stdout stream a consumer is parsing.
+func writeDiagnosticsText(w, errw io.Writer, census *compile.ProjectDiagnostics, censusErr error, elapsed time.Duration) {
 	if censusErr != nil {
-		fmt.Fprintf(w, "census failed: %v\n", censusErr)
+		fmt.Fprintf(errw, "sloptor diagnostics: census failed: %v\n", censusErr)
 		for _, d := range census.Diagnostics {
-			fmt.Fprintf(w, "  %s\n", oneLine(d.Message))
+			fmt.Fprintf(errw, "  %s\n", oneLine(d.Message))
 		}
 		return
 	}

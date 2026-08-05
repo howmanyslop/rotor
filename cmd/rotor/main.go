@@ -199,4 +199,5 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  -v, --version             print sloptor's version")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Exit codes: 0 = success, 1 = any failure (compile errors, config or usage errors — rbxtsc parity)")
+	fmt.Fprintln(w, "            except `diagnostics`, which exits 0 whenever a census was produced")
 }
