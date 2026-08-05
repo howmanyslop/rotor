@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 
 	"rotor/internal/luau/render"
@@ -32,6 +33,14 @@ type DiagnosticInfo struct {
 	FileName string // empty when the diagnostic has no source location
 	Offset   int    // byte offset of the span start into the file's source
 	Len      int    // span length in bytes; 0 means "no usable span"
+
+	// Line and Col are the 1-based position of Offset, resolved against the
+	// source text the compile actually used. Both are 0 when there is no
+	// location. Resolving them here rather than re-reading the file is what
+	// makes positions correct under ProjectOptions.Overlays, where the text on
+	// disk is not the text that was compiled.
+	Line int
+	Col  int
 }
 
 // CompileFile compiles projectDir/relPath to Luau source text. It returns the
@@ -137,13 +146,42 @@ func transformAndRenderDetailed(state *transformer.State) (text string, diags []
 	return text, diags, err
 }
 
+// InternalCompilerError is the recovered form of a transformer panic: the
+// ported upstream asserts panic on internal invariant violations, and a user's
+// source must surface as an error rather than crash the process. It carries
+// the offending file, the panic value, and the stack captured at recover time
+// so a consumer can attribute the failure to a panic site without matching on
+// the message text.
+//
+// Error() is byte-identical to the untyped fmt.Errorf it replaced, so nothing
+// that renders compile errors moves.
+type InternalCompilerError struct {
+	// FileName is the source file being transformed, empty when the panic
+	// happened outside a file's transform.
+	FileName string
+	// Value is the value passed to panic().
+	Value any
+	// Stack is debug.Stack() captured inside the recovering deferred function.
+	Stack []byte
+}
+
+func (e *InternalCompilerError) Error() string {
+	return fmt.Sprintf("internal compiler error: %v", e.Value)
+}
+
+// newInternalCompilerError captures the current goroutine's stack. Call it
+// only from inside a recover()ing deferred function.
+func newInternalCompilerError(fileName string, value any) *InternalCompilerError {
+	return &InternalCompilerError{FileName: fileName, Value: value, Stack: debug.Stack()}
+}
+
 func transformAndRenderSourceMapDetailed(state *transformer.State, sourceFile *ast.SourceFile) (text, sourceMap string, diags []DiagnosticInfo, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			text = ""
 			sourceMap = ""
 			diags = nil
-			err = fmt.Errorf("internal compiler error: %v", r)
+			err = newInternalCompilerError(stateFileName(state), r)
 		}
 	}()
 
@@ -191,6 +229,15 @@ func preEmitProjectFileDiagnostics(ctx context.Context, program *compiler.Progra
 	return tsDiags
 }
 
+// stateFileName names the file a transform State is working on, tolerating a
+// nil State/SourceFile so the recover path can never panic itself.
+func stateFileName(state *transformer.State) string {
+	if state == nil || state.SourceFile == nil {
+		return ""
+	}
+	return state.SourceFile.FileName()
+}
+
 func diagnosticStrings(diags []*ast.Diagnostic) []string {
 	out := make([]string, len(diags))
 	for i, d := range diags {
@@ -233,6 +280,7 @@ func infoFromNodeDiag(d transformer.Diagnostic) DiagnosticInfo {
 			start := scanner.GetTokenPosOfNode(d.Node, sf, false)
 			info.FileName = sf.FileName()
 			info.Offset = start
+			info.Line, info.Col = lineColIn(sf.Text(), start)
 			if end := d.Node.End(); end > start {
 				info.Len = end - start
 			}
@@ -247,8 +295,37 @@ func infoFromTSDiag(d *ast.Diagnostic) DiagnosticInfo {
 		info.FileName = f.FileName()
 		info.Offset = d.Pos()
 		info.Len = d.Len()
+		info.Line, info.Col = lineColIn(f.Text(), d.Pos())
 	}
 	return info
+}
+
+// lineColIn resolves a byte offset into a 1-based line and column against the
+// source text the compile actually used — which is the only text the offset is
+// an index into.
+//
+// It does NOT always agree with the CLI's disk-reading lineColOf (build.go),
+// and where they differ this one is right. lineColOf re-reads raw disk bytes,
+// while a source file's Text() has had its BOM stripped and any UTF-16 content
+// decoded to UTF-8. A UTF-8 BOM shifts every column on the first line by three;
+// a UTF-16LE file makes the disk reader's answer meaningless. Under
+// ProjectOptions.Overlays the disk bytes are not the compiled text at all.
+// lineColOf's divergence is a pre-existing bug left alone here: moving it would
+// move `rotor build --json` output.
+func lineColIn(source string, offset int) (int, int) {
+	if offset < 0 || offset > len(source) {
+		return 0, 0
+	}
+	line, col := 1, 1
+	for i := 0; i < offset; i++ {
+		if source[i] == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+	}
+	return line, col
 }
 
 func commentDirectiveDiagnostics(sourceFile *ast.SourceFile) []string {

@@ -44,6 +44,8 @@ func run(args []string) int {
 		return cmdCheck(args[1:])
 	case "build":
 		return cmdBuild(args[1:])
+	case "diagnostics":
+		return cmdDiagnostics(args[1:])
 	case "doctor":
 		return cmdDoctor(args[1:])
 	case "minify":
@@ -92,6 +94,13 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  sloptor check [path] [-w]      typecheck the project (native, full strictness)")
 	fmt.Fprintln(w, "  sloptor build [options] [path] compile the project to Luau (writes to tsconfig outDir")
 	fmt.Fprintln(w, "                               and copies the runtime library to the include folder)")
+	fmt.Fprintln(w, "  sloptor diagnostics [options] [path]")
+	fmt.Fprintln(w, "                               report EVERY file's outcome instead of stopping at the")
+	fmt.Fprintln(w, "                               first failure: ok / typeError / transformerDiagnostic /")
+	fmt.Fprintln(w, "                               internalCompilerError. Reads optional in-memory source")
+	fmt.Fprintln(w, "                               overlays as JSON on stdin ({\"overlays\":{\"<abs path>\":")
+	fmt.Fprintln(w, "                               \"<source>\"}}); writes nothing to disk. Exits 0 whenever a")
+	fmt.Fprintln(w, "                               census was produced — read `ok` to judge the contents")
 	fmt.Fprintln(w, "  sloptor doctor [path]          diagnose the project setup (tsconfig, @rbxts packages,")
 	fmt.Fprintln(w, "                               Node.js + transformer plugins, Rojo wiring)")
 	fmt.Fprintln(w, "  sloptor minify <file> [-o out] minify a Luau file (strips comments + whitespace,")
@@ -190,4 +199,5 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  -v, --version             print sloptor's version")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Exit codes: 0 = success, 1 = any failure (compile errors, config or usage errors — rbxtsc parity)")
+	fmt.Fprintln(w, "            except `diagnostics`, which exits 0 whenever a census was produced")
 }

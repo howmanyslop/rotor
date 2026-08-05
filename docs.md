@@ -58,6 +58,10 @@ These compile under rotor but not under rbxtsc. Unaffected code accepted by rbxt
 ```
 rotor check [path] [-w]       typecheck the project (native, full strictness)
 rotor build [options] [path]  compile the project to Luau
+rotor diagnostics [options] [path]
+                              report EVERY file's outcome instead of stopping at
+                              the first failure, optionally over in-memory source
+                              overlays read as JSON on stdin; writes nothing
 rotor doctor [path]           diagnose the setup: tsconfig, @rbxts packages,
                               Node.js + transformer plugins, Rojo wiring
 rotor minify <file> [-o out] [--no-index-field]
@@ -104,7 +108,7 @@ rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
 
 - `path` is a project directory containing a `tsconfig.json` (defaults to the current directory).
 - Your project needs `node_modules` installed (rotor reads the same `@rbxts` types).
-- Exit codes: `0` = success, `1` = any failure (diagnostics, config, or usage) — matching upstream `rbxtsc`.
+- Exit codes: `0` = success, `1` = any failure (diagnostics, config, or usage) — matching upstream `rbxtsc`. The one exception is `rotor diagnostics`, which reports rather than gates: see below.
 - Plugin-backed builds need Node.js at runtime for the transformer sidecar.
 
 `rotor build` compiles every file in the project, writes the `.luau` outputs to your tsconfig's `outDir` exactly where `rbxtsc` would put them, runs the cleanup/copy pipeline, emits `.d.ts` files when `compilerOptions.declaration` is enabled, and copies `include/` (RuntimeLib.lua, Promise.lua — verbatim from roblox-ts). Try it on rotor's own test fixture project:
@@ -116,6 +120,78 @@ rotor build testdata/diff/project
 # ...
 # compiled 43 files in 189 ms
 ```
+
+### rotor diagnostics
+
+`rotor build` is four sequential gates — program-option diagnostics, the
+per-file precheck, the global checker diagnostics, the transform drain — and
+each returns at the first failure. The precheck gate returns *before* the
+transform stage is queued, so **one type error anywhere hides every transformer
+diagnostic in the project**. `rotor check` is complete but typecheck-only: it
+never runs the transformer, so it surfaces no `noAny`-class diagnostic at all.
+
+`rotor diagnostics` runs every file and reports each one's outcome:
+
+| Outcome | Meaning |
+|---|---|
+| `ok` | transformed with no diagnostics. Not a claim that the Luau is *correct* — rotor uses types for truthiness, coercion and loop lowering, so output for a type-broken file can be silently wrong |
+| `typeError` | TypeScript rejected it. It is transformed anyway |
+| `transformerDiagnostic` | rotor's transformer rejected it (or it uses comment directives) |
+| `internalCompilerError` | a ported upstream assert fired; the panic value and stack are reported |
+
+```powershell
+rotor diagnostics --project tsconfig.json --json
+'{"overlays":{"C:/proj/src/main.ts":"export const x = 1;\n"}}' | rotor diagnostics --json
+```
+
+- `--project <path>` selects the config; `--checkers <n>` sets checker count.
+- `--json` extends the `rotor build --json` result shape with a `transformed`
+  count, an `overlayMatches` count and a `fileDiagnostics` array. Diagnostic
+  positions are resolved against the text that was compiled, so they stay
+  correct under overlays.
+- Note that `files` means something different here than it does for `build`:
+  for `build` it counts files **written**, for `diagnostics` it counts files
+  **censused** (nothing is written).
+- It is **read-only**: no `outDir`, no `include/`, no `rotor.d.ts`, and `$asset`
+  resolution runs offline so a census can never upload.
+- The tsconfig `rbxts` key still sets the project's shape (`type`, `rojo`,
+  `includePath`), but `allowCommentDirectives` is forced off. That does **not**
+  stop `@ts-ignore` from hiding type errors — a directive suppresses them
+  inside the checker, and no compiler flag rotor sets undoes that. What forcing
+  it off does is add rotor's own "comment directives are not supported"
+  diagnostic, so a file that leans on them is at least visible as
+  `transformerDiagnostic` rather than passing as `ok`. The cost is a
+  divergence: a project that legitimately sets `allowCommentDirectives: true`
+  gets a diagnostic here that `rotor build` does not report.
+- **Exit code, unlike `build` and `check`: 0 whenever a census was produced**,
+  even one full of diagnostics; 1 only when none could be. This command reports,
+  it does not gate. Read `ok` and the per-file outcomes to judge the contents.
+
+#### Overlays
+
+Optional **overlays** arrive as JSON on **stdin** (`{"overlays":{"<absolute
+path>":"<source>"}}`) and replace those files' text for the run only. argv
+cannot carry a project's worth of source, which is why this is stdin.
+
+- **stdin must be closed**, or the reader blocks. An interactive terminal is
+  detected and treated as "no overlays"; a pipe left open is not.
+- Overlays **replace** files, they cannot **add** them. The overlay filesystem
+  overrides `FileExists` and `ReadFile` only, not directory enumeration, so a
+  key naming a path the tsconfig `include` never walks to reaches nothing.
+- A key that matches **no file in the program is an error**, not a silent
+  no-op. Compare `overlayMatches` against the number you sent: a green census
+  of the unmodified tree is exactly the failure this prevents. Keys may use
+  either separator, and match case-insensitively where the filesystem does.
+- Unknown top-level fields in the request are rejected, so a typo'd wrapper key
+  fails instead of parsing to an empty overlay set.
+- Overlays **cannot be combined with transformer plugins** (or with declaration
+  emit through `baseUrl`/`paths`). Those route through the Node sidecar, which
+  is handed file *names* and reads the text off disk itself; the overlays would
+  be silently discarded and disk text reported as `ok`. The combination is
+  refused instead.
+
+Solution builds (`--build`), project references and per-project attribution are
+not supported yet.
 
 A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor needs the rbxts project around it (`package.json` with `@rbxts/compiler-types` + `@rbxts/types` installed, `tsconfig.json`, `default.project.json`). The fixture project above is a minimal working example of that setup.
 
