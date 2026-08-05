@@ -277,7 +277,7 @@ jobs:
     needs: [validate, publish]
     permissions:
       contents: write
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
 
     steps:
       - name: Check out repository
@@ -285,11 +285,9 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Install communique
-        run: |
-          curl -sSL https://github.com/jdx/communique/releases/latest/download/communique-x86_64-unknown-linux-gnu.tar.gz -o /tmp/communique.tar.gz
-          tar -xzf /tmp/communique.tar.gz -C /usr/local/bin
-          communique --version
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: communique
 
       - env:
           GITHUB_TOKEN: ${{ github.token }}
