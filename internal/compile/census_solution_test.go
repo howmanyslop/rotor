@@ -247,9 +247,8 @@ func TestSolutionOverlaysRejectAPluginProjectTheyDoReach(t *testing.T) {
 	addTransformerPlugin(t, dir)
 
 	// When this project of the solution is prepared
-	_, err := solutionOverlayProgram(t, dir, map[string]string{
-		filepath.Join(dir, "src", "clean.ts"): censusFiles["noany.ts"],
-	})
+	overlaid := filepath.Join(dir, "src", "clean.ts")
+	tracker, err := solutionOverlayProgram(t, dir, map[string]string{overlaid: censusFiles["noany.ts"]})
 
 	// Then it refuses, exactly as a single-project run does. The sidecar would
 	// read that file off disk and discard the overlay, so the census would
@@ -259,6 +258,11 @@ func TestSolutionOverlaysRejectAPluginProjectTheyDoReach(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "transformer plugin") {
 		t.Errorf("error = %v, want it to name the transformer-plugin limitation", err)
+	}
+	// And the overlay counts as having reached a project, so the run reports
+	// the refusal rather than sending the caller after a phantom typo
+	if got := tracker.unmatched(map[string]string{overlaid: ""}); len(got) != 0 {
+		t.Errorf("unmatched = %v, want the refused project's overlay recorded as matched", got)
 	}
 }
 

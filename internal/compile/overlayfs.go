@@ -59,12 +59,16 @@ func matchOverlaysToProgram(program *compiler.Program, overlays map[string]strin
 // a run in which nothing of the caller's could be discarded.
 func matchSolutionOverlaysToProgram(program *compiler.Program, overlays map[string]string, tracker *solutionOverlayMatches) (int, error) {
 	matched, _ := overlayKeysInProgram(program, overlays)
+	// Recorded before the refusal below, not after: an overlay that reached a
+	// project rotor then refused did reach a project, and reporting it as
+	// matching nothing anywhere would send the caller looking for a typo
+	// instead of reading the refusal.
+	tracker.record(matched)
 	if len(matched) > 0 {
 		if err := rejectOverlaysWithSidecar(program); err != nil {
 			return 0, err
 		}
 	}
-	tracker.record(matched)
 	return len(matched), nil
 }
 
