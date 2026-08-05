@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 
 	"rotor/internal/luau/render"
@@ -137,13 +138,42 @@ func transformAndRenderDetailed(state *transformer.State) (text string, diags []
 	return text, diags, err
 }
 
+// InternalCompilerError is the recovered form of a transformer panic: the
+// ported upstream asserts panic on internal invariant violations, and a user's
+// source must surface as an error rather than crash the process. It carries
+// the offending file, the panic value, and the stack captured at recover time
+// so a consumer can attribute the failure to a panic site without matching on
+// the message text.
+//
+// Error() is byte-identical to the untyped fmt.Errorf it replaced, so nothing
+// that renders compile errors moves.
+type InternalCompilerError struct {
+	// FileName is the source file being transformed, empty when the panic
+	// happened outside a file's transform.
+	FileName string
+	// Value is the value passed to panic().
+	Value any
+	// Stack is debug.Stack() captured inside the recovering deferred function.
+	Stack []byte
+}
+
+func (e *InternalCompilerError) Error() string {
+	return fmt.Sprintf("internal compiler error: %v", e.Value)
+}
+
+// newInternalCompilerError captures the current goroutine's stack. Call it
+// only from inside a recover()ing deferred function.
+func newInternalCompilerError(fileName string, value any) *InternalCompilerError {
+	return &InternalCompilerError{FileName: fileName, Value: value, Stack: debug.Stack()}
+}
+
 func transformAndRenderSourceMapDetailed(state *transformer.State, sourceFile *ast.SourceFile) (text, sourceMap string, diags []DiagnosticInfo, err error) {
 	defer func() {
 		if r := recover(); r != nil {
 			text = ""
 			sourceMap = ""
 			diags = nil
-			err = fmt.Errorf("internal compiler error: %v", r)
+			err = newInternalCompilerError(stateFileName(state), r)
 		}
 	}()
 
@@ -189,6 +219,15 @@ func preEmitProjectFileDiagnostics(ctx context.Context, program *compiler.Progra
 	tsDiags := program.GetSyntacticDiagnostics(ctx, sourceFile)
 	tsDiags = append(tsDiags, program.GetSemanticDiagnostics(ctx, sourceFile)...)
 	return tsDiags
+}
+
+// stateFileName names the file a transform State is working on, tolerating a
+// nil State/SourceFile so the recover path can never panic itself.
+func stateFileName(state *transformer.State) string {
+	if state == nil || state.SourceFile == nil {
+		return ""
+	}
+	return state.SourceFile.FileName()
 }
 
 func diagnosticStrings(diags []*ast.Diagnostic) []string {

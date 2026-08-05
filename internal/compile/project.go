@@ -641,6 +641,23 @@ type compiledProjectSourceFile struct {
 type precheckedProjectSourceFile struct {
 	tsDiags      []*ast.Diagnostic
 	commentDiags []string
+	// panicErr is set when the precheck itself panicked. The transform stage
+	// has always recovered its panics (transformAndRenderSourceMapDetailed);
+	// the precheck runs the tsgo checker inside a work-group goroutine and had
+	// no such boundary, so a checker assert killed the process instead of
+	// failing the file.
+	panicErr *InternalCompilerError
+}
+
+// runPrecheckGuarded runs one file's precheck behind a recover boundary,
+// turning a checker panic into a per-file typed error.
+func runPrecheckGuarded(fileName string, run func() precheckedProjectSourceFile) (result precheckedProjectSourceFile) {
+	defer func() {
+		if r := recover(); r != nil {
+			result = precheckedProjectSourceFile{panicErr: newInternalCompilerError(fileName, r)}
+		}
+	}()
+	return run()
 }
 
 func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *projectContext, sourceFiles []*ast.SourceFile, opts ProjectOptions) (map[string]string, map[string]string, []DiagnosticInfo, error) {
@@ -665,13 +682,18 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 		group := group
 		wg.Queue(func() {
 			for i, sourceFile := range group.files {
-				prechecks[group.indices[i]] = precheckProjectSourceFile(ctx, program, sourceFile, opts)
+				prechecks[group.indices[i]] = runPrecheckGuarded(sourceFile.FileName(), func() precheckedProjectSourceFile {
+					return precheckProjectSourceFile(ctx, program, sourceFile, opts)
+				})
 			}
 		})
 	}
 	wg.RunAndWait()
 
 	for _, precheck := range prechecks {
+		if precheck.panicErr != nil {
+			return nil, nil, nil, precheck.panicErr
+		}
 		if len(precheck.tsDiags) > 0 {
 			return nil, nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
 		}
