@@ -33,6 +33,14 @@ type DiagnosticInfo struct {
 	FileName string // empty when the diagnostic has no source location
 	Offset   int    // byte offset of the span start into the file's source
 	Len      int    // span length in bytes; 0 means "no usable span"
+
+	// Line and Col are the 1-based position of Offset, resolved against the
+	// source text the compile actually used. Both are 0 when there is no
+	// location. Resolving them here rather than re-reading the file is what
+	// makes positions correct under ProjectOptions.Overlays, where the text on
+	// disk is not the text that was compiled.
+	Line int
+	Col  int
 }
 
 // CompileFile compiles projectDir/relPath to Luau source text. It returns the
@@ -272,6 +280,7 @@ func infoFromNodeDiag(d transformer.Diagnostic) DiagnosticInfo {
 			start := scanner.GetTokenPosOfNode(d.Node, sf, false)
 			info.FileName = sf.FileName()
 			info.Offset = start
+			info.Line, info.Col = lineColIn(sf.Text(), start)
 			if end := d.Node.End(); end > start {
 				info.Len = end - start
 			}
@@ -286,8 +295,28 @@ func infoFromTSDiag(d *ast.Diagnostic) DiagnosticInfo {
 		info.FileName = f.FileName()
 		info.Offset = d.Pos()
 		info.Len = d.Len()
+		info.Line, info.Col = lineColIn(f.Text(), d.Pos())
 	}
 	return info
+}
+
+// lineColIn resolves a byte offset into a 1-based line and column, counting
+// bytes exactly as the CLI's disk-reading lineColOf does so the two agree on
+// every non-overlay compile.
+func lineColIn(source string, offset int) (int, int) {
+	if offset < 0 || offset > len(source) {
+		return 0, 0
+	}
+	line, col := 1, 1
+	for i := 0; i < offset; i++ {
+		if source[i] == '\n' {
+			line++
+			col = 1
+		} else {
+			col++
+		}
+	}
+	return line, col
 }
 
 func commentDirectiveDiagnostics(sourceFile *ast.SourceFile) []string {

@@ -255,7 +255,9 @@ func diagnosticsJSONDiagnostic(d compile.DiagnosticInfo) jsonDiagnostic {
 	jd := jsonDiagnostic{Severity: severity, Message: d.Message}
 	if d.FileName != "" {
 		jd.File = relForDisplay(d.FileName)
-		jd.Line, jd.Col = lineColOf(d.FileName, d.Offset)
+		// Positions come from the compile, not from re-reading the file: under
+		// overlays the text on disk is not the text that was compiled.
+		jd.Line, jd.Col = d.Line, d.Col
 	}
 	return jd
 }

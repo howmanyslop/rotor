@@ -199,6 +199,74 @@ func TestCmdDiagnosticsOverlaysFromStdin(t *testing.T) {
 	}
 }
 
+func TestCmdDiagnosticsOverlayPositionsComeFromTheOverlay(t *testing.T) {
+	// Given a one-line file on disk, and an overlay that appends a type error
+	// well past the end of it — positions resolved against disk would be lost
+	dir := writeDiagnosticsProject(t, map[string]string{"main.ts": "export const clean = 1;\n"})
+	mainPath := filepath.Join(dir, "src", "main.ts")
+	request, err := json.Marshal(map[string]any{
+		"overlays": map[string]string{
+			mainPath: "export const clean = 1;\n\n\n\nexport const broken: string = 5;\n",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When the census runs
+	output, code := captureStdout(t, func() int {
+		return withStdin(t, string(request), func() int {
+			return cmdDiagnostics([]string{"--project", dir, "--json"})
+		})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; output:\n%s", code, output)
+	}
+
+	// Then the diagnostic points at the overlay's line 5, not at nothing
+	res := decodeDiagnosticsResult(t, output)
+	file := diagnosticsByFile(res)["main.ts"]
+	if len(file.Diagnostics) == 0 {
+		t.Fatalf("main.ts carries no diagnostics: %+v", file)
+	}
+	d := file.Diagnostics[0]
+	if d.Line != 5 {
+		t.Errorf("line = %d, want 5 (the overlay's broken line)", d.Line)
+	}
+	if d.Col != 14 {
+		t.Errorf("col = %d, want 14 (the `broken` identifier)", d.Col)
+	}
+}
+
+func TestCmdDiagnosticsPositionsAgreeWithTheDiskReader(t *testing.T) {
+	// Given a type error in a file with nothing overlaid on it
+	dir := writeDiagnosticsProject(t, map[string]string{
+		"main.ts": "export const clean = 1;\n\nexport const broken: string = 5;\n",
+	})
+
+	// When the census runs
+	output, code := captureStdout(t, func() int {
+		return withStdin(t, "", func() int {
+			return cmdDiagnostics([]string{"--project", dir, "--json"})
+		})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; output:\n%s", code, output)
+	}
+
+	// Then its position matches what build's and check's disk-reading resolver
+	// would have produced — the two must not drift apart
+	res := decodeDiagnosticsResult(t, output)
+	file := diagnosticsByFile(res)["main.ts"]
+	if len(file.Diagnostics) == 0 {
+		t.Fatalf("main.ts carries no diagnostics: %+v", file)
+	}
+	d := file.Diagnostics[0]
+	if d.Line != 3 || d.Col != 14 {
+		t.Errorf("line/col = %d/%d, want 3/14", d.Line, d.Col)
+	}
+}
+
 func TestCmdDiagnosticsInternalErrorCarriesStack(t *testing.T) {
 	// Given a file that makes the transformer panic
 	dir := writeDiagnosticsProject(t, map[string]string{"main.ts": "export const x = neverDeclared;\n"})
