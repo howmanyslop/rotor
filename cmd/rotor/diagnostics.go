@@ -154,11 +154,23 @@ func cmdDiagnostics(args []string) int {
 	}
 	dir := filepath.Dir(tsConfigPath)
 
-	opts := compile.ProjectOptions{
-		TsConfigPath: tsConfigPath,
-		Checkers:     parsed.checkers,
-		Overlays:     request.Overlays,
+	// The tsconfig `rbxts` key still decides the project's SHAPE — type, Rojo
+	// project, include path — without which some projects cannot be censused
+	// at all. allowCommentDirectives is the one option deliberately not
+	// honored: a census that let @ts-ignore suppress diagnostics would
+	// silently under-report, which is the single failure this command exists
+	// to prevent.
+	rbxtsOptions, err := readRbxtsOptionsChecked(tsConfigPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sloptor diagnostics: %v\n", err)
+		return 1
 	}
+	merged := mergeProjectOptions(defaultProjectOptions, rbxtsOptions)
+	merged.allowCommentDirectives = false
+
+	opts := projectCompileOptions(tsConfigPath, merged)
+	opts.Checkers = parsed.checkers
+	opts.Overlays = request.Overlays
 
 	start := time.Now()
 	census, censusErr := compile.CompileProjectDiagnostics(dir, opts)

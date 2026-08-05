@@ -324,6 +324,60 @@ func TestCmdDiagnosticsWritesNothingToDisk(t *testing.T) {
 	}
 }
 
+func TestCmdDiagnosticsHonorsTheRbxtsKey(t *testing.T) {
+	// Given a project whose package name is NOT scoped, so it is inferred as a
+	// model and needs a Rojo file — and whose tsconfig `rbxts` key overrides
+	// the type to package instead
+	dir := writeDiagnosticsProject(t, map[string]string{"main.ts": "export const clean = 1;\n"})
+	mustWrite(t, filepath.Join(dir, "package.json"), `{"name":"unscoped-fixture"}`)
+	config := mustRead(t, filepath.Join(dir, "tsconfig.json"))
+	mustWrite(t, filepath.Join(dir, "tsconfig.json"),
+		strings.Replace(config, "{\n", "{\n\t\"rbxts\": { \"type\": \"package\" },\n", 1))
+
+	// When the census runs
+	output, code := captureStdout(t, func() int {
+		return withStdin(t, "", func() int {
+			return cmdDiagnostics([]string{"--project", dir, "--json"})
+		})
+	})
+
+	// Then the override applied and the project censused
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; output:\n%s", code, output)
+	}
+	if res := decodeDiagnosticsResult(t, output); !res.OK {
+		t.Errorf("ok = false; diagnostics: %+v", res.Diagnostics)
+	}
+}
+
+func TestCmdDiagnosticsNeverAllowsCommentDirectives(t *testing.T) {
+	// Given a project that turns allowCommentDirectives ON and a file using
+	// one — a census that honored it would silently under-report
+	dir := writeDiagnosticsProject(t, map[string]string{
+		"main.ts": "// @ts-ignore\nexport const clean = 1;\n",
+	})
+	config := mustRead(t, filepath.Join(dir, "tsconfig.json"))
+	mustWrite(t, filepath.Join(dir, "tsconfig.json"),
+		strings.Replace(config, "{\n", "{\n\t\"rbxts\": { \"allowCommentDirectives\": true },\n", 1))
+
+	// When the census runs
+	output, code := captureStdout(t, func() int {
+		return withStdin(t, "", func() int {
+			return cmdDiagnostics([]string{"--project", dir, "--json"})
+		})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; output:\n%s", code, output)
+	}
+
+	// Then the directive is still reported
+	res := decodeDiagnosticsResult(t, output)
+	file := diagnosticsByFile(res)["main.ts"]
+	if file.Outcome != "transformerDiagnostic" {
+		t.Errorf("main.ts outcome = %q (diags %+v), want transformerDiagnostic", file.Outcome, file.Diagnostics)
+	}
+}
+
 func TestCmdDiagnosticsSetupFailureExitsNonZero(t *testing.T) {
 	// Given a directory with no project in it
 	dir := t.TempDir()
@@ -387,6 +441,15 @@ func TestUsageMentionsDiagnostics(t *testing.T) {
 	if !strings.Contains(sb.String(), "diagnostics") {
 		t.Error("usage does not mention the diagnostics subcommand")
 	}
+}
+
+func mustRead(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 // treeEntries lists every path under dir, sorted, as "<rel> <size>".
