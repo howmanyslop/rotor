@@ -83,6 +83,12 @@ type projectContext struct {
 	// State (concurrency-safe; reads memoized). The interface type lets tests
 	// inject a deterministic fake via stampProviderOverride.
 	stamps transformer.StampProvider
+
+	// sourceTraces maps each file the transformer sidecar reprinted back to the
+	// text on disk. Every position this pass produces is an index into the
+	// reprint, so a diagnostic is only reportable after it has been through
+	// these. Empty for a project with no transformer plugins.
+	sourceTraces diagnosticTraces
 }
 
 // newProjectProgram builds the tsgo Program for projectDir over the sanitized
@@ -686,7 +692,7 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 
 func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOptions) (map[string]string, []DiagnosticInfo, error) {
 	sourceFiles := projectSourceFiles(program)
-	program, sourceFiles, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles)
+	program, sourceFiles, traces, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles)
 	if err != nil {
 		return nil, stringDiagnostics(diags), err
 	}
@@ -694,6 +700,7 @@ func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOp
 	if err != nil {
 		return nil, stringDiagnostics(pctxDiags), err
 	}
+	pctx.sourceTraces = traces
 	outputs, _, infos, err := compileProjectSourceFiles(dir, program, pctx, sourceFiles, opts)
 	return outputs, infos, err
 }
@@ -740,15 +747,18 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 
 	// A non-nil collector is what turns census mode on; nil is stock.
 	census := opts.census
+	if census != nil {
+		census.traces = pctx.sourceTraces
+	}
 
 	// Gate 1 of 4. Program-level option diagnostics fail the compile before any
 	// file is transformed, mirroring CompileFile. Census mode records them as
 	// project-level diagnostics and carries on.
 	if tsDiags := program.GetProgramDiagnostics(); len(tsDiags) > 0 {
 		if census == nil {
-			return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+			return nil, nil, tsDiagnosticInfos(tsDiags, pctx.sourceTraces), errors.New("compile: TypeScript diagnostics")
 		}
-		census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags))
+		census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags, pctx.sourceTraces))
 	}
 
 	// compileFiles.ts L102 — note the TWO dots.
@@ -786,7 +796,7 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 	if census == nil {
 		for _, precheck := range prechecks {
 			if len(precheck.tsDiags) > 0 {
-				return nil, nil, tsDiagnosticInfos(precheck.tsDiags), errors.New("compile: TypeScript diagnostics")
+				return nil, nil, tsDiagnosticInfos(precheck.tsDiags, pctx.sourceTraces), errors.New("compile: TypeScript diagnostics")
 			}
 			if len(precheck.commentDiags) > 0 {
 				return nil, nil, stringDiagnostics(precheck.commentDiags), errors.New("compile: comment directive diagnostics")
@@ -798,9 +808,9 @@ func compileProjectSourceFiles(dir string, program *compiler.Program, pctx *proj
 	// and releases the checker mutex without defer.
 	if tsDiags := program.GetGlobalDiagnostics(ctx); len(tsDiags) > 0 {
 		if census == nil {
-			return nil, nil, tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+			return nil, nil, tsDiagnosticInfos(tsDiags, pctx.sourceTraces), errors.New("compile: TypeScript diagnostics")
 		}
-		census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags))
+		census.addProjectDiagnostics(tsDiagnosticInfos(tsDiags, pctx.sourceTraces))
 	}
 
 	wg = core.NewWorkGroup(program.SingleThreaded() || len(groups) <= 1)
@@ -930,7 +940,9 @@ func compileProjectSourceFile(ctx context.Context, dir string, program *compiler
 		}
 		result.transformed = true
 		if len(diags) > 0 {
-			result.diags = diags
+			// Node-located diagnostics index the reprinted text the same way
+			// TypeScript's do, so they need the same trip back through the trace.
+			result.diags = pctx.sourceTraces.remapAll(diags, sourceFile.Text())
 			result.err = errors.New("compile: transformer diagnostics")
 			return
 		}
