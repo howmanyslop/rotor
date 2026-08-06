@@ -1,31 +1,22 @@
-const path = require("node:path");
 const { createPluginNotFoundDiagnostic } = require("./diagnostics");
 
-function getPluginConfigs(ts, tsConfigPath) {
-  const configFile = ts.readConfigFile(tsConfigPath, ts.sys.readFile);
-  if (configFile.error) {
-    throw new Error(ts.flattenDiagnosticMessageText(configFile.error.messageText, "\n"));
+// getPluginConfigs reads the transformer list off the RESOLVED compiler
+// options — the value `tsc --showConfig` reports — rather than walking the
+// `extends` chain itself. `plugins` is an array-valued compiler option, so
+// TypeScript's own resolution has already applied the rule that a child which
+// declares `plugins` replaces the parent's list instead of adding to it. A
+// child can therefore drop an inherited transform with `"plugins": []`.
+//
+// rbxtsc concatenates every config in the chain (Project/transformers/
+// getPluginConfigs.ts), which leaves no way to opt out; rotor diverges here
+// deliberately. See "Deliberate Divergence" in docs/sidecar-protocol.md.
+function getPluginConfigs(options) {
+  const plugins = options?.plugins;
+  if (!Array.isArray(plugins)) {
+    return [];
   }
 
-  const pluginConfigs = [];
-  const config = configFile.config ?? {};
-  const plugins = config.compilerOptions?.plugins;
-  if (Array.isArray(plugins)) {
-    for (const pluginConfig of plugins) {
-      if (pluginConfig && typeof pluginConfig.transform === "string") {
-        pluginConfigs.push(pluginConfig);
-      }
-    }
-  }
-
-  if (typeof config.extends === "string") {
-    const extendedPath = require.resolve(config.extends, {
-      paths: [path.dirname(tsConfigPath)],
-    });
-    pluginConfigs.push(...getPluginConfigs(ts, extendedPath));
-  }
-
-  return pluginConfigs;
+  return plugins.filter((pluginConfig) => pluginConfig && typeof pluginConfig.transform === "string");
 }
 
 function getTransformerFromFactory(ts, factory, config, program) {

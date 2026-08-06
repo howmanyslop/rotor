@@ -269,7 +269,7 @@ class SidecarProjectSession {
         };
       }
 
-      const pluginConfigs = getPluginConfigs(this.ts, this.tsConfigPath);
+      const pluginConfigs = getPluginConfigs(this.parsed.options);
       const { transforms, diagnostics: pluginDiagnostics } = createTransformerList(this.ts, program, pluginConfigs, this.projectDir);
 
       const diagnostics = [...parsedState.diagnostics, ...pluginDiagnostics];
