@@ -276,7 +276,7 @@ func runCheckCollect(dir string, checkers *int) checkResult {
 func jsonDiagnostics(diags []*ast.Diagnostic, formatOpts *diagnosticwriter.FormattingOptions) []jsonDiagnostic {
 	out := make([]jsonDiagnostic, 0, len(diags))
 	for _, d := range diags {
-		jd := jsonDiagnostic{Severity: severityName(d), Message: d.String()}
+		jd := jsonDiagnostic{Code: compile.TypeScriptDiagnosticCode(d.Code()), Severity: severityName(d), Message: d.String()}
 		if file := d.File(); file != nil {
 			line, character := scanner.GetECMALineAndUTF16CharacterOfPosition(file, d.Pos())
 			jd.Line = line + 1

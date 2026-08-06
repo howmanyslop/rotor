@@ -98,6 +98,33 @@ func TestCmdCheckJSONWithDiagnostic(t *testing.T) {
 	}
 }
 
+func TestCmdCheckJSONCarriesTheDiagnosticCode(t *testing.T) {
+	// Given a file TypeScript rejects
+	dir := writeCheckableProject(t, "export const s: string = 5;\n")
+
+	// When `sloptor check --json` reports it
+	output, code := captureStdout(t, func() int {
+		return cmdCheck([]string{"--json", dir})
+	})
+	if code != 1 {
+		t.Fatalf("cmdCheck --json (error) exit = %d, want 1; output:\n%s", code, output)
+	}
+
+	// Then the code reads the same as it does everywhere else. check builds its
+	// entries straight from ast.Diagnostic and never goes through
+	// DiagnosticInfo, so this is the one place the format could drift.
+	var res jsonResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &res); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, output)
+	}
+	if len(res.Diagnostics) == 0 {
+		t.Fatal("expected at least one diagnostic")
+	}
+	if got := res.Diagnostics[0].Code; got != "TS2322" {
+		t.Errorf("code = %q, want TS2322 (message %q)", got, res.Diagnostics[0].Message)
+	}
+}
+
 func TestParseCheckArgsConcurrencyControls(t *testing.T) {
 	intPtr := func(value int) *int { return &value }
 	tests := []struct {

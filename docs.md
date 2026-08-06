@@ -159,6 +159,12 @@ sloptor diagnostics --project tsconfig.json --json
   count, an `overlayMatches` count and a `fileDiagnostics` array. Diagnostic
   positions are resolved against the text that was compiled, so they stay
   correct under overlays.
+- Every diagnostic carries a `code`: `TS####` for a TypeScript one, the upstream
+  factory name (`noAny`, `rotorLabeledStatementFlowControl`) for a transformer
+  one. Classify on it rather than on the file's `outcome` — a file can carry
+  both families at once, and `outcome` reports only the most severe. The key is
+  omitted where there was never a code to carry, such as a run that failed as a
+  whole rather than at a diagnostic.
 - Note that `files` means something different here than it does for `build`:
   for `build` it counts files **written**, for `diagnostics` it counts files
   **censused** (nothing is written).
@@ -246,7 +252,7 @@ Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; me
 
 - **`--minify`** — pass every emitted `.luau`/`.lua` source through the Luau minifier (comment/whitespace stripping + `t["x"]` → `t.x`) before writing. It is opt-in; declaration and `include/` files are never minified.
 - **Code-frame diagnostics** — TypeScript, transformer, and macro errors render as grouped code frames (source line + caret/underline, keyword highlighting, OSC 8 file links, an `✗ N errors in M files` footer). `--max-errors <n>` caps the rendered frames (default 50; `0` = all). In watch mode the screen clears before each rebuild (opt out with `--no-clear`), a `✗ N errors` banner persists on the idle line until the next green build, and `--bell` rings the terminal on a fail↔pass transition.
-- **`--json`** — emit one machine-readable result object (version, ok, files, durationMs, diagnostics with `file`/`line`/`col`/`severity`/`message`) instead of styled output. Also available on `sloptor check`.
+- **`--json`** — emit one machine-readable result object (version, ok, files, durationMs, diagnostics with `file`/`line`/`col`/`code`/`severity`/`message`) instead of styled output. `code` is `TS####` for a TypeScript diagnostic and the upstream factory name for a transformer one, and is omitted when the diagnostic has none. Also available on `sloptor check`.
 - **One-shot diagnostics** — `--cpuprofile`, `--trace-out`, `--blockprofile`, `--mutexprofile`, `--heapprofile`, and `--timings` can be combined on one build. Rotor finalizes requested profiles even when the build fails, which keeps failed-build traces usable.
 
 ### Shell completion

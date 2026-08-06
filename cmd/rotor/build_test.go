@@ -937,6 +937,34 @@ func TestCmdBuildJSONWithDiagnostic(t *testing.T) {
 	if res.Diagnostics[0].Col == 0 {
 		t.Error("diagnostic col is 0 (want ≥ 1)")
 	}
+	if got := res.Diagnostics[0].Code; got != "TS2322" {
+		t.Errorf("code = %q, want TS2322 (message %q)", got, res.Diagnostics[0].Message)
+	}
+}
+
+func TestCmdBuildJSONCarriesTheTransformerDiagnosticCode(t *testing.T) {
+	// Given a file the transformer rejects rather than the checker
+	dir := writeBuildableProject(t, "declare const loose: any;\nexport const taken = loose.field;\n")
+
+	output, code := captureStdout(t, func() int {
+		return cmdBuild([]string{"--json", dir})
+	})
+	if code != 1 {
+		t.Fatalf("cmdBuild --json (error) exit = %d, want 1; output:\n%s", code, output)
+	}
+
+	// Then it is named by its upstream factory, not by a TS number — the
+	// distinction a consumer of the census needs and could not previously make
+	var res jsonResult
+	if err := json.Unmarshal([]byte(strings.TrimSpace(output)), &res); err != nil {
+		t.Fatalf("output is not valid JSON: %v\noutput:\n%s", err, output)
+	}
+	if len(res.Diagnostics) == 0 {
+		t.Fatal("expected at least one diagnostic")
+	}
+	if got := res.Diagnostics[0].Code; got != "noAny" {
+		t.Errorf("code = %q, want noAny (message %q)", got, res.Diagnostics[0].Message)
+	}
 }
 
 // TestRenderDiagFrames is a focused unit test for renderDiagFrames: it creates

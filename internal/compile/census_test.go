@@ -240,6 +240,59 @@ func TestCompileProjectDiagnosticsTransformsPastTypeErrors(t *testing.T) {
 	}
 }
 
+func TestCompileProjectDiagnosticsCodesNameTheDiagnosticClass(t *testing.T) {
+	// Given one file TypeScript rejects and one the transformer rejects
+	dir := writeCensusProject(t, map[string]string{
+		"typebad.ts": censusFiles["typebad.ts"],
+		"noany.ts":   censusFiles["noany.ts"],
+	})
+
+	// When they are censused
+	census, err := CompileProjectDiagnostics(dir, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("CompileProjectDiagnostics: %v", err)
+	}
+
+	// Then every diagnostic carries a code naming its class. A file's Outcome
+	// reports only the most severe of its failures, so it cannot tell a
+	// consumer which family an individual diagnostic belongs to.
+	byName := censusByFile(census)
+	for _, tc := range []struct {
+		name     string
+		wantCode string
+	}{
+		{"typebad.ts", "TS2322"},
+		{"noany.ts", "noAny"},
+	} {
+		file, ok := byName[tc.name]
+		if !ok || len(file.Diagnostics) == 0 {
+			t.Errorf("%s carries no diagnostics: %+v", tc.name, file)
+			continue
+		}
+		if got := file.Diagnostics[0].Code; got != tc.wantCode {
+			t.Errorf("%s code = %q, want %q (message %q)", tc.name, got, tc.wantCode, file.Diagnostics[0].Message)
+		}
+	}
+}
+
+func TestTypeScriptDiagnosticCode(t *testing.T) {
+	// Given the diagnostic numbers a checker reports
+	// When they are rendered for DiagnosticInfo.Code and for `check --json`
+	// Then both read as the upstream "TS####" form, from one implementation, so
+	// the two paths cannot drift apart
+	for _, tc := range []struct {
+		code int32
+		want string
+	}{
+		{2322, "TS2322"},
+		{0, "TS0"},
+	} {
+		if got := TypeScriptDiagnosticCode(tc.code); got != tc.want {
+			t.Errorf("TypeScriptDiagnosticCode(%d) = %q, want %q", tc.code, got, tc.want)
+		}
+	}
+}
+
 func TestCompileProjectDiagnosticsReportsEveryFailingFile(t *testing.T) {
 	// Given a project where files fail in every way the census classifies
 	dir := writeCensusProject(t, censusFiles)

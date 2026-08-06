@@ -344,7 +344,7 @@ func diagnosticsJSONDiagnostic(d compile.DiagnosticInfo) jsonDiagnostic {
 	if d.Warning {
 		severity = "warning"
 	}
-	jd := jsonDiagnostic{Severity: severity, Message: d.Message}
+	jd := jsonDiagnostic{Code: d.Code, Severity: severity, Message: d.Message}
 	if d.FileName != "" {
 		jd.File = relForDisplay(d.FileName)
 		// Positions come from the compile, not from re-reading the file: under
