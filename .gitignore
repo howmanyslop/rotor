@@ -29,3 +29,4 @@ internal/compile/testdata/**/include/
 .agents/skills/golang-continuous-integration/
 .agents/skills/golang-error-handling/
 .agents/skills/golang-testing/
+/rotor

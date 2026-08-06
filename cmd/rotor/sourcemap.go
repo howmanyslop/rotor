@@ -3,78 +3,66 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"rotor/internal/sourcemap"
 )
 
-// cmdSourcemap emits a Rojo-compatible sourcemap.json for the project — the
-// format `rojo sourcemap --include-non-scripts` produces, which luau-lsp
+// newSourcemapCommand emits a Rojo-compatible sourcemap.json for the project —
+// the format `rojo sourcemap --include-non-scripts` produces, which luau-lsp
 // consumes. The tree is built natively (no rojo) for plain script trees;
 // projects using features outside that subset fall back to `rojo sourcemap`
 // when rojo is on PATH. File paths are project-relative with forward slashes.
 // Output goes to --output, or to stdout when no output path is given.
-func cmdSourcemap(args []string) int {
-	project := ""
-	output := ""
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "-h" || a == "--help":
-			usage(os.Stdout)
-			return 0
-		case a == "-o" || a == "--output":
-			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "sloptor sourcemap: %s requires a path\n", a)
-				return 1
+//
+// Output discipline: without -o the sourcemap JSON IS the stdout stream
+// (piped into luau-lsp and tests), so no chrome touches stdout; with -o the
+// rotor banner + event rows appear on stdout.
+func newSourcemapCommand(streams cliStreams) *cobra.Command {
+	var output string
+	cmd := &cobra.Command{
+		Use:                   "sourcemap [path] [-o out.json]",
+		Short:                 "emit a Rojo-compatible sourcemap.json for luau-lsp",
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			project := ""
+			if len(argv) > 0 {
+				project = argv[0]
 			}
-			i++
-			output = args[i]
-		case strings.HasPrefix(a, "--output="):
-			output = strings.TrimPrefix(a, "--output=")
-		case strings.HasPrefix(a, "-o="):
-			output = strings.TrimPrefix(a, "-o=")
-		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "sloptor sourcemap: unknown flag %q\n\n", a)
-			usage(os.Stderr)
-			return 1
-		default:
-			if project != "" {
-				fmt.Fprintf(os.Stderr, "sloptor sourcemap: unexpected extra argument %q\n\n", a)
-				usage(os.Stderr)
-				return 1
-			}
-			project = a
-		}
+			return runSourcemapCommand(streams, project, output)
+		},
 	}
+	cmd.Flags().SortFlags = false
+	addStringFlag(cmd, &output, "output", "o", "", "<file>",
+		"write the sourcemap to this file instead of stdout")
+	return cmd
+}
 
-	// Output discipline: without -o the sourcemap JSON IS the stdout stream
-	// (piped into luau-lsp and tests), so no chrome touches stdout; with -o
-	// the rotor banner + summary appear on stdout.
-	errUI := newUI(os.Stderr)
+func runSourcemapCommand(streams cliStreams, project, output string) error {
 	if output != "" {
-		newUI(os.Stdout).banner("sourcemap")
+		newUI(streams.out).banner("sourcemap")
 	}
 
 	start := time.Now()
 	data, err := sourcemap.Generate(project)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor sourcemap: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
 	if output == "" {
-		_, _ = os.Stdout.Write(data)
-		return 0
+		_, _ = streams.out.Write(data)
+		return nil
 	}
 	if err := os.WriteFile(output, data, 0o644); err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor sourcemap: cannot write %q: %v", output, err))
-		return 1
+		return runtimeFailure(fmt.Errorf("cannot write %q: %w", output, err))
 	}
 
-	u := newUI(os.Stdout)
-	u.okLine("wrote sourcemap", fmt.Sprintf("in %d ms", time.Since(start).Milliseconds()))
-	u.noteLine(fmt.Sprintf("%s  %s", output, formatBytes(len(data))))
-	fmt.Println()
-	return 0
+	newUI(streams.out).events([]uiEvent{
+		{Status: eventWrote, Target: output, Detail: formatBytes(len(data))},
+		{Status: eventFinished, Elapsed: time.Since(start)},
+	})
+	fmt.Fprintln(streams.out)
+	return nil
 }

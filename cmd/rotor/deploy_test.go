@@ -41,7 +41,7 @@ icon = "icon.png"
 func runDeploy(t *testing.T, args []string, stdin string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errBuf bytes.Buffer
-	code = deployMain(args, strings.NewReader(stdin), &out, &errBuf)
+	code = execute(append([]string{"deploy"}, args...), cliStreams{in: strings.NewReader(stdin), out: &out, err: &errBuf})
 	return code, out.String(), errBuf.String()
 }
 

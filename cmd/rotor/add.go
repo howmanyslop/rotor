@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
 )
 
 // knownPins mirrors init.go's loose pins for packages whose major has been
@@ -17,45 +20,38 @@ var knownPins = map[string]string{
 	"@rbxts/net":      "^3.0.0",
 }
 
-// cmdAdd adds dependency entries to the project's package.json — no network,
-// no install. Each <pkg> lands in "dependencies" (or "devDependencies" with
-// --dev) at a loose pin ("*", or a known stable range for a few packages,
-// mirroring the init wizard). An explicit version is accepted as `name@range`.
-// Existing entries are left untouched (deduped). The file is re-emitted with
-// its detected indentation (2-space default) and a trailing newline; key order
-// is preserved by editing the raw JSON object in place rather than round-
-// tripping through a Go struct.
-func cmdAdd(args []string) int {
+// newAddCommand adds dependency entries to the project's package.json — no
+// network, no install. Each <pkg> lands in "dependencies" (or
+// "devDependencies" with --dev) at a loose pin ("*", or a known stable range
+// for a few packages, mirroring the init wizard). An explicit version is
+// accepted as `name@range`. Existing entries are left untouched (deduped).
+// The file is re-emitted with its detected indentation (2-space default) and
+// a trailing newline; key order is preserved by editing the raw JSON object
+// in place rather than round-tripping through a Go struct.
+func newAddCommand(streams cliStreams) *cobra.Command {
+	var dev bool
+	cmd := &cobra.Command{
+		Use:                   "add [--dev] <pkg>...",
+		Short:                 "add @rbxts/* (or any) deps to package.json",
+		Args:                  cobra.MinimumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			return runAddCommand(streams, dev, argv)
+		},
+	}
+	cmd.Flags().SortFlags = false
+	addBoolFlag(cmd, &dev, "dev", "D", false, "add to devDependencies instead of dependencies")
+	return cmd
+}
+
+func runAddCommand(streams cliStreams, dev bool, pkgs []string) error {
 	dir := "."
-	dev := false
-	var pkgs []string
-	for _, a := range args {
-		switch a {
-		case "-h", "--help":
-			usage(os.Stdout)
-			return 0
-		case "--dev", "-D":
-			dev = true
-		default:
-			if strings.HasPrefix(a, "-") {
-				fmt.Fprintf(os.Stderr, "sloptor add: unknown flag %q\n\n", a)
-				usage(os.Stderr)
-				return 1
-			}
-			pkgs = append(pkgs, a)
-		}
-	}
-	if len(pkgs) == 0 {
-		fmt.Fprintln(os.Stderr, "sloptor add: need at least one package (e.g. `sloptor add @rbxts/services`)")
-		usage(os.Stderr)
-		return 1
-	}
+	start := time.Now()
 
 	pkgJSONPath := filepath.Join(dir, "package.json")
 	data, err := os.ReadFile(pkgJSONPath)
 	if err != nil {
-		newUI(os.Stderr).failLine(fmt.Sprintf("sloptor add: no package.json in %s (run `sloptor init` first)", absOrSelf(dir)))
-		return 1
+		return runtimeFailure(fmt.Errorf("no package.json in %s (run `sloptor init` first)", absOrSelf(dir)))
 	}
 
 	depKey := "dependencies"
@@ -65,32 +61,43 @@ func cmdAdd(args []string) int {
 
 	updated, added, skipped, err := addDependencies(data, depKey, pkgs)
 	if err != nil {
-		newUI(os.Stderr).failLine(fmt.Sprintf("sloptor add: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
 
-	out := newUI(os.Stdout)
+	out := newUI(streams.out)
 	out.banner("add")
 
 	if len(added) == 0 {
-		out.noteLine(fmt.Sprintf("all %s already present in %s — nothing to add", plural(len(skipped), "package"), depKey))
-		fmt.Fprintln(os.Stdout)
-		return 0
+		out.events([]uiEvent{
+			{
+				Status: eventUnchanged,
+				Target: depKey,
+				Detail: fmt.Sprintf("all %s already present — nothing to add", plural(len(skipped), "package")),
+			},
+			{Status: eventFinished, Elapsed: time.Since(start)},
+		})
+		fmt.Fprintln(streams.out)
+		return nil
 	}
 
 	if err := os.WriteFile(pkgJSONPath, updated, 0o644); err != nil {
-		out.failLine(fmt.Sprintf("sloptor add: cannot write package.json: %v", err))
-		return 1
+		return runtimeFailure(fmt.Errorf("cannot write package.json: %w", err))
 	}
 
-	out.okLine(fmt.Sprintf("added %s to %s", plural(len(added), "package"), depKey), "")
+	events := make([]uiEvent, 0, len(added)+1)
 	for _, a := range added {
-		out.noteLine(a)
+		events = append(events, uiEvent{Status: eventUpdated, Target: a, Detail: depKey})
 	}
 	pm := detectPackageManager(dir)
-	out.noteLine(fmt.Sprintf("run `%s install` to fetch them", pm))
-	fmt.Fprintln(os.Stdout)
-	return 0
+	events = append(events, uiEvent{
+		Status:  eventFinished,
+		Target:  fmt.Sprintf("added %s to %s", plural(len(added), "package"), depKey),
+		Detail:  fmt.Sprintf("run `%s install` to fetch them", pm),
+		Elapsed: time.Since(start),
+	})
+	out.events(events)
+	fmt.Fprintln(streams.out)
+	return nil
 }
 
 // addDependencies inserts each pkg into the depKey map of the raw package.json

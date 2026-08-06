@@ -3,15 +3,16 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
 
 	"rotor/internal/config"
 )
 
-// cmdMigrate is `rotor migrate [path] [--force]`: it converts a legacy
+// newMigrateCommand is `sloptor migrate [path] [--force]`: it converts a legacy
 // rotor.config.ts (or rotor.config.js) into rotor.toml.
 //
 // It loads the old config through the retained goja/esbuild path (the only
@@ -20,39 +21,29 @@ import (
 // renames the old config (and any rotor-config.d.ts) to a .bak sidecar.
 //
 // It refuses to overwrite an existing rotor.toml unless --force is passed.
-func cmdMigrate(args []string) int {
-	return migrateMain(args, os.Stdout, os.Stderr)
+func newMigrateCommand(streams cliStreams) *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:                   "migrate [path] [--force]",
+		Short:                 "convert a legacy rotor.config.ts to rotor.toml",
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			dir := "."
+			if len(argv) > 0 {
+				dir = argv[0]
+			}
+			return runMigrateCommand(streams, dir, force)
+		},
+	}
+	cmd.Flags().SortFlags = false
+	addBoolFlag(cmd, &force, "force", "f", false, "overwrite an existing rotor.toml")
+	return cmd
 }
 
-func migrateMain(args []string, stdout, stderr io.Writer) int {
-	dir := ""
-	force := false
-	for _, a := range args {
-		switch {
-		case a == "-h" || a == "--help":
-			migrateUsage(stdout)
-			return 0
-		case a == "--force" || a == "-f":
-			force = true
-		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(stderr, "sloptor migrate: unknown flag %q\n\n", a)
-			migrateUsage(stderr)
-			return 1
-		default:
-			if dir != "" {
-				fmt.Fprintf(stderr, "sloptor migrate: unexpected extra argument %q\n\n", a)
-				migrateUsage(stderr)
-				return 1
-			}
-			dir = a
-		}
-	}
-	if dir == "" {
-		dir = "."
-	}
-
-	u := newUI(stdout)
-	errUI := newUI(stderr)
+func runMigrateCommand(streams cliStreams, dir string, force bool) error {
+	start := time.Now()
+	u := newUI(streams.out)
 	u.banner("migrate")
 
 	// Find the legacy config so we can name it in messages and rename it later.
@@ -65,64 +56,67 @@ func migrateMain(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 	if legacyPath == "" {
-		errUI.failLine(fmt.Sprintf("sloptor migrate: no rotor.config.ts (or rotor.config.js) found in %s", dir))
-		fmt.Fprintln(stderr, "    migrate converts an existing TypeScript config to rotor.toml;")
-		fmt.Fprintln(stderr, "    there is nothing to migrate here. Use `sloptor init` to start fresh.")
-		return 1
+		return runtimeFailure(fmt.Errorf(
+			"no rotor.config.ts (or rotor.config.js) found in %s\n    migrate converts an existing TypeScript config to rotor.toml;\n    there is nothing to migrate here. Use `sloptor init` to start fresh.", dir))
 	}
 
 	tomlPath := filepath.Join(dir, config.ConfigFileName)
 	if fileExists(tomlPath) && !force {
-		errUI.failLine(fmt.Sprintf("sloptor migrate: %s already exists", config.ConfigFileName))
-		fmt.Fprintln(stderr, "    refusing to overwrite it; re-run with --force to replace it.")
-		return 1
+		return runtimeFailure(fmt.Errorf(
+			"%s already exists\n    refusing to overwrite it; re-run with --force to replace it.", config.ConfigFileName))
 	}
 
 	cfg, err := config.LoadLegacyTS(dir)
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {
-			errUI.failLine(fmt.Sprintf("sloptor migrate: no legacy config found in %s", dir))
-			return 1
+			return runtimeFailure(fmt.Errorf("no legacy config found in %s", dir))
 		}
-		errUI.failLine(fmt.Sprintf("sloptor migrate: could not load %s: %v", filepath.Base(legacyPath), err))
-		return 1
+		return runtimeFailure(fmt.Errorf("could not load %s: %w", filepath.Base(legacyPath), err))
 	}
 	for _, w := range cfg.Warnings {
-		errUI.warn("sloptor migrate: " + w)
+		newUI(streams.err).warn(w)
 	}
 
 	body, err := config.MarshalTOML(cfg)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor migrate: could not serialize config to TOML: %v", err))
-		return 1
+		return runtimeFailure(fmt.Errorf("could not serialize config to TOML: %w", err))
 	}
 	out := config.SchemaDirective + "\n\n" + body
 	if err := os.WriteFile(tomlPath, []byte(out), 0o644); err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor migrate: writing %s: %v", config.ConfigFileName, err))
-		return 1
+		return runtimeFailure(fmt.Errorf("writing %s: %w", config.ConfigFileName, err))
 	}
-	u.okLine("wrote "+config.ConfigFileName, "")
+
+	events := []uiEvent{{Status: eventWrote, Target: config.ConfigFileName}}
 
 	// Rename the legacy files to .bak so they stop being picked up but are not
 	// lost. A .bak that already exists is overwritten (idempotent re-runs).
 	if err := backup(legacyPath); err != nil {
-		errUI.warn(fmt.Sprintf("could not rename %s: %v", filepath.Base(legacyPath), err))
+		newUI(streams.err).warn(fmt.Sprintf("could not rename %s: %v", filepath.Base(legacyPath), err))
 	} else {
-		u.noteLine(filepath.Base(legacyPath) + " → " + filepath.Base(legacyPath) + ".bak")
+		events = append(events, uiEvent{
+			Status: eventWrote,
+			Target: filepath.Base(legacyPath) + ".bak",
+			Detail: filepath.Base(legacyPath) + " → " + filepath.Base(legacyPath) + ".bak",
+		})
 	}
 	dtsPath := filepath.Join(dir, "rotor-config.d.ts")
 	if fileExists(dtsPath) {
 		if err := backup(dtsPath); err != nil {
-			errUI.warn(fmt.Sprintf("could not rename %s: %v", filepath.Base(dtsPath), err))
+			newUI(streams.err).warn(fmt.Sprintf("could not rename %s: %v", filepath.Base(dtsPath), err))
 		} else {
-			u.noteLine("rotor-config.d.ts → rotor-config.d.ts.bak")
+			events = append(events, uiEvent{Status: eventWrote, Target: "rotor-config.d.ts.bak", Detail: "rotor-config.d.ts → rotor-config.d.ts.bak"})
 		}
 	}
 
-	fmt.Fprintln(stdout)
-	u.okLine("migration complete", "review "+config.ConfigFileName+" and commit it")
-	fmt.Fprintln(stdout)
-	return 0
+	events = append(events, uiEvent{
+		Status:  eventFinished,
+		Target:  "migration complete",
+		Detail:  "review " + config.ConfigFileName + " and commit it",
+		Elapsed: time.Since(start),
+	})
+	u.events(events)
+	fmt.Fprintln(streams.out)
+	return nil
 }
 
 // backup renames path to path + ".bak", replacing any existing .bak.
@@ -130,14 +124,4 @@ func backup(path string) error {
 	bak := path + ".bak"
 	_ = os.Remove(bak)
 	return os.Rename(path, bak)
-}
-
-func migrateUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: sloptor migrate [path] [--force]")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "  path       project directory containing rotor.config.ts (default \".\")")
-	fmt.Fprintln(w, "  -f, --force  overwrite an existing rotor.toml")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Converts a legacy rotor.config.ts to rotor.toml (+ rotor.schema.json) and")
-	fmt.Fprintln(w, "renames the old config to rotor.config.ts.bak.")
 }

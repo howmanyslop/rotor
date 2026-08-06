@@ -11,58 +11,89 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"rotor/internal/compile"
 	"rotor/internal/config"
 )
 
-// cmdDoctor diagnoses the environment and project setup that `rotor build`
-// depends on: tsconfig discovery, installed @rbxts packages, Node.js and the
-// transformer sidecar when plugins are configured, and Rojo wiring. Rows are
-// ok/warn/fail with actionable hints; only hard failures exit 1.
-func cmdDoctor(args []string) int {
-	path := ""
-	for _, a := range args {
-		switch a {
-		case "-h", "--help":
-			usage(os.Stdout)
-			return 0
-		default:
-			if strings.HasPrefix(a, "-") {
-				fmt.Fprintf(os.Stderr, "sloptor doctor: unknown flag %q\n\n", a)
-				usage(os.Stderr)
-				return 1
+// newDoctorCommand diagnoses the environment and project setup that `rotor
+// build` depends on: tsconfig discovery, installed @rbxts packages, Node.js
+// and the transformer sidecar when plugins are configured, and Rojo wiring.
+// Rows are ok/warn/fail with actionable hints, rendered as aligned event
+// rows; only hard failures exit 1.
+func newDoctorCommand(streams cliStreams) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:                   "doctor [path]",
+		Short:                 "diagnose the project setup (tsconfig, @rbxts packages, Node.js + transformer plugins, Rojo wiring)",
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			path := "."
+			if len(argv) > 0 {
+				path = argv[0]
 			}
-			if path != "" {
-				fmt.Fprintf(os.Stderr, "sloptor doctor: unexpected extra argument %q\n\n", a)
-				usage(os.Stderr)
-				return 1
-			}
-			path = a
-		}
+			return runDoctorCommand(streams, path)
+		},
 	}
-	if path == "" {
-		path = "."
-	}
+	cmd.Flags().SortFlags = false
+	return cmd
+}
 
-	u := newUI(os.Stdout)
+func runDoctorCommand(streams cliStreams, path string) error {
+	start := time.Now()
+	u := newUI(streams.out)
 	checks, projectName := runDoctor(path)
 	u.banner("doctor" + projectName)
 
 	fails, warns := 0, 0
+	events := make([]uiEvent, 0, len(checks)+1)
 	for _, c := range checks {
-		u.doctorRow(c)
+		status := eventChecked
 		switch c.status {
-		case doctorFail:
-			fails++
+		case doctorInfo:
+			status = eventUnchanged
 		case doctorWarn:
+			status = eventSkipped
 			warns++
+		case doctorFail:
+			status = eventFailed
+			fails++
 		}
+		detail := c.detail
+		if c.hint != "" && c.status >= doctorWarn {
+			detail += " — " + c.hint
+		}
+		events = append(events, uiEvent{Status: status, Target: c.label, Detail: detail})
 	}
-	u.doctorSummary(len(checks), fails, warns)
+
+	switch {
+	case fails > 0:
+		events = append(events, uiEvent{
+			Status:  eventFailed,
+			Detail:  fmt.Sprintf("%s · (%d checks, %d warnings)", plural(fails, "problem")+" found", len(checks), warns),
+			Elapsed: time.Since(start),
+		})
+	case warns > 0:
+		events = append(events, uiEvent{
+			Status:  eventSkipped,
+			Detail:  fmt.Sprintf("ready, with %s · (%d checks)", plural(warns, "warning"), len(checks)),
+			Elapsed: time.Since(start),
+		})
+	default:
+		events = append(events, uiEvent{
+			Status:  eventFinished,
+			Detail:  fmt.Sprintf("everything looks good · (%d checks)", len(checks)),
+			Elapsed: time.Since(start),
+		})
+	}
+	u.events(events)
+	fmt.Fprintln(streams.out)
+
 	if fails > 0 {
-		return 1
+		return reportedFailure(errors.New("doctor found problems"))
 	}
-	return 0
+	return nil
 }
 
 type doctorStatus int

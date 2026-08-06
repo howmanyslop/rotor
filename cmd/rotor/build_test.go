@@ -16,13 +16,12 @@ import (
 )
 
 // TestParseBuildArgs covers the rbxtsc-compatible flag surface
-// (CLI/commands/build.ts L49-118).
+// (CLI/commands/build.ts L49-118), parsed through the real Cobra flag set.
+// Implication failures (which live in the command runner) are exercised
+// behaviorally through the run() surface.
 func TestParseBuildArgs(t *testing.T) {
 	t.Run("no args defaults project to dot with empty partial", func(t *testing.T) {
-		got, err := parseBuildArgs(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, nil)
 		if got.project != "." {
 			t.Errorf("project = %q, want \".\"", got.project)
 		}
@@ -32,17 +31,17 @@ func TestParseBuildArgs(t *testing.T) {
 	})
 
 	t.Run("usePolling without watch errors", func(t *testing.T) {
-		_, err := parseBuildArgs([]string{"--usePolling"})
-		if err == nil || err.Error() != "Implications failed:\n usePolling -> watch" {
-			t.Errorf("err = %v, want yargs implication error", err)
+		stderr, code := captureStderr(t, func() int { return cmdBuild([]string{"--usePolling"}) })
+		if code != 1 {
+			t.Fatalf("exit = %d, want 1", code)
+		}
+		if !strings.Contains(stderr, "usePolling -> watch") {
+			t.Errorf("stderr = %q, want the usePolling->watch implication error", stderr)
 		}
 	})
 
 	t.Run("usePolling with watch ok", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"--usePolling", "-w"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"--usePolling", "-w"})
 		if got.opts.usePolling == nil || !*got.opts.usePolling || got.opts.watch == nil || !*got.opts.watch {
 			t.Errorf("opts = %+v", got.opts)
 		}
@@ -50,31 +49,22 @@ func TestParseBuildArgs(t *testing.T) {
 
 	t.Run("boolean negation forms", func(t *testing.T) {
 		for _, args := range [][]string{{"--no-luau"}, {"--luau=false"}, {"--luau=0"}} {
-			got, err := parseBuildArgs(args)
-			if err != nil {
-				t.Fatalf("%v: %v", args, err)
-			}
+			got := parseBuildArgsForTest(t, args)
 			if got.opts.luau == nil || *got.opts.luau {
 				t.Errorf("%v: luau = %v, want false", args, got.opts.luau)
 			}
 		}
-		got, err := parseBuildArgs([]string{"--optimizedLoops=false"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"--optimizedLoops=false"})
 		if got.opts.optimizedLoops == nil || *got.opts.optimizedLoops {
 			t.Error("--optimizedLoops=false not parsed")
 		}
 	})
 
 	t.Run("plain boolean flags set true", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{
+		got := parseBuildArgsForTest(t, []string{
 			"--verbose", "--noInclude", "--logTruthyChanges",
 			"--writeOnlyChanged", "--writeTransformedFiles", "--allowCommentDirectives",
 		})
-		if err != nil {
-			t.Fatal(err)
-		}
 		for name, p := range map[string]*bool{
 			"verbose":                got.opts.verbose,
 			"noInclude":              got.opts.noInclude,
@@ -90,26 +80,20 @@ func TestParseBuildArgs(t *testing.T) {
 	})
 
 	t.Run("type choices", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"--type", "model"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"--type", "model"})
 		if got.opts.typeName == nil || *got.opts.typeName != "model" {
 			t.Errorf("type = %v", got.opts.typeName)
 		}
-		if _, err := parseBuildArgs([]string{"--type", "bogus"}); err == nil {
-			t.Error("invalid --type accepted")
+		if code := cmdBuild([]string{"--type", "bogus"}); code != 1 {
+			t.Errorf("invalid --type exit = %d, want 1", code)
 		}
-		if _, err := parseBuildArgs([]string{"--type"}); err == nil {
-			t.Error("--type with no value accepted (yargs choices reject \"\")")
+		if code := cmdBuild([]string{"--type"}); code != 1 {
+			t.Errorf("--type with no value exit = %d, want 1", code)
 		}
 	})
 
 	t.Run("string flag forms", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"-p", "proj", "-i", "inc", "--rojo=custom.project.json"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"-p", "proj", "-i", "inc", "--rojo=custom.project.json"})
 		if got.project != "proj" {
 			t.Errorf("project = %q", got.project)
 		}
@@ -124,10 +108,7 @@ func TestParseBuildArgs(t *testing.T) {
 	t.Run("rojo with no value is empty string", func(t *testing.T) {
 		// QUIRK: `--rojo` / `--rojo ""` yields "" which falls through to
 		// Rojo config auto-discovery (createProjectData.ts L33-43).
-		got, err := parseBuildArgs([]string{"--rojo", "--verbose"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"--rojo", "--verbose"})
 		if got.opts.rojo == nil || *got.opts.rojo != "" {
 			t.Errorf("rojo = %v, want present-and-empty", got.opts.rojo)
 		}
@@ -137,23 +118,20 @@ func TestParseBuildArgs(t *testing.T) {
 	})
 
 	t.Run("positional project path", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"some/dir", "--verbose"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"some/dir", "--verbose"})
 		if got.project != "some/dir" {
 			t.Errorf("project = %q", got.project)
 		}
 	})
 
 	t.Run("positional plus --project errors", func(t *testing.T) {
-		if _, err := parseBuildArgs([]string{"a", "-p", "b"}); err == nil {
+		if code := cmdBuild([]string{"a", "-p", "b"}); code != 1 {
 			t.Error("conflicting project paths accepted")
 		}
 	})
 
 	t.Run("unknown flag errors", func(t *testing.T) {
-		if _, err := parseBuildArgs([]string{"--bogus"}); err == nil {
+		if code := cmdBuild([]string{"--bogus"}); code != 1 {
 			t.Error("unknown flag accepted")
 		}
 	})
@@ -184,42 +162,42 @@ func TestUsageErrorsExitOne(t *testing.T) {
 		{
 			name:    "builders missing value",
 			args:    []string{"--build", "--builders"},
-			wantErr: `invalid --builders value "" (must be a positive integer)`,
+			wantErr: "flag needs an argument: --builders",
 		},
 		{
 			name:    "checkers missing value",
 			args:    []string{"--checkers"},
-			wantErr: `invalid --checkers value "" (must be a positive integer)`,
+			wantErr: "flag needs an argument: --checkers",
 		},
 		{
 			name:    "builders zero",
 			args:    []string{"--build", "--builders", "0"},
-			wantErr: `invalid --builders value "0" (must be a positive integer)`,
+			wantErr: `"--builders" flag: must be a positive integer`,
 		},
 		{
 			name:    "checkers zero",
 			args:    []string{"--checkers=0"},
-			wantErr: `invalid --checkers value "0" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "builders negative",
 			args:    []string{"--build", "--builders", "-1"},
-			wantErr: `invalid --builders value "-1" (must be a positive integer)`,
+			wantErr: `"--builders" flag: must be a positive integer`,
 		},
 		{
 			name:    "checkers negative",
 			args:    []string{"--checkers=-1"},
-			wantErr: `invalid --checkers value "-1" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "builders non-integer",
 			args:    []string{"--build", "--builders", "many"},
-			wantErr: `invalid --builders value "many" (must be a positive integer)`,
+			wantErr: `"--builders" flag: must be a positive integer`,
 		},
 		{
 			name:    "checkers non-integer",
 			args:    []string{"--checkers=many"},
-			wantErr: `invalid --checkers value "many" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "builders without build mode",
@@ -235,19 +213,18 @@ func TestUsageErrorsExitOne(t *testing.T) {
 				t.Errorf("cmdBuild(%v) exit = %d, want 1", tt.args, code)
 			}
 			firstLine := strings.SplitN(stderr, "\n", 2)[0]
-			wantFirstLine := "sloptor build: " + tt.wantErr
-			if firstLine != wantFirstLine {
-				t.Errorf("cmdBuild(%v) first stderr line = %q, want %q", tt.args, firstLine, wantFirstLine)
+			if !strings.HasPrefix(firstLine, "error: ") {
+				t.Errorf("cmdBuild(%v) first stderr line = %q, want a red error: prefix", tt.args, firstLine)
+			}
+			if !strings.Contains(stderr, tt.wantErr) {
+				t.Errorf("cmdBuild(%v) stderr = %q, want substring %q", tt.args, stderr, tt.wantErr)
 			}
 		})
 	}
 }
 
 func TestParseBuildArgsJSON(t *testing.T) {
-	got, err := parseBuildArgs([]string{"--json", "."})
-	if err != nil {
-		t.Fatal(err)
-	}
+	got := parseBuildArgsForTest(t, []string{"--json", "."})
 	if !got.jsonOut {
 		t.Error("--json not parsed")
 	}
@@ -255,10 +232,7 @@ func TestParseBuildArgsJSON(t *testing.T) {
 
 func TestBuildTimingsFlag(t *testing.T) {
 	for _, args := range [][]string{{"--timings", "report.json"}, {"--timings=report.json"}} {
-		parsed, err := parseBuildArgs(args)
-		if err != nil {
-			t.Fatalf("parseBuildArgs(%v): %v", args, err)
-		}
+		parsed := parseBuildArgsForTest(t, args)
 		if parsed.timings != "report.json" {
 			t.Errorf("parseBuildArgs(%v) timings = %q, want report.json", args, parsed.timings)
 		}
@@ -330,10 +304,7 @@ func TestBuildProfilingFlags(t *testing.T) {
 		"--mutexprofile", "mutex.prof",
 		"--heapprofile", "heap.prof",
 	}
-	parsed, err := parseBuildArgs(args)
-	if err != nil {
-		t.Fatal(err)
-	}
+	parsed := parseBuildArgsForTest(t, args)
 	if parsed.traceOut != "trace.out" || parsed.blockprofile != "block.prof" ||
 		parsed.mutexprofile != "mutex.prof" || parsed.heapprofile != "heap.prof" {
 		t.Fatalf("parsed profile paths = %#v", parsed)
@@ -342,9 +313,14 @@ func TestBuildProfilingFlags(t *testing.T) {
 
 func TestBuildFiniteDiagnosticsRejectWatch(t *testing.T) {
 	for _, flag := range []string{"--cpuprofile", "--trace-out", "--blockprofile", "--mutexprofile", "--heapprofile", "--timings"} {
-		_, err := parseBuildArgs([]string{"--watch", flag, "profile.out"})
-		if err == nil || !strings.Contains(err.Error(), "cannot be used with --watch") {
-			t.Errorf("parseBuildArgs with %s error = %v", flag, err)
+		stderr, code := captureStderr(t, func() int {
+			return cmdBuild([]string{"--watch", flag, "profile.out"})
+		})
+		if code != 1 {
+			t.Errorf("cmdBuild with %s exit = %d, want 1", flag, code)
+		}
+		if !strings.Contains(stderr, "cannot be used with --watch") {
+			t.Errorf("cmdBuild with %s stderr = %q, want the watch conflict", flag, stderr)
 		}
 	}
 }
@@ -354,10 +330,7 @@ func TestBuildFiniteDiagnosticsRejectDuplicatePaths(t *testing.T) {
 		{"--cpuprofile", "profile.out", "--trace-out", filepath.Join(".", "profile.out")},
 		{"--heapprofile", "profile.out", "--timings", "profile.out"},
 	} {
-		parsed, err := parseBuildArgs(args)
-		if err != nil {
-			t.Fatal(err)
-		}
+		parsed := parseBuildArgsForTest(t, args)
 		if err := validateBuildDiagnosticPaths(parsed); err == nil {
 			t.Fatalf("duplicate diagnostic paths accepted for %v", args)
 		}
@@ -379,10 +352,7 @@ func TestBuildFiniteDiagnosticsRejectAliasedPaths(t *testing.T) {
 			if err := makeAlias(alias); err != nil {
 				t.Fatal(err)
 			}
-			parsed, err := parseBuildArgs([]string{"--cpuprofile", target, "--trace-out", alias})
-			if err != nil {
-				t.Fatal(err)
-			}
+			parsed := parseBuildArgsForTest(t, []string{"--cpuprofile", target, "--trace-out", alias})
 			if err := validateBuildDiagnosticPaths(parsed); err == nil {
 				t.Fatal("aliased diagnostic paths accepted")
 			}
@@ -397,10 +367,7 @@ func TestBuildFiniteDiagnosticsRejectDanglingSymlinkAlias(t *testing.T) {
 	if err := os.Symlink(target, alias); err != nil {
 		t.Fatal(err)
 	}
-	parsed, err := parseBuildArgs([]string{"--cpuprofile", target, "--trace-out", alias})
-	if err != nil {
-		t.Fatal(err)
-	}
+	parsed := parseBuildArgsForTest(t, []string{"--cpuprofile", target, "--trace-out", alias})
 	if err := validateBuildDiagnosticPaths(parsed); err == nil {
 		t.Fatal("dangling symlink diagnostic alias accepted")
 	}
@@ -526,17 +493,18 @@ func TestBuildModeArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// When
-			got, err := parseBuildArgs(tt.args)
+			got := parseBuildArgsForTest(t, tt.args)
 
 			// Then
 			if tt.wantErr != "" {
-				if err == nil || err.Error() != tt.wantErr {
-					t.Fatalf("parseBuildArgs(%v) error = %v, want %q", tt.args, err, tt.wantErr)
+				stderr, code := captureStderr(t, func() int { return cmdBuild(tt.args) })
+				if code != 1 {
+					t.Fatalf("cmdBuild(%v) exit = %d, want 1", tt.args, code)
+				}
+				if !strings.Contains(stderr, tt.wantErr) {
+					t.Fatalf("cmdBuild(%v) stderr = %q, want substring %q", tt.args, stderr, tt.wantErr)
 				}
 				return
-			}
-			if err != nil {
-				t.Fatal(err)
 			}
 			if got.build != tt.build || got.buildPath != tt.path || got.emitDeclarationOnly != tt.emit {
 				t.Errorf("parseBuildArgs(%v) = %+v", tt.args, got)
@@ -589,42 +557,42 @@ func TestParseBuildArgsConcurrencyControls(t *testing.T) {
 		{
 			name:    "builders missing value",
 			args:    []string{"--build", "--builders"},
-			wantErr: `invalid --builders value "" (must be a positive integer)`,
+			wantErr: "flag needs an argument: --builders",
 		},
 		{
 			name:    "checkers missing value",
 			args:    []string{"--checkers"},
-			wantErr: `invalid --checkers value "" (must be a positive integer)`,
+			wantErr: "flag needs an argument: --checkers",
 		},
 		{
 			name:    "builders zero",
 			args:    []string{"--build", "--builders", "0"},
-			wantErr: `invalid --builders value "0" (must be a positive integer)`,
+			wantErr: `"--builders" flag: must be a positive integer`,
 		},
 		{
 			name:    "checkers zero",
 			args:    []string{"--checkers=0"},
-			wantErr: `invalid --checkers value "0" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "builders negative",
 			args:    []string{"--build", "--builders", "-1"},
-			wantErr: `invalid --builders value "-1" (must be a positive integer)`,
+			wantErr: `"--builders" flag: must be a positive integer`,
 		},
 		{
 			name:    "checkers negative",
 			args:    []string{"--checkers=-1"},
-			wantErr: `invalid --checkers value "-1" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "builders non-integer",
 			args:    []string{"--build", "--builders", "many"},
-			wantErr: `invalid --builders value "many" (must be a positive integer)`,
+			wantErr: `"--builders" flag: must be a positive integer`,
 		},
 		{
 			name:    "checkers non-integer",
 			args:    []string{"--checkers=many"},
-			wantErr: `invalid --checkers value "many" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "rejects_builders_without_build",
@@ -635,16 +603,17 @@ func TestParseBuildArgsConcurrencyControls(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseBuildArgs(tt.args)
 			if tt.wantErr != "" {
-				if err == nil || err.Error() != tt.wantErr {
-					t.Fatalf("parseBuildArgs(%v) error = %v, want %q", tt.args, err, tt.wantErr)
+				stderr, code := captureStderr(t, func() int { return cmdBuild(tt.args) })
+				if code != 1 {
+					t.Fatalf("cmdBuild(%v) exit = %d, want 1", tt.args, code)
+				}
+				if !strings.Contains(stderr, tt.wantErr) {
+					t.Fatalf("cmdBuild(%v) stderr = %q, want substring %q", tt.args, stderr, tt.wantErr)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			got := parseBuildArgsForTest(t, tt.args)
 			if (got.builders == nil) != (tt.wantBuilders == nil) {
 				t.Errorf("builders = %v, want %v", got.builders, tt.wantBuilders)
 			}
@@ -661,19 +630,36 @@ func TestParseBuildArgsConcurrencyControls(t *testing.T) {
 	}
 }
 
-func TestUsageIncludesConcurrencyControls(t *testing.T) {
-	var output strings.Builder
-	usage(&output)
+// TestBuildHelpShowsConcurrencyControls pins the rendered build/root help:
+// the build flag descriptions and the root environment notes must survive the
+// Cobra migration.
+func TestBuildHelpShowsConcurrencyControls(t *testing.T) {
+	var out, errOut strings.Builder
+	if code := execute([]string{"build", "--help"}, cliStreams{in: strings.NewReader(""), out: &out, err: &errOut}); code != 0 {
+		t.Fatalf("build --help exit = %d, stderr: %s", code, errOut.String())
+	}
 	for _, want := range []string{
 		"--builders <n>",
 		"default 4",
 		"only with --build",
 		"--checkers <n>",
 		"build and check",
-		"UV_THREADPOOL_SIZE         configure the Node sidecar libuv pool (not Go output writers)",
 	} {
-		if !strings.Contains(output.String(), want) {
-			t.Errorf("usage does not contain %q", want)
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("build --help does not contain %q", want)
+		}
+	}
+
+	out.Reset()
+	if code := execute([]string{"--help"}, cliStreams{in: strings.NewReader(""), out: &out, err: &errOut}); code != 0 {
+		t.Fatalf("root --help exit = %d, stderr: %s", code, errOut.String())
+	}
+	for _, want := range []string{
+		"UV_THREADPOOL_SIZE",
+		"configure the Node sidecar libuv pool",
+	} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("root --help does not contain %q", want)
 		}
 	}
 }
@@ -713,10 +699,7 @@ func TestBuildWatchConcurrencyOptions(t *testing.T) {
 	dir := t.TempDir()
 	configPath := filepath.Join(dir, "tsconfig.json")
 	mustWrite(t, configPath, `{"rbxts":{"luau":false}}`)
-	parsed, err := parseBuildArgs([]string{"--build", "--watch", "--builders", "3", "--checkers", "2"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	parsed := parseBuildArgsForTest(t, []string{"--build", "--watch", "--builders", "3", "--checkers", "2"})
 
 	// When
 	reload := newBuildOptionsReload(configPath, parsed)
@@ -749,10 +732,7 @@ func TestBuildSolutionPropagatesCheckers(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// When
-			parsed, err := parseBuildArgs([]string{"--build", "--builders", "3", "--checkers", fmt.Sprint(tt.checkers)})
-			if err != nil {
-				t.Fatal(err)
-			}
+			parsed := parseBuildArgsForTest(t, []string{"--build", "--builders", "3", "--checkers", fmt.Sprint(tt.checkers)})
 			opts := mergeProjectOptions(defaultProjectOptions, nil, &parsed.opts)
 			opts.builders = parsed.builders
 			opts.checkers = parsed.checkers
@@ -1003,48 +983,35 @@ func TestRenderDiagFrames(t *testing.T) {
 // TestParseBuildArgsMaxErrors verifies that --max-errors is parsed correctly.
 func TestParseBuildArgsMaxErrors(t *testing.T) {
 	t.Run("default is 50", func(t *testing.T) {
-		got, err := parseBuildArgs(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, nil)
 		if got.maxErrors != 50 {
 			t.Errorf("maxErrors = %d, want 50", got.maxErrors)
 		}
 	})
 
 	t.Run("--max-errors value", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"--max-errors", "10"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"--max-errors", "10"})
 		if got.maxErrors != 10 {
 			t.Errorf("maxErrors = %d, want 10", got.maxErrors)
 		}
 	})
 
 	t.Run("--max-errors=N form", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"--max-errors=5"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"--max-errors=5"})
 		if got.maxErrors != 5 {
 			t.Errorf("maxErrors = %d, want 5", got.maxErrors)
 		}
 	})
 
 	t.Run("--max-errors 0 means unlimited", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"--max-errors", "0"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"--max-errors", "0"})
 		if got.maxErrors != 0 {
 			t.Errorf("maxErrors = %d, want 0", got.maxErrors)
 		}
 	})
 
 	t.Run("--max-errors with negative value errors", func(t *testing.T) {
-		_, err := parseBuildArgs([]string{"--max-errors", "-1"})
-		if err == nil {
+		if code := cmdBuild([]string{"--max-errors", "-1"}); code != 1 {
 			t.Error("expected error for negative --max-errors")
 		}
 	})
@@ -1054,10 +1021,7 @@ func TestParseBuildArgsMaxErrors(t *testing.T) {
 // --no-clear (and their defaults).
 func TestParseBuildArgsWatchDXFlags(t *testing.T) {
 	t.Run("defaults: bell off, clear on", func(t *testing.T) {
-		got, err := parseBuildArgs(nil)
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, nil)
 		if got.bell {
 			t.Error("bell default = true, want false")
 		}
@@ -1066,26 +1030,20 @@ func TestParseBuildArgsWatchDXFlags(t *testing.T) {
 		}
 	})
 	t.Run("--bell enables the bell", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"--bell"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"--bell"})
 		if !got.bell {
 			t.Error("--bell not parsed")
 		}
 	})
 	t.Run("--no-clear disables clear-on-rebuild", func(t *testing.T) {
-		got, err := parseBuildArgs([]string{"--no-clear"})
-		if err != nil {
-			t.Fatal(err)
-		}
+		got := parseBuildArgsForTest(t, []string{"--no-clear"})
 		if got.clearScreen {
 			t.Error("--no-clear did not disable clearScreen")
 		}
 	})
 }
 
-// TestCmdBuildMinify verifies that `rotor build --minify` produces smaller,
+// TestCmdBuildMinify verifies that `sloptor build --minify` produces smaller,
 // still-valid Luau with the header comment stripped, while a normal build keeps
 // it — i.e. the flag is what minifies, and only when set.
 func TestCmdBuildMinify(t *testing.T) {

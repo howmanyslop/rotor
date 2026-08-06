@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -10,9 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"rotor/internal/compile"
 )
 
+// diagnosticsArgs is the parsed `sloptor diagnostics` argv, assembled by
+// newDiagnosticsCommand from Cobra flags.
 type diagnosticsArgs struct {
 	project   string
 	build     bool
@@ -20,93 +23,118 @@ type diagnosticsArgs struct {
 	jsonOut   bool
 	builders  *int
 	checkers  *int
-	help      bool
 }
 
-func parseDiagnosticsArgs(args []string) (*diagnosticsArgs, error) {
-	res := &diagnosticsArgs{project: "."}
-	positional := false
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch a {
-		case "--json":
-			res.jsonOut = true
-			continue
-		case "-h", "--help":
-			res.help = true
-			return res, nil
-		}
-
-		if !strings.HasPrefix(a, "-") {
-			if positional {
-				return nil, fmt.Errorf("unexpected extra argument %q", a)
-			}
-			res.project = a
-			positional = true
-			continue
-		}
-
-		// One or two leading dashes name a flag; "---project" does not.
-		if strings.HasPrefix(a, "---") {
-			return nil, fmt.Errorf("unknown flag %q", a)
-		}
-
-		name := strings.TrimLeft(a, "-")
-		value, hasValue := "", false
-		if eq := strings.IndexByte(name, '='); eq >= 0 {
-			value, name = name[eq+1:], name[:eq]
-			hasValue = true
-		}
-		switch name {
-		case "p", "project":
-			// build.go's takeValue semantics: a flag-like next token is NOT a
-			// value. Consuming it unconditionally made `--project --json` set
-			// the project to "--json", walk up to the cwd, and census a
-			// different project with no error and no JSON.
-			if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-				value = args[i]
-			}
-			if value == "" {
-				return nil, fmt.Errorf("flag %q needs a value", a)
-			}
-			res.project = value
-			continue
-		case "build", "b":
-			// build.go's takeValue semantics verbatim: the path is optional and
-			// a flag-like next token is not one, so `--build --json` censuses
-			// the solution rooted at --project rather than at "--json".
-			if !hasValue && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-				value = args[i]
-			}
-			res.build = true
-			res.buildPath = value
-			continue
-		case "builders", "checkers":
-			if !hasValue && i+1 < len(args) && isNumericFlagValue(args[i+1]) {
-				i++
-				value = args[i]
-			}
-			n, err := parsePositiveIntFlag(name, value)
-			if err != nil {
-				return nil, err
-			}
-			if name == "builders" {
-				res.builders = n
-			} else {
-				res.checkers = n
-			}
-			continue
-		}
-		return nil, fmt.Errorf("unknown flag %q", a)
+// newDiagnosticsCommand is the census counterpart of `sloptor check`: it
+// reports what happened to EVERY file of a project instead of stopping at the
+// first failure, optionally over in-memory source overrides.
+func newDiagnosticsCommand(streams cliStreams) *cobra.Command {
+	var args diagnosticsArgs
+	cmd := &cobra.Command{
+		Use:                   "diagnostics [options] [path]",
+		Short:                 "report EVERY file's outcome instead of stopping at the first failure: ok / typeError / transformerDiagnostic / internalCompilerError",
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			return runDiagnosticsCommand(streams, &args, cmd, argv)
+		},
 	}
-	if res.builders != nil && !res.build {
-		// build.go rejects the same combination: there is nothing to run in
-		// parallel without a solution.
-		return nil, errors.New("--builders requires --build")
+	flags := cmd.Flags()
+	flags.SortFlags = false
+	addStringFlag(cmd, &args.project, "project", "p", "", "<path>",
+		"project path (default \".\"): a tsconfig file, a directory containing one, or any path to search upward from")
+	addStringFlag(cmd, &args.buildPath, "build", "b", "", "[path]",
+		"census a solution of project references (optionally select a tsconfig path)")
+	cmd.Flags().VarP(newPositiveIntValue(&args.builders), "builders", "",
+		"number of projects to build concurrently (default 4; only with --build)")
+	setFlagPlaceholder(cmd, "builders", "<n>")
+	cmd.Flags().VarP(newPositiveIntValue(&args.checkers), "checkers", "",
+		"number of checkers per project (default 4; build and check)")
+	setFlagPlaceholder(cmd, "checkers", "<n>")
+	addBoolFlag(cmd, &args.jsonOut, "json", "", false,
+		"emit one machine-readable result object instead of styled output")
+	return cmd
+}
+
+// runDiagnosticsCommand loads the overlay request from stdin, resolves the
+// config like build does, censuses, and renders. It is deliberately read-only
+// and deliberately does not gate: exit 1 only when no census could be
+// produced at all.
+func runDiagnosticsCommand(streams cliStreams, args *diagnosticsArgs, cmd *cobra.Command, argv []string) error {
+	f := cmd.Flags()
+	if f.Changed("project") && args.project == "" {
+		return usageFailure("flag \"--project\" needs a value")
 	}
-	return res, nil
+	if args.project == "" {
+		args.project = "."
+	}
+	if len(argv) > 0 {
+		if f.Changed("project") {
+			return usageFailure("unexpected extra argument %q (project already set via --project)", argv[0])
+		}
+		args.project = argv[0]
+	}
+	if f.Changed("build") {
+		args.build = true
+		args.buildPath, _ = f.GetString("build")
+	}
+	if args.builders != nil && !args.build {
+		return usageFailure("--builders requires --build")
+	}
+
+	request, err := readDiagnosticsRequest(streams.in)
+	if err != nil {
+		return runtimeFailure(err)
+	}
+
+	// cmdBuild's resolution order: --build's optional path wins over --project.
+	projectPath := args.project
+	if args.buildPath != "" {
+		projectPath = args.buildPath
+	}
+	tsConfigPath, err := findTsConfigPath(projectPath)
+	if err != nil {
+		return runtimeFailure(err)
+	}
+	dir := filepath.Dir(tsConfigPath)
+
+	// The tsconfig `rbxts` key still decides the project's SHAPE — type, Rojo
+	// project, include path — without which some projects cannot be censused
+	// at all. allowCommentDirectives is the one option deliberately not
+	// honored.
+	//
+	// Note what that does and does not buy. It does NOT stop @ts-ignore from
+	// suppressing type errors: the directive is honored inside the checker and
+	// no flag rotor sets undoes that. What it does is add rotor's own
+	// "comment directives are not supported" diagnostic, so a file leaning on
+	// them shows up as transformerDiagnostic instead of passing as `ok`. The
+	// cost is a divergence from `sloptor build` for a project that legitimately
+	// sets allowCommentDirectives: true.
+	rbxtsOptions, err := readRbxtsOptionsChecked(tsConfigPath)
+	if err != nil {
+		return runtimeFailure(err)
+	}
+	merged := mergeProjectOptions(defaultProjectOptions, rbxtsOptions)
+	merged.allowCommentDirectives = false
+
+	opts := projectCompileOptions(tsConfigPath, merged)
+	opts.Checkers = args.checkers
+	opts.Builders = args.builders
+	opts.Overlays = request.Overlays
+
+	start := time.Now()
+	projects, overlayMatches, censusErr := runDiagnosticsCensus(dir, tsConfigPath, opts, args.build)
+	elapsed := time.Since(start)
+
+	if args.jsonOut {
+		writeDiagnosticsJSON(streams.out, projects, overlayMatches, censusErr, elapsed, args.build)
+	} else {
+		writeDiagnosticsText(streams.out, streams.err, projects, censusErr, elapsed, args.build)
+	}
+	if censusErr != nil {
+		return reportedFailure(censusErr)
+	}
+	return nil
 }
 
 // diagnosticsRequest is the JSON object read from stdin. Overlays replace the
@@ -126,7 +154,7 @@ type jsonInternalError struct {
 }
 
 // jsonFileDiagnostics is one file's census entry. Diagnostics reuses the
-// `rotor build --json` / `rotor check --json` jsonDiagnostic shape.
+// `sloptor build --json` / `sloptor check --json` jsonDiagnostic shape.
 type jsonFileDiagnostics struct {
 	File string `json:"file"`
 	// Project is the config path of the project that compiled this file — the
@@ -186,97 +214,7 @@ type jsonDiagnosticsResult struct {
 	FileDiagnostics []jsonFileDiagnostics    `json:"fileDiagnostics"`
 }
 
-// cmdDiagnostics reports what happened to EVERY file of a project instead of
-// stopping at the first failure, optionally over in-memory source overrides.
-// It is the census counterpart of `rotor check`: check is typecheck-only and
-// never runs the transformer, while build stops at the first gate that trips.
-//
-// It is strictly read-only. It routes through compile.CompileProjectDiagnostics
-// (the write-free path), never emits the include folder, and — unlike
-// `rotor check` — never refreshes rotor.d.ts.
-//
-// Overlays arrive as JSON on stdin, which must be closed (or a terminal) or
-// the read blocks. They REPLACE the text of files already in the program;
-// they cannot add one, and a key naming no file in the program fails the run.
-// Projects with transformer plugins cannot be overlaid at all — the plugin
-// sidecar reads source from disk.
-//
-// Exit code, deliberately unlike build and check: 0 whenever a census was
-// produced, even one full of diagnostics, and 1 only when no census could be
-// produced at all. This command reports; it does not gate. Callers read `ok`
-// and the per-file outcomes to decide what to do about the contents.
-func cmdDiagnostics(args []string) int {
-	parsed, err := parseDiagnosticsArgs(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor diagnostics: %v\n\n", err)
-		usage(os.Stderr)
-		return 1 // usage errors exit 1 (rbxtsc parity; see main.go)
-	}
-	if parsed.help {
-		usage(os.Stdout)
-		return 0
-	}
-
-	request, err := readDiagnosticsRequest(os.Stdin)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor diagnostics: %v\n", err)
-		return 1
-	}
-
-	// cmdBuild's resolution order: --build's optional path wins over --project.
-	projectPath := parsed.project
-	if parsed.buildPath != "" {
-		projectPath = parsed.buildPath
-	}
-	tsConfigPath, err := findTsConfigPath(projectPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor diagnostics: %v\n", err)
-		return 1
-	}
-	dir := filepath.Dir(tsConfigPath)
-
-	// The tsconfig `rbxts` key still decides the project's SHAPE — type, Rojo
-	// project, include path — without which some projects cannot be censused
-	// at all. allowCommentDirectives is the one option deliberately not
-	// honored.
-	//
-	// Note what that does and does not buy. It does NOT stop @ts-ignore from
-	// suppressing type errors: the directive is honored inside the checker and
-	// no flag rotor sets undoes that. What it does is add rotor's own
-	// "comment directives are not supported" diagnostic, so a file leaning on
-	// them shows up as transformerDiagnostic instead of passing as `ok`. The
-	// cost is a divergence from `rotor build` for a project that legitimately
-	// sets allowCommentDirectives: true.
-	rbxtsOptions, err := readRbxtsOptionsChecked(tsConfigPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor diagnostics: %v\n", err)
-		return 1
-	}
-	merged := mergeProjectOptions(defaultProjectOptions, rbxtsOptions)
-	merged.allowCommentDirectives = false
-
-	opts := projectCompileOptions(tsConfigPath, merged)
-	opts.Checkers = parsed.checkers
-	opts.Builders = parsed.builders
-	opts.Overlays = request.Overlays
-
-	start := time.Now()
-	projects, overlayMatches, censusErr := runDiagnosticsCensus(dir, tsConfigPath, opts, parsed.build)
-	elapsed := time.Since(start)
-
-	if parsed.jsonOut {
-		writeDiagnosticsJSON(os.Stdout, projects, overlayMatches, censusErr, elapsed, parsed.build)
-	} else {
-		writeDiagnosticsText(os.Stdout, os.Stderr, projects, censusErr, elapsed, parsed.build)
-	}
-	if censusErr != nil {
-		return 1
-	}
-	return 0
-}
-
 // runDiagnosticsCensus censuses one project, or — under --build — every project
-// the entry tsconfig references. Both arms return the same per-project slice,
 // so the renderers below have one shape to handle and the single-project output
 // is what it always was.
 //
@@ -416,8 +354,10 @@ func diagnosticsJSONDiagnostic(d compile.DiagnosticInfo) jsonDiagnostic {
 	return jd
 }
 
-// writeDiagnosticsText renders the census as text on w. A failure to produce
-// one at all is not census output, so it goes to errw with the same
+// writeDiagnosticsText renders the census as text on w: one aligned event row
+// per non-ok file (status word, relative file, one-line detail), project-level
+// diagnostics, and a final timed census row. A failure to produce a census at
+// all is not census output, so it goes to errw with the same
 // "sloptor diagnostics: " prefix every other failure of this command carries —
 // never into the stdout stream a consumer is parsing.
 func writeDiagnosticsText(w, errw io.Writer, projects []*compile.ProjectDiagnostics, censusErr error, elapsed time.Duration, build bool) {
@@ -431,13 +371,15 @@ func writeDiagnosticsText(w, errw io.Writer, projects []*compile.ProjectDiagnost
 		return
 	}
 
+	u := newUI(w)
 	counts := map[compile.FileOutcome]int{}
 	files, transformed := 0, 0
+	var events []uiEvent
 	for _, census := range projects {
 		// A solution's files come from several projects, so each one heads its
 		// own section; a single project has nothing to disambiguate.
 		if build {
-			fmt.Fprintf(w, "%s\n", relForDisplay(filepath.FromSlash(census.ConfigPath)))
+			fmt.Fprintf(w, "%s\n", u.s.Muted(relForDisplay(filepath.FromSlash(census.ConfigPath))))
 		}
 		files += len(census.Files)
 		transformed += census.Transformed
@@ -446,22 +388,37 @@ func writeDiagnosticsText(w, errw io.Writer, projects []*compile.ProjectDiagnost
 			if file.Outcome == compile.FileOutcomeOK {
 				continue
 			}
-			fmt.Fprintf(w, "%-22s %s\n", file.Outcome, relForDisplay(file.FileName))
-			for _, d := range file.Diagnostics {
-				fmt.Fprintf(w, "    %s\n", oneLine(d.Message))
+			var details []string
+			if len(file.Diagnostics) > 0 {
+				for _, d := range file.Diagnostics {
+					details = append(details, oneLine(d.Message))
+				}
 			}
 			if file.InternalError != nil {
-				fmt.Fprintf(w, "    %s\n", oneLine(file.InternalError.Error()))
+				details = append(details, oneLine(file.InternalError.Error()))
 			}
+			detail := string(file.Outcome)
+			if len(details) > 0 {
+				detail += " — " + strings.Join(details, " · ")
+			}
+			events = append(events, uiEvent{
+				Status: eventFailed,
+				Target: relForDisplay(file.FileName),
+				Detail: detail,
+			})
 		}
 		for _, d := range census.Diagnostics {
-			fmt.Fprintf(w, "%-22s %s\n", "project", oneLine(d.Message))
+			events = append(events, uiEvent{Status: eventFailed, Target: "(project)", Detail: oneLine(d.Message)})
 		}
 	}
-	fmt.Fprintf(w, "\n%d files, %d transformed in %d ms — ok %d, typeError %d, transformerDiagnostic %d, internalCompilerError %d\n",
-		files, transformed, elapsed.Milliseconds(),
-		counts[compile.FileOutcomeOK], counts[compile.FileOutcomeTypeError],
-		counts[compile.FileOutcomeTransformerDiagnostic], counts[compile.FileOutcomeInternalCompilerError])
+	events = append(events, uiEvent{
+		Status: eventFinished,
+		Detail: fmt.Sprintf("%d files, %d transformed in %d ms — ok %d, typeError %d, transformerDiagnostic %d, internalCompilerError %d",
+			files, transformed, elapsed.Milliseconds(),
+			counts[compile.FileOutcomeOK], counts[compile.FileOutcomeTypeError],
+			counts[compile.FileOutcomeTransformerDiagnostic], counts[compile.FileOutcomeInternalCompilerError]),
+	})
+	u.events(events)
 
 	// Under --build the projects that DID census are worth printing, so the
 	// failure follows them instead of replacing them. It still goes to errw:

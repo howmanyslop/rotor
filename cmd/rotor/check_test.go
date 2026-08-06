@@ -10,7 +10,7 @@ import (
 	"rotor/tsgo/checker"
 )
 
-// writeCheckableProject writes a minimal project `rotor check` can typecheck
+// writeCheckableProject writes a minimal project `sloptor check` can typecheck
 // without node_modules (noLib + local global stubs). mainSrc overrides
 // src/main.ts when non-empty.
 func writeCheckableProject(t *testing.T, mainSrc string) string {
@@ -123,42 +123,43 @@ func TestParseCheckArgsConcurrencyControls(t *testing.T) {
 		{
 			name:    "missing value",
 			args:    []string{"--checkers"},
-			wantErr: `invalid --checkers value "" (must be a positive integer)`,
+			wantErr: "flag needs an argument: --checkers",
 		},
 		{
 			name:    "non integer",
 			args:    []string{"--checkers=many"},
-			wantErr: `invalid --checkers value "many" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "zero",
 			args:    []string{"--checkers=0"},
-			wantErr: `invalid --checkers value "0" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "negative",
 			args:    []string{"--checkers", "-2"},
-			wantErr: `invalid --checkers value "-2" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "builders remains unknown",
 			args:    []string{"--builders", "2"},
-			wantErr: `unknown flag "--builders"`,
+			wantErr: "unknown flag: --builders",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := parseCheckArgs(tt.args)
 			if tt.wantErr != "" {
-				if err == nil || err.Error() != tt.wantErr {
-					t.Fatalf("parseCheckArgs(%v) error = %v, want %q", tt.args, err, tt.wantErr)
+				stderr, code := captureStderr(t, func() int { return cmdCheck(tt.args) })
+				if code != 1 {
+					t.Fatalf("cmdCheck(%v) exit = %d, want 1", tt.args, code)
+				}
+				if !strings.Contains(stderr, tt.wantErr) {
+					t.Fatalf("cmdCheck(%v) stderr = %q, want substring %q", tt.args, stderr, tt.wantErr)
 				}
 				return
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
+			got := parseCheckArgsForTest(t, tt.args)
 			if got.project != tt.wantProject {
 				t.Errorf("project = %q, want %q", got.project, tt.wantProject)
 			}
@@ -271,27 +272,27 @@ func TestCmdCheckCheckers(t *testing.T) {
 		{
 			name:    "missing",
 			args:    []string{"--checkers"},
-			wantErr: `sloptor check: invalid --checkers value "" (must be a positive integer)`,
+			wantErr: "flag needs an argument: --checkers",
 		},
 		{
 			name:    "zero",
 			args:    []string{"--checkers=0"},
-			wantErr: `sloptor check: invalid --checkers value "0" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "negative",
 			args:    []string{"--checkers", "-1"},
-			wantErr: `sloptor check: invalid --checkers value "-1" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "non integer",
 			args:    []string{"--checkers=many"},
-			wantErr: `sloptor check: invalid --checkers value "many" (must be a positive integer)`,
+			wantErr: `"--checkers" flag: must be a positive integer`,
 		},
 		{
 			name:    "builders unknown",
 			args:    []string{"--builders", "2"},
-			wantErr: `sloptor check: unknown flag "--builders"`,
+			wantErr: "unknown flag: --builders",
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

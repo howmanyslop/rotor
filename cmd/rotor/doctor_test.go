@@ -196,7 +196,7 @@ func TestRunDoctorCloudNoConfigSuggestsInit(t *testing.T) {
 	checks, _ := runDoctor(dir)
 	byLabel := cloudChecksByLabel(checks)
 
-	// A missing rotor.toml warns and points the user at `rotor init` (the
+	// A missing rotor.toml warns and points the user at `sloptor init` (the
 	// doctor<->init synergy); it only fires for projects that already have a
 	// tsconfig, so plain bundle projects (no tsconfig) never reach this row.
 	configRows := byLabel["rotor.toml"]

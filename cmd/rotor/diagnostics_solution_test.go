@@ -303,7 +303,7 @@ func TestCmdDiagnosticsBuildFailingProjectStillReportsTheRest(t *testing.T) {
 }
 
 func TestParseDiagnosticsArgsBuildFlagsMatchBuild(t *testing.T) {
-	// Given the --build/--builders argv shapes `rotor build` accepts
+	// Given the --build/--builders argv shapes `sloptor build` accepts
 	cases := []struct {
 		name string
 		args []string
@@ -319,12 +319,9 @@ func TestParseDiagnosticsArgsBuildFlagsMatchBuild(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			// When both parsers see it
-			diagnostics, diagnosticsErr := parseDiagnosticsArgs(testCase.args)
-			build, buildErr := parseBuildArgs(testCase.args)
-			if diagnosticsErr != nil || buildErr != nil {
-				t.Fatalf("diagnostics err = %v, build err = %v", diagnosticsErr, buildErr)
-			}
+			// When both commands parse the same argv
+			diagnostics := parseDiagnosticsArgsForTest(t, testCase.args)
+			build := parseBuildArgsForTest(t, testCase.args)
 
 			// Then they agree on every field the two commands share
 			if diagnostics.build != build.build {
@@ -344,18 +341,16 @@ func TestParseDiagnosticsArgsBuildFlagsMatchBuild(t *testing.T) {
 }
 
 func TestParseDiagnosticsArgsRejectsBuildersWithoutBuild(t *testing.T) {
-	// Given --builders without --build, which `rotor build` rejects
-	_, err := parseDiagnosticsArgs([]string{"--builders", "4"})
-
-	// Then so does this
-	if err == nil {
-		t.Fatal("--builders without --build was accepted")
+	// Given --builders without --build, which `sloptor build` rejects
+	stderr, code := captureStderr(t, func() int { return cmdDiagnostics([]string{"--builders", "4"}) })
+	if code != 1 {
+		t.Fatalf("diagnostics --builders without --build exit = %d, want 1", code)
 	}
-	if _, buildErr := parseBuildArgs([]string{"--builders", "4"}); buildErr == nil {
-		t.Fatal("the fixture is wrong: rotor build accepts --builders without --build")
+	if !strings.Contains(stderr, "--builders requires --build") {
+		t.Errorf("stderr = %q, want it to name --build", stderr)
 	}
-	if !strings.Contains(err.Error(), "--build") {
-		t.Errorf("error = %v, want it to name --build", err)
+	if code := cmdBuild([]string{"--builders", "4"}); code != 1 {
+		t.Fatal("the fixture is wrong: build must also reject --builders without --build")
 	}
 }
 
