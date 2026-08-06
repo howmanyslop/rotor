@@ -307,6 +307,100 @@ func TestOutputDirectoryCaseCanonicalized(t *testing.T) {
 	}
 }
 
+func TestOutputPresenceIndex(t *testing.T) {
+	projectDir := t.TempDir()
+	outDir := filepath.Join(projectDir, "out")
+	if err := os.MkdirAll(outDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{"out/a.luau", "out/b.luau"} {
+		if err := os.WriteFile(filepath.Join(projectDir, filepath.FromSlash(rel)), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(outDir, "adir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outDir, "a.luau"), filepath.Join(outDir, "alink.luau")); err != nil {
+		t.Fatal(err)
+	}
+
+	writer := newOutputWriter()
+	if err := writer.useHashes(projectDir, map[string]string{}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = writer.close() })
+	index := writer.newOutputPresenceIndex(map[string]string{
+		"out/a.luau":       "hash",
+		"out/b.luau":       "hash",
+		"out/alink.luau":   "hash",
+		"out/adir":         "hash",
+		"out/missing.luau": "hash",
+		"../outside.luau":  "hash",
+	})
+	for _, present := range []string{"out/a.luau", "out/b.luau"} {
+		if !index.hasRegular(present) {
+			t.Errorf("hasRegular(%q) = false, want true", present)
+		}
+	}
+	for _, absent := range []string{"out/alink.luau", "out/adir", "out/missing.luau", "../outside.luau"} {
+		if index.hasRegular(absent) {
+			t.Errorf("hasRegular(%q) = true, want false", absent)
+		}
+	}
+}
+
+func TestOutputPresenceIndexCaseNormalization(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectDir, "out", "Shared"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "out", "Shared", "X.luau"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(projectDir, "out", "deep"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "out", "deep", "x.luau"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sensitive := newOutputWriterWithOperations(outputWriterOperations{}, true)
+	sensitive.secureRoot = true
+	if err := sensitive.useHashes(projectDir, map[string]string{}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = sensitive.close() })
+	sensitiveIndex := sensitive.newOutputPresenceIndex(map[string]string{
+		"out/Shared/X.luau": "hash",
+		"out/deep/x.luau":   "hash",
+	})
+	for _, present := range []string{"out/Shared/X.luau", "out/deep/x.luau"} {
+		if !sensitiveIndex.hasRegular(present) {
+			t.Errorf("case-sensitive hasRegular(%q) = false, want true", present)
+		}
+	}
+	if sensitiveIndex.hasRegular("out/Shared/x.luau") {
+		t.Error("case-sensitive hasRegular(out/Shared/x.luau) = true, want false")
+	}
+
+	insensitive := newOutputWriterWithOperations(outputWriterOperations{}, false)
+	insensitive.secureRoot = true
+	if err := insensitive.useHashes(projectDir, map[string]string{}, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = insensitive.close() })
+	insensitiveIndex := insensitive.newOutputPresenceIndex(map[string]string{"out/deep/x.luau": "hash"})
+	for _, present := range []string{"out/deep/x.luau", "out/DEEP/x.luau", "out/deep/X.luau"} {
+		if !insensitiveIndex.hasRegular(present) {
+			t.Errorf("case-insensitive hasRegular(%q) = false, want true", present)
+		}
+	}
+	if insensitiveIndex.hasRegular("out/deep/missing.luau") {
+		t.Error("case-insensitive hasRegular(out/deep/missing.luau) = true, want false")
+	}
+}
+
 func TestBatchPrepareFailurePreventsWrites(t *testing.T) {
 	failure := errors.New("blocked parent")
 	var otherWrites atomic.Int32

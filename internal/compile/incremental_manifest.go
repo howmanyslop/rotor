@@ -148,10 +148,9 @@ func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTransla
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func pruneMissingOutputs(writer *outputWriter, outputs map[string]string) {
+func pruneMissingOutputs(index *outputPresenceIndex, outputs map[string]string) {
 	for path := range outputs {
-		info, err := writer.lstat(filepath.Join(writer.projectDir, filepath.FromSlash(path)))
-		if err != nil || !info.Mode().IsRegular() {
+		if !index.hasRegular(path) {
 			delete(outputs, path)
 		}
 	}
