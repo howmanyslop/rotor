@@ -94,7 +94,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	}
 	var currentManifest *incrementalManifest
 	if program.Options().IsIncremental() && pathTranslator.BuildInfoOutputPath != "" {
-		currentManifest, err = buildIncrementalManifest(program, sourceFiles, salt)
+		currentManifest, err = buildIncrementalManifest(program, sourceFiles, salt, previousManifest)
 		if err != nil {
 			stopManifest()
 			return nil, nil, err
