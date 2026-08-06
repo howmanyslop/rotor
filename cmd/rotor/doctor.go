@@ -286,8 +286,10 @@ func readPackageVersion(nodeModules, pkg string) (string, bool) {
 }
 
 // tsconfigTransformerPlugins lists compilerOptions.plugins[].transform names
-// from the tsconfig file (raw single-file read; mirrors the sidecar's own
-// plugin detection).
+// declared by this tsconfig file (raw single-file read). A config that declares
+// `plugins` resolves to exactly this list, because `extends` replaces the
+// option rather than merging it; one that declares none inherits its parent's,
+// which this does not follow, so doctor can under-report there.
 func tsconfigTransformerPlugins(tsConfigPath string) []string {
 	data, err := os.ReadFile(tsConfigPath)
 	if err != nil {
