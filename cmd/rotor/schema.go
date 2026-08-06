@@ -19,7 +19,7 @@ import (
 // URL serves, and giving a project that wants a local/offline copy an easy
 // way to produce one:
 //
-//	rotor schema > rotor.schema.json
+//	sloptor schema > rotor.schema.json
 func newSchemaCommand(streams cliStreams) *cobra.Command {
 	var rbxts bool
 	cmd := &cobra.Command{

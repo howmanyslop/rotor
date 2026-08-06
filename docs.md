@@ -45,53 +45,53 @@ These compile under rotor but not under rbxtsc. Unaffected code accepted by rbxt
 
 - **`$getModuleTree` on folders** — rbxtsc requires the specifier to resolve as a module, so pointing it at a folder only works if the folder has an `index.ts`. rotor resolves folder specifiers directly: relative ones (`"./systems"`) against the importing file, non-relative ones against `baseUrl`/`paths` (`"shared/systems"`) and then the project root (`"src/shared/systems"`). The usual server-import/isolation guards still apply.
 - **`$env` compile-time environment macro** — a built-in replacement for the `rbxts-transform-env` plugin (no Node sidecar, no plugin install, no typings package). `$env("GAME_NAME")` inlines the variable's value as a Luau string literal (or `nil` when unset), `$env("GAME_NAME", "fallback")` inlines the value or the fallback, and `$env.GAME_NAME` / `$env["GAME_NAME"]` behave like the 1-arg call. Values resolve at compile time with priority **process environment > `.env.<NODE_ENV>` > `.env`** (files live next to your `tsconfig.json`; `NODE_ENV` itself resolves from the process env, then `.env`). The `.env` format is `KEY=VALUE` lines with `#` comments and optional single/double quotes; v1 inlines strings only. The type surface (`declare const $env: ...`) is injected automatically — no `.d.ts` needed — and names/fallbacks must be string literals so the value can be baked in (dynamic names get a clear diagnostic). For editors (which never see the injected declaration), rotor writes a single on-disk **`rotor.d.ts`** companion covering every macro (see below). If you migrate from `rbxts-transform-env`, drop the plugin from your tsconfig; its modern module-export form (`import { $env } from "rbxts-transform-env"`) still works through the plugin sidecar and never collides with the built-in global.
-- **`$asset` compile-time asset macro** — the headline rotor 2.0 feature. `$asset("assets/logo.png")` inlines a Luau string `"rbxassetid://<id>"`, resolving the file's content hash to a Roblox asset id through the committed lockfile (**`rotor-lock.json`**). The single argument is a string literal (dynamic paths get a clear diagnostic); a project-relative path is resolved against the project root (under the optional `[assets] base` directory when configured, so `base = "assets/images"` lets you write `$asset("ui/icon.png")` for `assets/images/ui/icon.png`), and a path beginning with `./` or `../` against the importing file. **Cache hit (the common case) is fully offline and deterministic** — the build reads only the lockfile and parity is unaffected. On a genuine cache miss, if `ROBLOX_API_KEY` is set and `[assets].creator` is configured, rotor uploads the file via Open Cloud, records the new id in `rotor-lock.json` (persisted atomically after a successful build), and inlines it; **offline + miss** is a clear compile error pointing at `rotor asset sync`. Missing files, bad usage (a bare `$asset`), and non-literal paths all surface diagnostics rather than panics. As with `$env`, the type surface (`declare function $asset(path: string): string;`) is injected automatically, and the shared on-disk **`rotor.d.ts`** companion (see below) carries it for editors.
+- **`$asset` compile-time asset macro** — the headline rotor 2.0 feature. `$asset("assets/logo.png")` inlines a Luau string `"rbxassetid://<id>"`, resolving the file's content hash to a Roblox asset id through the committed lockfile (**`rotor-lock.json`**). The single argument is a string literal (dynamic paths get a clear diagnostic); a project-relative path is resolved against the project root (under the optional `[assets] base` directory when configured, so `base = "assets/images"` lets you write `$asset("ui/icon.png")` for `assets/images/ui/icon.png`), and a path beginning with `./` or `../` against the importing file. **Cache hit (the common case) is fully offline and deterministic** — the build reads only the lockfile and parity is unaffected. On a genuine cache miss, if `ROBLOX_API_KEY` is set and `[assets].creator` is configured, rotor uploads the file via Open Cloud, records the new id in `rotor-lock.json` (persisted atomically after a successful build), and inlines it; **offline + miss** is a clear compile error pointing at `sloptor asset sync`. Missing files, bad usage (a bare `$asset`), and non-literal paths all surface diagnostics rather than panics. As with `$env`, the type surface (`declare function $asset(path: string): string;`) is injected automatically, and the shared on-disk **`rotor.d.ts`** companion (see below) carries it for editors.
 - **`$nameof(expr)` compile-time name macro** — inlines the *trailing* identifier or property name of an expression as a Luau string literal: `$nameof(player.Humanoid.Health)` → `"Health"`, `$nameof(foo)` → `"foo"`. The argument's source is read but never evaluated (it produces no runtime code), so it stays in sync with refactors/renames. An expression with no statically-knowable trailing name (an index, a call, a literal) gets a clear diagnostic. Type: `declare function $nameof(item: unknown): string;`
 - **`$keys<T>()` compile-time keys macro** — inlines an array of `T`'s string keys as a Luau array literal, using the type checker (the `rbxts-transformer-keys` staple): `$keys<{ x: number; y: string }>()` → `{ "x", "y" }`. Keys come from the type's apparent/declared string properties in declaration order; number/symbol keys are skipped; a type with no enumerable string keys (e.g. `{}`) yields an empty array (a valid result, not an error). A missing type argument is a diagnostic. Type: `declare function $keys<T>(): string[];` (the generic is consumed at compile time; the macro fills the array).
 - **`$file(path)` compile-time file macro** — inlines a project file's parsed contents as a Luau **value** at compile time. A `.json` file becomes a Luau table/array/scalar literal (int vs float precision preserved; a JSON `null` object member is dropped — a nil Luau field is absent — while a `null` array element becomes `nil`); any other text file (`.txt`, `.md`, …) becomes a Luau string literal of its raw contents. Path resolution mirrors `$asset`: project-relative, or `./`/`../` relative to the importing file. The path must be a string literal; a missing file or invalid JSON is a clear diagnostic. `$file` is a pure function of the file's bytes (parity-safe and cacheable) — editing the data file changes the output, and incremental rebuild handles it. Type: `declare function $file(path: string): any;`
 - **`$git(field)` + `$buildTime()` build/VCS stamping macros** — `$git("sha")` inlines the short 7-character commit hash, `$git("branch")` the current branch (`""` in detached HEAD), `$git("tag")` the nearest tag pointing at HEAD (`""` if none), each as a string literal; `$git("dirty")` inlines a boolean for whether the working tree has uncommitted changes. `$buildTime()` inlines an ISO-8601 timestamp of the build. The git data is read natively from `.git` (HEAD → ref → sha, branch from HEAD, tags from `refs/tags` + `packed-refs`); the dirty check shells out to `git status --porcelain` and degrades to `false` when git or `.git` is absent. **Outside a git repo** every `$git` field is empty/`false` — never an error. **Determinism:** `$git` is *stable within a commit + working tree*, so its files rebuild to identical bytes; `$buildTime` is **intentionally non-deterministic** — it stamps the current time and *should* bust incremental caching for files that use it, so use it sparingly. Types: `declare function $git(field: "sha" | "branch" | "tag"): string;` `declare function $git(field: "dirty"): boolean;` `declare function $buildTime(): string;`
 
-**Editor types — one `rotor.d.ts` for every macro.** All of rotor's macros (`$env`, `$asset`, `$nameof`, `$keys`, `$file`, `$git`, `$buildTime`) share a single on-disk **`rotor.d.ts`** companion. The compiler injects identical declarations in-memory, so this file exists purely for editors/IDEs (which never see the synthetic copies). `rotor init` scaffolds it and lists it in the tsconfig `include`; `rotor build` / `rotor check` / `rotor asset` write or refresh it whenever the project references any macro; the compiler skips its synthetic copies when the on-disk file is in the program, so the two never collide. If a macro red-squiggles in your editor, add `rotor.d.ts` to your tsconfig `include`. `rotor clean --types` removes it (and the legacy `rotor-env.d.ts` / `rotor-asset.d.ts` / `rotor-macros.d.ts` from projects scaffolded before the consolidation).
+**Editor types — one `rotor.d.ts` for every macro.** All of rotor's macros (`$env`, `$asset`, `$nameof`, `$keys`, `$file`, `$git`, `$buildTime`) share a single on-disk **`rotor.d.ts`** companion. The compiler injects identical declarations in-memory, so this file exists purely for editors/IDEs (which never see the synthetic copies). `sloptor init` scaffolds it and lists it in the tsconfig `include`; `sloptor build` / `sloptor check` / `sloptor asset` write or refresh it whenever the project references any macro; the compiler skips its synthetic copies when the on-disk file is in the program, so the two never collide. If a macro red-squiggles in your editor, add `rotor.d.ts` to your tsconfig `include`. `sloptor clean --types` removes it (and the legacy `rotor-env.d.ts` / `rotor-asset.d.ts` / `rotor-macros.d.ts` from projects scaffolded before the consolidation).
 
 ## Commands
 
 ```
-rotor check [path] [-w]       typecheck the project (native, full strictness)
-rotor build [options] [path]  compile the project to Luau
-rotor diagnostics [options] [path]
+sloptor check [path] [-w]       typecheck the project (native, full strictness)
+sloptor build [options] [path]  compile the project to Luau
+sloptor diagnostics [options] [path]
                               report EVERY file's outcome instead of stopping at
                               the first failure, optionally over in-memory source
                               overlays read as JSON on stdin; writes nothing.
                               --build [path] censuses a whole solution
-rotor doctor [path]           diagnose the setup: tsconfig, @rbxts packages,
+sloptor doctor [path]           diagnose the setup: tsconfig, @rbxts packages,
                               Node.js + transformer plugins, Rojo wiring
-rotor minify <file> [-o out] [--no-index-field]
+sloptor minify <file> [-o out] [--no-index-field]
                               minify a Luau file (strips comments + whitespace,
                               collapses t["x"] to t.x, keeps --! directives)
-rotor bundle <entry> [-o out] [--minify]
+sloptor bundle <entry> [-o out] [--minify]
                               inline a Luau require graph into one runnable file
-rotor dev [path] [--no-serve] watch + incrementally compile, and serve to Studio
+sloptor dev [path] [--no-serve] watch + incrementally compile, and serve to Studio
                               via `rojo serve` (the dev inner loop)
-rotor pack [path] [--as luau|rbxmx|rbxm] [-o out] [--entry inst.path] [--rojo-tree]
+sloptor pack [path] [--as luau|rbxmx|rbxm] [-o out] [--entry inst.path] [--rojo-tree]
                               package a Rojo project into one self-reconstructing
                               Luau script or a Roblox model file
-rotor init [dir] [--template game|package|plain]
+sloptor init [dir] [--template game|package|plain]
                               scaffold a new project (rbxts game, package library,
                               or plain Luau)
-rotor sourcemap [path] [-o out.json]
+sloptor sourcemap [path] [-o out.json]
                               emit a Rojo-compatible sourcemap.json for luau-lsp
-rotor asset <sync|list> [path] [--dry-run]
+sloptor asset <sync|list> [path] [--dry-run]
                               upload assets via Open Cloud: lockfile + typed
                               assets.luau / assets.d.ts codegen (asphalt-style),
                               or the $asset macro companion in "macro" mode
-rotor schema [--rbxts]         print the rotor.toml schema, or the separate
+sloptor schema [--rbxts]         print the rotor.toml schema, or the separate
                               tsconfig.json "rbxts" schema with --rbxts
-rotor clean [path] [--types] [--dry-run]
+sloptor clean [path] [--types] [--dry-run]
                               remove build outputs and generated editor types
-rotor add [--dev] <pkg>...     add dependencies to package.json
-rotor migrate [path] [--force]
+sloptor add [--dev] <pkg>...     add dependencies to package.json
+sloptor migrate [path] [--force]
                               convert legacy rotor.config.ts to rotor.toml
-rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
+sloptor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
                               declarative Open Cloud deployment with state +
                               plan/apply diffing (mantle-style); manages place
                               files + place settings, experience settings,
@@ -104,38 +104,38 @@ sloptor completion <bash|zsh|fish|powershell>
                               one-line install per shell)
 ```
 
-`asset` and `deploy` are configured by **`rotor.toml`** at the project root and authenticate with an Open Cloud key in `ROBLOX_API_KEY`. `rotor init` writes the hosted `rotor.schema.json` directive; use `rotor migrate` for a legacy `rotor.config.ts`. See the [cloud toolchain spec](docs/superpowers/specs/2026-06-12-rotor-cloud-toolchain-design.md) for the full config shape.
+`asset` and `deploy` are configured by **`rotor.toml`** at the project root and authenticate with an Open Cloud key in `ROBLOX_API_KEY`. `sloptor init` writes the hosted `rotor.schema.json` directive; use `sloptor migrate` for a legacy `rotor.config.ts`. See the [cloud toolchain spec](docs/superpowers/specs/2026-06-12-rotor-cloud-toolchain-design.md) for the full config shape.
 
 **Asset delivery modes** (`[assets] mode`): a project picks one way assets reach Luau, both sharing the same scan/hash/upload pipeline and `rotor-lock.json` cache.
 
-- **`"module"`** (default): `rotor asset sync` uploads the configured `paths` and regenerates the typed accessor module (`assets.luau` + `assets.d.ts`) from the lockfile — the asphalt-style 1.x behaviour. The `$asset` macro still works.
-- **`"macro"`**: `rotor asset sync` uploads `paths` and maintains the lockfile + the `rotor.d.ts` editor companion (no `assets.luau`); the `$asset` macro is the consumption path, with build-time auto-upload filling any gaps. Image uploads (Open Cloud creates a **Decal**) are automatically unwrapped to the underlying **Image** asset id — the decal id doesn't render in image properties like `ImageLabel.Image`; the unwrap uses the asset delivery API, so the key needs the **legacy-assets** scope alongside Assets R/W. The macro itself works in either mode — `mode` only changes what `sync` emits.
+- **`"module"`** (default): `sloptor asset sync` uploads the configured `paths` and regenerates the typed accessor module (`assets.luau` + `assets.d.ts`) from the lockfile — the asphalt-style 1.x behaviour. The `$asset` macro still works.
+- **`"macro"`**: `sloptor asset sync` uploads `paths` and maintains the lockfile + the `rotor.d.ts` editor companion (no `assets.luau`); the `$asset` macro is the consumption path, with build-time auto-upload filling any gaps. Image uploads (Open Cloud creates a **Decal**) are automatically unwrapped to the underlying **Image** asset id — the decal id doesn't render in image properties like `ImageLabel.Image`; the unwrap uses the asset delivery API, so the key needs the **legacy-assets** scope alongside Assets R/W. The macro itself works in either mode — `mode` only changes what `sync` emits.
 
 - `path` is a project directory containing a `tsconfig.json` (defaults to the current directory).
 - Your project needs `node_modules` installed (rotor reads the same `@rbxts` types).
-- Exit codes: `0` = success, `1` = any failure (diagnostics, config, or usage) — matching upstream `rbxtsc`. The one exception is `rotor diagnostics`, which reports rather than gates: see below.
+- Exit codes: `0` = success, `1` = any failure (diagnostics, config, or usage) — matching upstream `rbxtsc`. The one exception is `sloptor diagnostics`, which reports rather than gates: see below.
 - Plugin-backed builds need Node.js at runtime for the transformer sidecar.
 
-`rotor build` compiles every file in the project, writes the `.luau` outputs to your tsconfig's `outDir` exactly where `rbxtsc` would put them, runs the cleanup/copy pipeline, emits `.d.ts` files when `compilerOptions.declaration` is enabled, and copies `include/` (RuntimeLib.lua, Promise.lua — verbatim from roblox-ts). Try it on rotor's own test fixture project:
+`sloptor build` compiles every file in the project, writes the `.luau` outputs to your tsconfig's `outDir` exactly where `rbxtsc` would put them, runs the cleanup/copy pipeline, emits `.d.ts` files when `compilerOptions.declaration` is enabled, and copies `include/` (RuntimeLib.lua, Promise.lua — verbatim from roblox-ts). Try it on sloptor's own test fixture project:
 
 ```powershell
 bun install --cwd testdata/diff/project --no-save
-rotor build testdata/diff/project
+sloptor build testdata/diff/project
 # out/01_literals.luau
 # ...
 # compiled 43 files in 189 ms
 ```
 
-### rotor diagnostics
+### sloptor diagnostics
 
-`rotor build` is four sequential gates — program-option diagnostics, the
+`sloptor build` is four sequential gates — program-option diagnostics, the
 per-file precheck, the global checker diagnostics, the transform drain — and
 each returns at the first failure. The precheck gate returns *before* the
 transform stage is queued, so **one type error anywhere hides every transformer
-diagnostic in the project**. `rotor check` is complete but typecheck-only: it
+diagnostic in the project**. `sloptor check` is complete but typecheck-only: it
 never runs the transformer, so it surfaces no `noAny`-class diagnostic at all.
 
-`rotor diagnostics` runs every file and reports each one's outcome:
+`sloptor diagnostics` runs every file and reports each one's outcome:
 
 | Outcome | Meaning |
 |---|---|
@@ -145,15 +145,15 @@ never runs the transformer, so it surfaces no `noAny`-class diagnostic at all.
 | `internalCompilerError` | a ported upstream assert fired; the panic value and stack are reported |
 
 ```powershell
-rotor diagnostics --project tsconfig.json --json
-'{"overlays":{"C:/proj/src/main.ts":"export const x = 1;\n"}}' | rotor diagnostics --json
+sloptor diagnostics --project tsconfig.json --json
+'{"overlays":{"C:/proj/src/main.ts":"export const x = 1;\n"}}' | sloptor diagnostics --json
 ```
 
 - `--project <path>` selects the config; `--checkers <n>` sets checker count.
   `-b/--build [path]` censuses a whole solution of project references, with
   `--builders <n>` — the same flags, values and `--builders requires --build`
-  rule `rotor build` uses.
-- `--json` extends the `rotor build --json` result shape with a `transformed`
+  rule `sloptor build` uses.
+- `--json` extends the `sloptor build --json` result shape with a `transformed`
   count, an `overlayMatches` count and a `fileDiagnostics` array. Diagnostic
   positions are resolved against the text that was compiled, so they stay
   correct under overlays.
@@ -170,7 +170,7 @@ rotor diagnostics --project tsconfig.json --json
   diagnostic, so a file that leans on them is at least visible as
   `transformerDiagnostic` rather than passing as `ok`. The cost is a
   divergence: a project that legitimately sets `allowCommentDirectives: true`
-  gets a diagnostic here that `rotor build` does not report.
+  gets a diagnostic here that `sloptor build` does not report.
 - **Exit code, unlike `build` and `check`: 0 whenever a census was produced**,
   even one full of diagnostics; 1 only when none could be. This command reports,
   it does not gate. Read `ok` and the per-file outcomes to judge the contents.
@@ -206,7 +206,7 @@ cannot carry a project's worth of source, which is why this is stdin.
 
 #### Solutions (`--build`)
 
-`rotor diagnostics --build [path]` censuses every project the entry tsconfig
+`sloptor diagnostics --build [path]` censuses every project the entry tsconfig
 references, transitively, in dependency order.
 
 - A project that cannot be censused at all does **not** stop the others. A
@@ -236,7 +236,7 @@ A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor need
 
 ## Build options
 
-`rotor build` accepts the rbxtsc-compatible flag surface (booleans accept `--flag`, `--flag=false`, `--no-flag`): `-p/--project`, `-b/--build [path]`, `--builders <n>`, `--checkers <n>`, `--emitDeclarationOnly`, `-w/--watch`, `--usePolling`, `--verbose`, `--noInclude`, `--logTruthyChanges`, `--writeOnlyChanged`, `--writeTransformedFiles` (parsed and ignored), `--optimizedLoops`, `--type game|model|package`, `-i/--includePath`, `--rojo`, `--allowCommentDirectives`, and `--luau`. Rotor adds `--cpuprofile`, `--trace-out`, `--blockprofile`, `--mutexprofile`, `--heapprofile`, `--timings`, `--minify`, `--max-errors`, `--json`, `--bell`, and `--no-clear`. `--emitDeclarationOnly` requires `--build`; `--build --watch` cannot be combined with declaration-only emit. The finite profiling and timing flags cannot be combined with `--watch`. Run `rotor build --help` for the rendered descriptions.
+`sloptor build` accepts the rbxtsc-compatible flag surface (booleans accept `--flag`, `--flag=false`, `--no-flag`): `-p/--project`, `-b/--build [path]`, `--builders <n>`, `--checkers <n>`, `--emitDeclarationOnly`, `-w/--watch`, `--usePolling`, `--verbose`, `--noInclude`, `--logTruthyChanges`, `--writeOnlyChanged`, `--writeTransformedFiles` (parsed and ignored), `--optimizedLoops`, `--type game|model|package`, `-i/--includePath`, `--rojo`, `--allowCommentDirectives`, and `--luau`. Sloptor adds `--cpuprofile`, `--trace-out`, `--blockprofile`, `--mutexprofile`, `--heapprofile`, `--timings`, `--minify`, `--max-errors`, `--json`, `--bell`, and `--no-clear`. `--emitDeclarationOnly` requires `--build`; `--build --watch` cannot be combined with declaration-only emit. The finite profiling and timing flags cannot be combined with `--watch`. Run `sloptor build --help` for the rendered descriptions.
 
 Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; merge order: defaults < rbxts < command line.
 
@@ -244,7 +244,7 @@ Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; me
 
 - **`--minify`** — pass every emitted `.luau`/`.lua` source through the Luau minifier (comment/whitespace stripping + `t["x"]` → `t.x`) before writing. It is opt-in; declaration and `include/` files are never minified.
 - **Code-frame diagnostics** — TypeScript, transformer, and macro errors render as grouped code frames (source line + caret/underline, keyword highlighting, OSC 8 file links, an `✗ N errors in M files` footer). `--max-errors <n>` caps the rendered frames (default 50; `0` = all). In watch mode the screen clears before each rebuild (opt out with `--no-clear`), a `✗ N errors` banner persists on the idle line until the next green build, and `--bell` rings the terminal on a fail↔pass transition.
-- **`--json`** — emit one machine-readable result object (version, ok, files, durationMs, diagnostics with `file`/`line`/`col`/`severity`/`message`) instead of styled output. Also available on `rotor check`.
+- **`--json`** — emit one machine-readable result object (version, ok, files, durationMs, diagnostics with `file`/`line`/`col`/`severity`/`message`) instead of styled output. Also available on `sloptor check`.
 - **One-shot diagnostics** — `--cpuprofile`, `--trace-out`, `--blockprofile`, `--mutexprofile`, `--heapprofile`, and `--timings` can be combined on one build. Rotor finalizes requested profiles even when the build fails, which keeps failed-build traces usable.
 
 ### Shell completion
@@ -265,17 +265,17 @@ with the flags and subcommands above.
 
 ### Tsconfig schema publication
 
-The `rotor.toml` schema and the tsconfig `rbxts` schema are separate documents. `rotor schema` prints the hosted `rotor.toml` schema; `rotor schema --rbxts` prints the eight-key tsconfig extension schema. Publish the latter where your project editors can read it:
+The `rotor.toml` schema and the tsconfig `rbxts` schema are separate documents. `sloptor schema` prints the hosted `rotor.toml` schema; `sloptor schema --rbxts` prints the eight-key tsconfig extension schema. Publish the latter where your project editors can read it:
 
 ```sh
-rotor schema --rbxts > rbxts-tsconfig.schema.json
+sloptor schema --rbxts > rbxts-tsconfig.schema.json
 ```
 
 Use `"$schema": "./rbxts-tsconfig.schema.json"` in `tsconfig.json`. The `rbxts` values merge through the `extends` chain from parent to child, path values resolve relative to the file that declares them, and command-line values win over tsconfig values. CLI-only values such as `watch`, `verbose`, and `usePolling` are warned about and ignored when placed under `rbxts`.
 
 ### Project references, source maps, plugins, and build state
 
-`rotor build --build` drains project references in dependency order. A coordinator tsconfig with only `references` is not compiled as a project of its own. `--emitDeclarationOnly` applies to the solution build and cannot be watched. `--build --watch` watches the solution's tsconfig extends chain and Rojo topology, invalidating dependent projects when a referenced project changes.
+`sloptor build --build` drains project references in dependency order. A coordinator tsconfig with only `references` is not compiled as a project of its own. `--emitDeclarationOnly` applies to the solution build and cannot be watched. `--build --watch` watches the solution's tsconfig extends chain and Rojo topology, invalidating dependent projects when a referenced project changes.
 
 With `compilerOptions.sourceMap: true`, Rotor writes an adjacent `.luau.map` for each Luau output. The map's `sourcesContent` is the original pre-transformer TypeScript, and source-map files are not counted as emitted Luau files. Declaration maps are kept while their corresponding source exists.
 
@@ -293,9 +293,9 @@ Successful builds may leave these generated or cached files. They are build stat
 
 ### Concurrency controls
 
-`--checkers <n>` sets the number of type-checker workers per project. The default is 4, matching TypeScript 7. It applies to `rotor build`, `rotor check`, and both watch modes. A CLI value overrides each project's `compilerOptions.checkers`; omitting the flag leaves the project's own config in place. If a project sets `compilerOptions.singleThreaded: true`, it still forces one effective checker regardless of the CLI.
+`--checkers <n>` sets the number of type-checker workers per project. The default is 4, matching TypeScript 7. It applies to `sloptor build`, `sloptor check`, and both watch modes. A CLI value overrides each project's `compilerOptions.checkers`; omitting the flag leaves the project's own config in place. If a project sets `compilerOptions.singleThreaded: true`, it still forces one effective checker regardless of the CLI.
 
-`--builders <n>` sets the number of project-reference builders that run concurrently during solution builds (`--build`). The default is 4; `--builders 1` makes the solution build serial. It is only valid with `--build` — passing it without `--build` is a usage error (exit 1). `rotor check` does not accept `--builders`.
+`--builders <n>` sets the number of project-reference builders that run concurrently during solution builds (`--build`). The default is 4; `--builders 1` makes the solution build serial. It is only valid with `--build` — passing it without `--build` is a usage error (exit 1). `sloptor check` does not accept `--builders`.
 
 Both flags accept positive integers only. Missing, zero, negative, or non-integer values are usage errors.
 

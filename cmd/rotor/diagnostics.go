@@ -428,7 +428,7 @@ func writeDiagnosticsText(w, errw io.Writer, projects []*compile.ProjectDiagnost
 	}
 }
 
-// oneLine flattens the embedded newlines rotor diagnostics carry (message plus
+// oneLine flattens the embedded newlines sloptor diagnostics carry (message plus
 // "Suggestion: ...") so one diagnostic stays one line.
 func oneLine(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
