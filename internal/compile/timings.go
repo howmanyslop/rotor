@@ -34,6 +34,7 @@ type BuildTimingStages struct {
 	NativeDiagnosticsTransformRenderMs int64 `json:"nativeDiagnosticsTransformRenderMs"`
 	CompiledOutputWritesMs             int64 `json:"compiledOutputWritesMs"`
 	DeclarationEmitWritesMs            int64 `json:"declarationEmitWritesMs"`
+	IncrementalManifestMs              int64 `json:"incrementalManifestMs"`
 	PersistenceMs                      int64 `json:"persistenceMs"`
 }
 
@@ -67,6 +68,7 @@ const (
 	nativeDiagnosticsTransformRenderStage
 	compiledOutputWritesStage
 	declarationEmitWritesStage
+	incrementalManifestStage
 	persistenceStage
 )
 
@@ -103,6 +105,8 @@ func (stage buildTimingStage) traceName() string {
 		return "compiled output writes"
 	case declarationEmitWritesStage:
 		return "declaration emit/write"
+	case incrementalManifestStage:
+		return "incremental manifest"
 	case persistenceStage:
 		return "persistence"
 	default:
@@ -127,6 +131,8 @@ func (timings *BuildTimings) addStageDuration(stage buildTimingStage, duration t
 		timings.Stages.CompiledOutputWritesMs += milliseconds
 	case declarationEmitWritesStage:
 		timings.Stages.DeclarationEmitWritesMs += milliseconds
+	case incrementalManifestStage:
+		timings.Stages.IncrementalManifestMs += milliseconds
 	case persistenceStage:
 		timings.Stages.PersistenceMs += milliseconds
 	}

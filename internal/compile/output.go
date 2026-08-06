@@ -77,22 +77,26 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
 	sourceFiles := projectSourceFiles(program)
 	timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
+	stopManifest := timings.startStage(incrementalManifestStage)
 	manifestPath := pathTranslator.BuildInfoOutputPath
 	if manifestPath == "" {
 		manifestPath = outputManifestPath(filepath.FromSlash(dir), program.Options().ConfigFilePath)
 	}
 	previousManifest, err := readIncrementalManifest(manifestPath)
 	if err != nil {
+		stopManifest()
 		return nil, nil, err
 	}
 	salt, err := incrementalSalt(program, opts, manifestPath)
 	if err != nil {
+		stopManifest()
 		return nil, nil, err
 	}
 	var currentManifest *incrementalManifest
 	if program.Options().IsIncremental() && pathTranslator.BuildInfoOutputPath != "" {
 		currentManifest, err = buildIncrementalManifest(program, sourceFiles, salt)
 		if err != nil {
+			stopManifest()
 			return nil, nil, err
 		}
 		if previousManifest != nil && previousManifest.Salt == currentManifest.Salt {
@@ -113,8 +117,10 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		previousOutputs = previousManifest.Outputs
 	}
 	if err := writer.useHashes(filepath.FromSlash(dir), previousOutputs, currentManifest.Outputs); err != nil {
+		stopManifest()
 		return nil, nil, err
 	}
+	stopManifest()
 	defer writer.close()
 	if opts.EmitDeclarationOnly {
 		if !program.Options().GetEmitDeclarations() {
@@ -133,12 +139,15 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			return nil, nil, err
 		}
 		timings.setHashSkips(writer.hashSkipCount())
+		stopPersistence := timings.startStage(persistenceStage)
 		pruneMissingOutputs(writer, currentManifest.Outputs)
 		if !sameIncrementalManifest(previousManifest, currentManifest) {
 			if err := writeIncrementalManifest(manifestPath, currentManifest); err != nil {
+				stopPersistence()
 				return nil, nil, err
 			}
 		}
+		stopPersistence()
 		timings.setEmittedEntries(len(emitted))
 		return &BuildResult{Outputs: map[string]string{}, EmittedFiles: emitted}, nil, nil
 	}

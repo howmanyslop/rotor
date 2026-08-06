@@ -292,6 +292,9 @@ func TestBuildTimingsFlag(t *testing.T) {
 	if timings.Stages.SidecarRoundTripMs != 0 || timings.Stages.OverlayProgramMs != 0 {
 		t.Errorf("pluginless sidecar stages = %+v, want zero", timings.Stages)
 	}
+	if timings.Stages.IncrementalManifestMs < 0 {
+		t.Errorf("incremental manifest stage = %dms, want nonnegative", timings.Stages.IncrementalManifestMs)
+	}
 	assertTimingJSONShape(t, data)
 
 	t.Run("failed build writes an unsuccessful report", func(t *testing.T) {
