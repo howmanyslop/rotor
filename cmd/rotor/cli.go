@@ -118,10 +118,11 @@ func renderError(streams cliStreams, commandPath string, cause error, usage bool
 // so help renders the surface the way it is documented, not alphabetically.
 func newRootCommand(streams cliStreams) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "sloptor",
-		Short:         "an all-in-one Roblox toolchain (rbxtsc-parity compiler, Luau tools, assets, deploy)",
-		SilenceErrors: true,
-		SilenceUsage:  true,
+		Use:                   "sloptor [command] [options]",
+		Short:                 "an all-in-one Roblox toolchain (rbxtsc-parity compiler, Luau tools, assets, deploy)",
+		SilenceErrors:         true,
+		SilenceUsage:          true,
+		DisableFlagsInUseLine: true,
 		CompletionOptions: cobra.CompletionOptions{
 			DisableDefaultCmd: true,
 		},
@@ -138,15 +139,15 @@ func newRootCommand(streams cliStreams) *cobra.Command {
 	root.Flags().SortFlags = false
 	root.Flags().BoolP("version", "v", false, "print sloptor's version")
 	root.Annotations = map[string]string{
-		"rotor/notes": `Environment:
-  RBXTSC_WRITE_CONCURRENCY   override output-write workers (maximum 256)
-  ROTOR_WRITE_WORKERS        rotor-specific output-write worker override
-  UV_THREADPOOL_SIZE         configure the Node sidecar libuv pool (not Go output writers)
-  GOGC                       Go GC target percentage (default 400 when unset)
-  GOMEMLIMIT                 Go memory limit (default 75% of effective memory when unset)
-Color: auto-detected for terminals; NO_COLOR disables, FORCE_COLOR forces.
-Exit codes: 0 = success, 1 = any failure (compile errors, config or usage errors — rbxtsc parity);
-            except ` + "`diagnostics`" + `, which exits 0 whenever a census was produced.`,
+		"rotor/notes": "Environment:\n" +
+			"  RBXTSC_WRITE_CONCURRENCY   override output-write workers (maximum 256)\n" +
+			"  ROTOR_WRITE_WORKERS        rotor-specific output-write worker override\n" +
+			"  UV_THREADPOOL_SIZE         configure the Node sidecar libuv pool (not Go output writers)\n" +
+			"  GOGC                       Go GC target percentage (default 400 when unset)\n" +
+			"  GOMEMLIMIT                 Go memory limit (default 75% of effective memory when unset)\n" +
+			"Color: auto-detected for terminals; NO_COLOR disables, FORCE_COLOR forces.\n" +
+			"Exit codes: 0 = success, 1 = any failure (compile errors, config or usage errors — rbxtsc parity);\n" +
+			"            except `diagnostics`, which exits 0 whenever a census was produced.",
 	}
 
 	root.AddCommand(
@@ -382,6 +383,13 @@ func helpRenderer(cmd *cobra.Command, _ []string) {
 			fmt.Fprintf(&b, "    %s  %s\n", padVisible(s.Cyan(child.Name()), width), child.Short)
 		}
 		b.WriteString("\n")
+	}
+
+	// Cobra auto-adds the -h/--help flag with the stock "help for <cmd>"
+	// description; rewrite it to the house wording so no stock text leaks
+	// into the rendered surface.
+	if f := cmd.Flags().Lookup("help"); f != nil && f.Usage == "help for "+name {
+		f.Usage = "show this help"
 	}
 
 	if flags := visibleFlags(cmd); len(flags) > 0 {

@@ -74,6 +74,8 @@ rotor deploy apply -e prod   # publish places, settings, badges — only what dr
 
 **Scaffolding** — `rotor init` runs an interactive wizard (template, Biome/oxlint, starter packages, asset/deploy config) or scripts cleanly with `--yes`/`--template`.
 
+**Shell completion** — `sloptor completion bash|zsh|fish|powershell` writes a native completion script to stdout (e.g. `sloptor completion fish > ~/.config/fish/completions/sloptor.fish`); see `sloptor completion --help` for the one-line install per shell.
+
 ## Configuration — `rotor.toml`
 
 One typed TOML config drives the cloud tools. `rotor init` writes it with a `#:schema` directive that points at the schema **hosted in this repo** (served via raw GitHub), so taplo / Even Better TOML give validation + autocomplete with no per-project `rotor.schema.json` to generate or commit. Need a local copy for offline editing? `rotor schema > rotor.schema.json`. (Upgrading from a 1.x `rotor.config.ts`? Run `rotor migrate`.)

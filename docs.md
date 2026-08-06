@@ -98,6 +98,10 @@ rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
                               badges, game passes, icon assets, experience
                               icon + thumbnails, developer products, and
                               social links
+sloptor completion <bash|zsh|fish|powershell>
+                              generate a shell completion script (writes to
+                              stdout; see `sloptor completion --help` for the
+                              one-line install per shell)
 ```
 
 `asset` and `deploy` are configured by **`rotor.toml`** at the project root and authenticate with an Open Cloud key in `ROBLOX_API_KEY`. `rotor init` writes the hosted `rotor.schema.json` directive; use `rotor migrate` for a legacy `rotor.config.ts`. See the [cloud toolchain spec](docs/superpowers/specs/2026-06-12-rotor-cloud-toolchain-design.md) for the full config shape.
@@ -242,6 +246,22 @@ Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; me
 - **Code-frame diagnostics** — TypeScript, transformer, and macro errors render as grouped code frames (source line + caret/underline, keyword highlighting, OSC 8 file links, an `✗ N errors in M files` footer). `--max-errors <n>` caps the rendered frames (default 50; `0` = all). In watch mode the screen clears before each rebuild (opt out with `--no-clear`), a `✗ N errors` banner persists on the idle line until the next green build, and `--bell` rings the terminal on a fail↔pass transition.
 - **`--json`** — emit one machine-readable result object (version, ok, files, durationMs, diagnostics with `file`/`line`/`col`/`severity`/`message`) instead of styled output. Also available on `rotor check`.
 - **One-shot diagnostics** — `--cpuprofile`, `--trace-out`, `--blockprofile`, `--mutexprofile`, `--heapprofile`, and `--timings` can be combined on one build. Rotor finalizes requested profiles even when the build fails, which keeps failed-build traces usable.
+
+### Shell completion
+
+`sloptor completion <bash|zsh|fish|powershell>` writes a native completion
+script to stdout — no installation side effects, so redirection works
+unchanged:
+
+```sh
+sloptor completion bash > /etc/bash_completion.d/sloptor
+sloptor completion zsh > "${fpath[1]}/_sloptor"
+sloptor completion fish > ~/.config/fish/completions/sloptor.fish
+sloptor completion powershell | Out-String | Invoke-Expression
+```
+
+The scripts are generated from the live command tree, so they stay in sync
+with the flags and subcommands above.
 
 ### Tsconfig schema publication
 
