@@ -25,7 +25,7 @@ type cliStreams struct {
 
 // commandFailure is the single error type command RunE bodies return. It is
 // not an error message by itself: `cause` is the text, `usage` selects the
-// dim "Run 'sloptor <command> --help' for usage." hint, `render` preserves rich
+// dim "Run 'rotor <command> --help' for usage." hint, `render` preserves rich
 // diagnostic output (buildFailure code frames, Luau frames), and `reported`
 // marks failures the command's own diagnostic writer already rendered so
 // execute does not print a duplicate generic error line.
@@ -105,7 +105,7 @@ func renderError(streams cliStreams, commandPath string, cause error, usage bool
 	s := term.For(streams.err)
 	fmt.Fprintf(streams.err, "%s %s\n", s.Error("error:"), cause)
 	if usage {
-		hint := "sloptor --help"
+		hint := "rotor --help"
 		if commandPath != "" && commandPath != "rotor" {
 			hint = commandPath + " --help"
 		}
@@ -118,7 +118,7 @@ func renderError(streams cliStreams, commandPath string, cause error, usage bool
 // so help renders the surface the way it is documented, not alphabetically.
 func newRootCommand(streams cliStreams) *cobra.Command {
 	root := &cobra.Command{
-		Use:                   "sloptor [command] [options]",
+		Use:                   "rotor <command> [flags]",
 		Short:                 "an all-in-one Roblox toolchain (rbxtsc-parity compiler, Luau tools, assets, deploy)",
 		SilenceErrors:         true,
 		SilenceUsage:          true,
@@ -138,17 +138,9 @@ func newRootCommand(streams cliStreams) *cobra.Command {
 	root.SetUsageFunc(usageErrorRenderer)
 	root.Flags().SortFlags = false
 	root.Flags().BoolP("version", "v", false, "print sloptor's version")
-	root.Annotations = map[string]string{
-		"rotor/notes": "Environment:\n" +
-			"  RBXTSC_WRITE_CONCURRENCY   override output-write workers (maximum 256)\n" +
-			"  ROTOR_WRITE_WORKERS        rotor-specific output-write worker override\n" +
-			"  UV_THREADPOOL_SIZE         configure the Node sidecar libuv pool (not Go output writers)\n" +
-			"  GOGC                       Go GC target percentage (default 400 when unset)\n" +
-			"  GOMEMLIMIT                 Go memory limit (default 75% of effective memory when unset)\n" +
-			"Color: auto-detected for terminals; NO_COLOR disables, FORCE_COLOR forces.\n" +
-			"Exit codes: 0 = success, 1 = any failure (compile errors, config or usage errors — rbxtsc parity);\n" +
-			"            except `diagnostics`, which exits 0 whenever a census was produced.",
-	}
+	// rotor/notes is a presence marker: the root help renders its structured
+	// Environment / Exit-codes sections (renderRootNotes) instead of a raw dump.
+	root.Annotations = map[string]string{"rotor/notes": "root"}
 
 	root.AddCommand(
 		newAddCommand(streams),
@@ -173,12 +165,12 @@ func newRootCommand(streams cliStreams) *cobra.Command {
 	return root
 }
 
-// newVersionCommand is the explicit `sloptor version` subcommand: the same bare
+// newVersionCommand is the explicit `rotor version` subcommand: the same bare
 // version string the root -v/--version flag prints.
 func newVersionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "print sloptor's version",
+Short: "print sloptor's version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintln(cmd.OutOrStdout(), version)
@@ -368,21 +360,14 @@ func helpRenderer(cmd *cobra.Command, _ []string) {
 	}
 	fmt.Fprintf(&b, "  %s %s\n\n", s.Info(s.Bold(name)), "— "+cmd.Short)
 
-	fmt.Fprintf(&b, "  %s\n", s.Green("Usage:"))
-	fmt.Fprintf(&b, "    %s\n\n", s.Cyan(cmd.UseLine()))
+	fmt.Fprintf(&b, "  %s %s\n\n", s.Green("Usage:"), s.Cyan(cmd.UseLine()))
 
 	if children := visibleCommands(cmd); len(children) > 0 {
-		fmt.Fprintf(&b, "  %s\n", s.Green("Commands:"))
-		width := 0
-		for _, child := range children {
-			if w := term.VisibleLen(child.Name()); w > width {
-				width = w
-			}
+		if cmd.Parent() == nil {
+			renderRootCommandGroups(&b, s, children)
+		} else {
+			renderCommandList(&b, s, children)
 		}
-		for _, child := range children {
-			fmt.Fprintf(&b, "    %s  %s\n", padVisible(s.Cyan(child.Name()), width), child.Short)
-		}
-		b.WriteString("\n")
 	}
 
 	// Cobra auto-adds the -h/--help flag with the stock "help for <cmd>"
@@ -421,15 +406,135 @@ func helpRenderer(cmd *cobra.Command, _ []string) {
 		b.WriteString("\n")
 	}
 
-	if notes := cmd.Annotations["rotor/notes"]; notes != "" {
-		fmt.Fprintf(&b, "  %s\n", s.Green("Notes:"))
-		for _, line := range strings.Split(notes, "\n") {
-			fmt.Fprintf(&b, "    %s\n", s.Muted(line))
-		}
-		b.WriteString("\n")
+	if cmd.Annotations["rotor/notes"] != "" {
+		renderRootNotes(&b, s)
 	}
 
 	_, _ = io.WriteString(w, b.String())
+}
+
+// rootCommandGroups lists the root help's command sections in display order.
+// Each group names its commands in display order (marquee commands first, not
+// alphabetical); registered commands not claimed by any group fall through to
+// the last group so nothing ever vanishes from help.
+var rootCommandGroups = []struct {
+	heading string
+	note    string // dim trailing note on the heading, e.g. "needs ROBLOX_API_KEY"
+	names   []string
+}{
+	{"Compile & check", "", []string{"build", "check", "diagnostics", "dev", "bundle", "pack", "minify"}},
+	{"Project & deps", "", []string{"init", "add", "doctor", "migrate", "clean", "sourcemap", "schema"}},
+	{"Cloud", "needs ROBLOX_API_KEY", []string{"asset", "deploy"}},
+	{"Other", "", []string{"completion", "version"}},
+}
+
+// renderRootCommandGroups renders the root help's command list as headed
+// sections (Compile & check / Project & deps / Cloud / Other) instead of one
+// flat list, sharing a single name column so every group aligns identically.
+func renderRootCommandGroups(b *strings.Builder, s *term.Styler, children []*cobra.Command) {
+	byName := make(map[string]*cobra.Command, len(children))
+	width := 0
+	for _, child := range children {
+		byName[child.Name()] = child
+		if w := term.VisibleLen(child.Name()); w > width {
+			width = w
+		}
+	}
+	seen := make(map[string]bool, len(children))
+	for gi, group := range rootCommandGroups {
+		var rows []*cobra.Command
+		for _, name := range group.names {
+			if child, ok := byName[name]; ok {
+				rows = append(rows, child)
+				seen[name] = true
+			}
+		}
+		if gi == len(rootCommandGroups)-1 {
+			for _, child := range children {
+				if !seen[child.Name()] {
+					rows = append(rows, child)
+					seen[child.Name()] = true
+				}
+			}
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		fmt.Fprintf(b, "  %s", s.Bold(group.heading))
+		if group.note != "" {
+			fmt.Fprintf(b, " %s", s.Muted("("+group.note+")"))
+		}
+		b.WriteString("\n")
+		for _, child := range rows {
+			fmt.Fprintf(b, "    %s  %s\n", padVisible(s.Cyan(child.Name()), width), child.Short)
+		}
+		b.WriteString("\n")
+	}
+}
+
+// renderCommandList renders a non-root command's subcommands as one flat,
+// aligned list under a Commands: heading.
+func renderCommandList(b *strings.Builder, s *term.Styler, children []*cobra.Command) {
+	fmt.Fprintf(b, "  %s\n", s.Green("Commands:"))
+	width := 0
+	for _, child := range children {
+		if w := term.VisibleLen(child.Name()); w > width {
+			width = w
+		}
+	}
+	for _, child := range children {
+		fmt.Fprintf(b, "    %s  %s\n", padVisible(s.Cyan(child.Name()), width), child.Short)
+	}
+	b.WriteString("\n")
+}
+
+// helpEnvRows is the root help Environment table: variable name, description,
+// and an optional dim default annotation ("" = none). Rendered by
+// renderRootNotes as three aligned columns.
+var helpEnvRows = []struct{ name, desc, def string }{
+	{"GOGC", "Go GC target percentage", "default: 400"},
+	{"GOMEMLIMIT", "Go memory limit", "default: 75% of effective memory"},
+	{"RBXTSC_WRITE_CONCURRENCY", "output-write worker override", "max: 256"},
+	{"ROTOR_WRITE_WORKERS", "rotor-specific output-write worker override", ""},
+	{"UV_THREADPOOL_SIZE", "Node sidecar libuv pool size (not Go output writers)", ""},
+}
+
+// renderRootNotes renders the root help's trailing sections: an aligned
+// Environment table (defaults dim), a hierarchical Exit codes block, the Color
+// policy line, and the pointer to per-command help.
+func renderRootNotes(b *strings.Builder, s *term.Styler) {
+	fmt.Fprintf(b, "  %s\n", s.Green("Environment:"))
+	nameWidth, descWidth := 0, 0
+	for _, row := range helpEnvRows {
+		if w := term.VisibleLen(row.name); w > nameWidth {
+			nameWidth = w
+		}
+		if w := term.VisibleLen(row.desc); w > descWidth {
+			descWidth = w
+		}
+	}
+	for _, row := range helpEnvRows {
+		desc := row.desc
+		if row.def != "" {
+			desc = padVisible(row.desc, descWidth)
+		}
+		fmt.Fprintf(b, "    %s  %s", padVisible(row.name, nameWidth), desc)
+		if row.def != "" {
+			fmt.Fprintf(b, "  %s", s.Muted(row.def))
+		}
+		b.WriteString("\n")
+	}
+	b.WriteString("\n")
+
+	fmt.Fprintf(b, "  %s\n", s.Green("Exit codes:"))
+	fmt.Fprintf(b, "  %s  %s\n", s.SuccessBold("0"), "success")
+	fmt.Fprintf(b, "  %s  %s\n", s.ErrorBold("1"), "any failure (compile, config, usage — rbxtsc parity)")
+	fmt.Fprintf(b, "    %s  %s\n", s.Muted("exception:"), "`diagnostics` exits 0 whenever a census was produced.")
+	b.WriteString("\n")
+
+	fmt.Fprintf(b, "  %s\n", s.Muted("Color: auto-detected for terminals; NO_COLOR disables, FORCE_COLOR forces."))
+	fmt.Fprintf(b, "  %s\n", s.Muted("Run 'sloptor <command> --help' for details."))
+	b.WriteString("\n")
 }
 
 // visibleCommands lists a command's subcommands for help, hiding Cobra's

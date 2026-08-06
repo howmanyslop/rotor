@@ -14,7 +14,7 @@ import (
 	"rotor/internal/compile"
 )
 
-// diagnosticsArgs is the parsed `sloptor diagnostics` argv, assembled by
+// diagnosticsArgs is the parsed `rotor diagnostics` argv, assembled by
 // newDiagnosticsCommand from Cobra flags.
 type diagnosticsArgs struct {
 	project   string
@@ -25,14 +25,14 @@ type diagnosticsArgs struct {
 	checkers  *int
 }
 
-// newDiagnosticsCommand is the census counterpart of `sloptor check`: it
+// newDiagnosticsCommand is the census counterpart of `rotor check`: it
 // reports what happened to EVERY file of a project instead of stopping at the
 // first failure, optionally over in-memory source overrides.
 func newDiagnosticsCommand(streams cliStreams) *cobra.Command {
 	var args diagnosticsArgs
 	cmd := &cobra.Command{
 		Use:                   "diagnostics [options] [path]",
-		Short:                 "report EVERY file's outcome instead of stopping at the first failure: ok / typeError / transformerDiagnostic / internalCompilerError",
+Short:                 "report EVERY file's outcome instead of stopping at the first failure",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {
@@ -108,7 +108,7 @@ func runDiagnosticsCommand(streams cliStreams, args *diagnosticsArgs, cmd *cobra
 	// no flag rotor sets undoes that. What it does is add rotor's own
 	// "comment directives are not supported" diagnostic, so a file leaning on
 	// them shows up as transformerDiagnostic instead of passing as `ok`. The
-	// cost is a divergence from `sloptor build` for a project that legitimately
+	// cost is a divergence from `rotor build` for a project that legitimately
 	// sets allowCommentDirectives: true.
 	rbxtsOptions, err := readRbxtsOptionsChecked(tsConfigPath)
 	if err != nil {
@@ -154,7 +154,7 @@ type jsonInternalError struct {
 }
 
 // jsonFileDiagnostics is one file's census entry. Diagnostics reuses the
-// `sloptor build --json` / `sloptor check --json` jsonDiagnostic shape.
+// `rotor build --json` / `rotor check --json` jsonDiagnostic shape.
 type jsonFileDiagnostics struct {
 	File string `json:"file"`
 	// Project is the config path of the project that compiled this file — the
@@ -358,11 +358,11 @@ func diagnosticsJSONDiagnostic(d compile.DiagnosticInfo) jsonDiagnostic {
 // per non-ok file (status word, relative file, one-line detail), project-level
 // diagnostics, and a final timed census row. A failure to produce a census at
 // all is not census output, so it goes to errw with the same
-// "sloptor diagnostics: " prefix every other failure of this command carries —
+// "rotor diagnostics: " prefix every other failure of this command carries —
 // never into the stdout stream a consumer is parsing.
 func writeDiagnosticsText(w, errw io.Writer, projects []*compile.ProjectDiagnostics, censusErr error, elapsed time.Duration, build bool) {
 	if censusErr != nil && !build {
-		fmt.Fprintf(errw, "sloptor diagnostics: census failed: %v\n", censusErr)
+		fmt.Fprintf(errw, "rotor diagnostics: census failed: %v\n", censusErr)
 		for _, census := range projects {
 			for _, d := range census.Diagnostics {
 				fmt.Fprintf(errw, "  %s\n", oneLine(d.Message))
@@ -424,7 +424,7 @@ func writeDiagnosticsText(w, errw io.Writer, projects []*compile.ProjectDiagnost
 	// failure follows them instead of replacing them. It still goes to errw:
 	// what was censused is the output, and this is why it is incomplete.
 	if censusErr != nil {
-		fmt.Fprintf(errw, "sloptor diagnostics: census failed: %v\n", censusErr)
+		fmt.Fprintf(errw, "rotor diagnostics: census failed: %v\n", censusErr)
 	}
 }
 

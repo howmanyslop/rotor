@@ -21,7 +21,7 @@ import (
 // when present). It never touches source: only the resolved output/include
 // directories and the named generated files are removed.
 //
-// Targets are resolved exactly the way `sloptor build` resolves them: the
+// Targets are resolved exactly the way `rotor build` resolves them: the
 // tsconfig is found with findTsConfigPath, the outDir read from that config
 // (default "out"), and the include dir from the merged ProjectOptions
 // (default "<project>/include"). With --dry-run nothing is deleted — every
@@ -30,7 +30,7 @@ func newCleanCommand(streams cliStreams) *cobra.Command {
 	var types, dryRun bool
 	cmd := &cobra.Command{
 		Use:                   "clean [path] [--types] [--dry-run]",
-		Short:                 "remove build outputs (outDir, include); --types also removes generated editor types",
+Short:                 "remove build outputs; --types also removes generated editor types",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {

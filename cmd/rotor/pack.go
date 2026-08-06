@@ -24,7 +24,7 @@ func newPackCommand(streams cliStreams) *cobra.Command {
 	rojoTree := false
 	cmd := &cobra.Command{
 		Use:                   "pack [path] [--as luau|rbxmx|rbxm] [-o out] [--entry inst.path] [--rojo-tree]",
-		Short:                 "package a Rojo project into one self-reconstructing Luau script (or a Roblox model file)",
+Short:                 "package a Rojo project into one self-reconstructing Luau script",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {

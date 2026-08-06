@@ -29,7 +29,7 @@ func newInitCommand(streams cliStreams) *cobra.Command {
 	var yes, configOnly bool
 	cmd := &cobra.Command{
 		Use:                   "init [dir] [--template game|package|plain]",
-		Short:                 "scaffold a new project (rbxts game by default; package library, or plain Luau)",
+Short:                 "scaffold a new project (rbxts game; package lib, or plain Luau)",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {
@@ -83,7 +83,7 @@ func runInitCommand(streams cliStreams, cmd *cobra.Command, dir, template string
 				Target: "already configured",
 				Detail: config.ConfigFileName + " exists",
 			}})
-			fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("sloptor doctor"))
+			fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("rotor doctor"))
 			return nil
 		}
 		if writeAdoptFiles(streams.out, dir, detectTemplate(dir)) != 0 {
@@ -182,11 +182,11 @@ func writeAdoptFiles(out io.Writer, dir, template string) int {
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: %v", err))
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
 			return 1
 		}
 		if err := os.WriteFile(path, []byte(f.content), 0o644); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: cannot write %q: %v", path, err))
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: cannot write %q: %v", path, err))
 			return 1
 		}
 		events = append(events, uiEvent{Status: eventCreated, Target: f.path})
@@ -216,7 +216,7 @@ func printAdoptNextSteps(u *ui, wrote int) {
 	u.events([]uiEvent{{Status: status, Target: target, Detail: detail}})
 	fmt.Fprintln(u.w)
 	fmt.Fprintf(u.w, "  %s\n", u.s.Bold("next steps"))
-	fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("sloptor doctor"))
+	fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("rotor doctor"))
 }
 
 // initOptions is everything the scaffold needs to render a project. The
@@ -443,11 +443,11 @@ func writeInitFiles(out io.Writer, opts initOptions, files []initFile) int {
 	for _, f := range files {
 		path := filepath.Join(opts.dir, filepath.FromSlash(f.path))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: %v", err))
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
 			return 1
 		}
 		if err := os.WriteFile(path, []byte(f.content), 0o644); err != nil {
-			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: cannot write %q: %v", path, err))
+			newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: cannot write %q: %v", path, err))
 			return 1
 		}
 		events = append(events, uiEvent{Status: eventCreated, Target: f.path})
@@ -475,8 +475,8 @@ const tsHelloModule = `export function makeHello(name: string) {
 func rotorTOML(assets *assetsOptions, deploy *deployOptions) string {
 	var b strings.Builder
 	b.WriteString(config.SchemaDirective + "\n\n")
-	b.WriteString("# sloptor project configuration — read by `sloptor asset sync` and\n")
-	b.WriteString("# `sloptor deploy`. Uncomment the sections you need.\n")
+	b.WriteString("# sloptor project configuration — read by `rotor asset sync` and\n")
+	b.WriteString("# `rotor deploy`. Uncomment the sections you need.\n")
 
 	if assets != nil {
 		b.WriteString("\n[assets]\n")
@@ -604,8 +604,8 @@ func packageJSON(opts initOptions) string {
 		Version: "0.1.0",
 		Private: opts.template == "game",
 		Scripts: map[string]string{
-			"build": "sloptor build",
-			"watch": "sloptor dev",
+			"build": "rotor build",
+			"watch": "rotor dev",
 		},
 		DevDependencies: map[string]string{
 			// compiler-types only publishes prerelease-tagged versions
@@ -751,8 +751,8 @@ func printInitNextSteps(u *ui, opts initOptions, n int) {
 		step("cd "+opts.dir, "")
 	}
 	if opts.template == "plain" {
-		step("sloptor pack --as luau -o bundle.luau", "package the project into one script")
-		step("sloptor sourcemap -o sourcemap.json", "generate a sourcemap for luau-lsp")
+		step("rotor pack --as luau -o bundle.luau", "package the project into one script")
+		step("rotor sourcemap -o sourcemap.json", "generate a sourcemap for luau-lsp")
 		return
 	}
 	pm := detectPackageManager(opts.dir)
@@ -761,8 +761,8 @@ func printInitNextSteps(u *ui, opts initOptions, n int) {
 	} else {
 		step("npm install", "(or bun install / pnpm install)")
 	}
-	step("sloptor build", "compile to Luau")
-	step("sloptor dev", "watch + serve to Studio")
+	step("rotor build", "compile to Luau")
+	step("rotor dev", "watch + serve to Studio")
 	if opts.linter != "" {
 		step(pm+" run lint", "lint the source")
 	}

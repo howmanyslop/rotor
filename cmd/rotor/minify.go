@@ -28,7 +28,7 @@ func newMinifyCommand(streams cliStreams) *cobra.Command {
 	indexToField := true // rotor DX: collapse t["foo"] -> t.foo (opt out with --no-index-field)
 	cmd := &cobra.Command{
 		Use:                   "minify <file> [-o out]",
-		Short:                 "minify a Luau file (strips comments + whitespace, keeps --! directives)",
+Short:                 "minify a Luau file (keeps --! directives)",
 		Args:                  cobra.ExactArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {

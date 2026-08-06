@@ -16,7 +16,7 @@ import (
 	"rotor/internal/config"
 )
 
-// newAssetCommand is `sloptor asset <sync|list>`: an asphalt-style asset
+// newAssetCommand is `rotor asset <sync|list>`: an asphalt-style asset
 // pipeline. `sync` scans the globs configured under `[assets]` in rotor.toml,
 // uploads new/changed files via Open Cloud, records ids in rotor-lock.json,
 // and regenerates the typed accessor modules (assets.luau + assets.d.ts).
@@ -25,7 +25,7 @@ import (
 func newAssetCommand(streams cliStreams) *cobra.Command {
 	asset := &cobra.Command{
 		Use:                   "asset <sync|list> [path] [--dry-run]",
-		Short:                 "upload project assets via Open Cloud (sync: scan, upload, lockfile + typed codegen; list: show the lockfile; needs ROBLOX_API_KEY)",
+Short:                 "upload project assets via Open Cloud (sync | list)",
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -68,7 +68,7 @@ func newAssetCommand(streams cliStreams) *cobra.Command {
 	return asset
 }
 
-// runAssetSync implements `sloptor asset sync`. A real sync buffers the serial
+// runAssetSync implements `rotor asset sync`. A real sync buffers the serial
 // upload callback results and prints final Created/Updated/Failed rows once,
 // followed by generated output-file rows and the timed final row; only a
 // --dry-run prints the preflight planned rows.
@@ -232,7 +232,7 @@ func runAssetSync(streams cliStreams, dir string, dryRun bool) error {
 	return nil
 }
 
-// assetWriteOutputs performs the mode-aware output step of `sloptor asset sync`,
+// assetWriteOutputs performs the mode-aware output step of `rotor asset sync`,
 // returning the paths written. In "module" mode (default) it regenerates
 // assets.luau + assets.d.ts from the lockfile; in "macro" mode it writes the
 // consolidated rotor.d.ts editor companion (and no assets.luau).
@@ -253,7 +253,7 @@ func assetWriteOutputs(dir string, cfg *config.AssetsConfig, lock *assets.Lockfi
 	return written, nil
 }
 
-// runAssetList implements `sloptor asset list`: a lockfile view.
+// runAssetList implements `rotor asset list`: a lockfile view.
 func runAssetList(streams cliStreams, dir string) error {
 	u := newUI(streams.out)
 	u.banner("asset list")
@@ -267,7 +267,7 @@ func runAssetList(streams cliStreams, dir string) error {
 		events = append(events, uiEvent{
 			Status: eventUnchanged,
 			Target: "no assets in " + assets.LockfileName,
-			Detail: "run `sloptor asset sync` first",
+			Detail: "run `rotor asset sync` first",
 		})
 	} else {
 		paths := make([]string, 0, len(lock.Assets))

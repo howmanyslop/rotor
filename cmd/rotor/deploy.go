@@ -17,7 +17,7 @@ import (
 	"rotor/internal/term"
 )
 
-// newDeployCommand is `sloptor deploy <plan|apply> [path] -e <env> [--yes]
+// newDeployCommand is `rotor deploy <plan|apply> [path] -e <env> [--yes]
 // [--allow-deletes]`: the mantle-style IaC front end over internal/deploy.
 // plan diffs the config's resource graph against .rotor/deploy/<env>.json
 // and prints planned event rows without touching the network; apply executes
@@ -26,7 +26,7 @@ import (
 func newDeployCommand(streams cliStreams) *cobra.Command {
 	deployCmd := &cobra.Command{
 		Use:                   "deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]",
-		Short:                 "declarative Open Cloud deployment from rotor.toml (plan diffs config vs state; apply publishes places, universe settings, badges + icons; needs ROBLOX_API_KEY)",
+Short:                 "declarative Open Cloud deployment from rotor.toml (plan | apply)",
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {
@@ -44,10 +44,10 @@ func newDeployCommand(streams cliStreams) *cobra.Command {
 
 // deployFlags is the shared plan/apply flag surface.
 type deployFlags struct {
-	projectDir    string
-	env           string
-	yes           bool
-	allowDeletes  bool
+	projectDir   string
+	env          string
+	yes          bool
+	allowDeletes bool
 }
 
 func newDeploySubcommand(streams cliStreams, sub string) *cobra.Command {
