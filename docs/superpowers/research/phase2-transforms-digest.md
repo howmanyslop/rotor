@@ -1265,13 +1265,16 @@ With expression → `transformReturnStatementInner` (L28–69):
 - Try-block wrapping (L51–63, later): `return TS.TRY_RETURN, { <values> }`.
 
 ### 10.9 transformBreakStatement — `statements/transformBreakStatement.ts` L8–25
-Label → `errors.noLabeledStatement`, empty list. `isBreakBlockedByTryStatement(node)`
+Label → `errors.noLabeledStatement`, empty list. **ROTOR DIVERGENCE:** labels are a
+rotor extension (transformer/labeledstatement.go); only a label crossing a try is
+rejected, as `noLabeledStatementsWithinTryCatch`. `isBreakBlockedByTryStatement(node)`
 (`util/isBlockedByTryStatement.ts` L11–18: nearest ancestor among
 TryStatement|IterationStatement|SwitchStatement is a Try) → `return TS.TRY_BREAK` (later).
 Else `BreakStatement {}`.
 
 ### 10.10 transformContinueStatement — `statements/transformContinueStatement.ts` L8–25
-Identical shape: label → `noLabeledStatement`; try-blocked → `return TS.TRY_CONTINUE`;
+Identical shape: label → `noLabeledStatement` (same ROTOR DIVERGENCE as 10.9);
+try-blocked → `return TS.TRY_CONTINUE`;
 else `ContinueStatement {}` (Luau has native `continue`).
 
 ### 10.11 transformThrowStatement — `statements/transformThrowStatement.ts` L6–16
@@ -1322,7 +1325,7 @@ reports for the same variable; symbol-less any accesses always report.
 | noRegex | "Regular expressions are not supported!" | dispatch |
 | noTypeOfExpression | "`typeof` operator is not supported!" + sugg. "Use `typeIs(value, type)` or `typeOf(value)` instead." | dispatch |
 | noForInStatement | "for-in loop statements are not supported!" | statement dispatch |
-| noLabeledStatement | "labels are not supported!" | statement dispatch; break/continue label |
+| noLabeledStatement | "labels are not supported!" | statement dispatch; break/continue label — NOT ported (rotor extension: loop labels compile; see 10.9) |
 | noDebuggerStatement | "`debugger` is not supported!" | statement dispatch |
 | noAny | "Using values of type `any` is not supported!" + sugg. "Use `unknown` instead." | validateNotAnyType (binary, unary, calls, access) |
 | noVar | "`var` keyword is not supported!" + sugg. "Use `let` or `const` instead." | variable statement; for initializer |
