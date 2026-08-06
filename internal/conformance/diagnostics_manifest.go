@@ -29,10 +29,21 @@ type diagnosticFixtureProjectPlan struct {
 
 var skippedDiagnosticIDs = map[string]string{}
 
+// forkDiagnosticExpectations reclassifies fixtures whose rbxtsc expectation no
+// longer holds for rotor. An empty slice means "compiles clean".
+//
+// The noLabeledStatement.* trio predates rotor's loop-label support: labels are
+// a deliberate rotor extension (see transformer/labeledstatement.go), so `.1.ts`
+// now compiles, and `.2.ts`/`.3.ts` — a `// @ts-ignore`d break/continue naming a
+// label that does not exist — trade the blanket ban for rotor's own
+// unknown-label error instead of emitting a misdirected `break`.
 var forkDiagnosticExpectations = map[string][]string{
 	"noFunctionExpressionName.ts": {},
 	"noSpreadDestructuring.1.ts":  {},
 	"noSpreadDestructuring.2.ts":  {"noRestSpreadingOfRobloxTypes"},
+	"noLabeledStatement.1.ts":     {},
+	"noLabeledStatement.2.ts":     {"rotorUnknownLabel"},
+	"noLabeledStatement.3.ts":     {"rotorUnknownLabel"},
 }
 
 var installConformanceDepsOnce struct {

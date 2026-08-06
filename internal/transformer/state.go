@@ -194,6 +194,17 @@ type State struct {
 	// transformTryStatement reads the flags back after popping.
 	tryUsesStack []*TryUses
 
+	// labelStack holds one labelEntry per TS loop label currently in scope,
+	// innermost last (rotor extension — see labeledstatement.go). breakDepth
+	// counts the enclosing BREAK BOUNDARIES: constructs that a plain Luau
+	// `break` exits in the emitted output (a real loop, the
+	// `repeat ... until true` a switch lowers to, and the one a labeled
+	// non-loop statement lowers to). Together they answer both questions the
+	// label lowering needs: is this label on the innermost boundary (plain
+	// break/continue), and which checks must be emitted after a boundary ends.
+	labelStack []*labelEntry
+	breakDepth int
+
 	// getTypeCache memoizes GetType by the ORIGINAL node pointer (not the
 	// SkipUpwards result).
 	getTypeCache map[*ast.Node]*checker.Type
@@ -463,6 +474,171 @@ func (s *State) MarkTryUsesBreak() { s.markTryUses(func(u *TryUses) { u.UsesBrea
 
 // MarkTryUsesContinue ports markTryUses("usesContinue").
 func (s *State) MarkTryUsesContinue() { s.markTryUses(func(u *TryUses) { u.UsesContinue = true }) }
+
+// ---------------------------------------------------------------------------
+// Loop labels (rotor extension — no upstream counterpart in rbxtsc 3.0.0)
+// ---------------------------------------------------------------------------
+
+// Label flag values. Luau has no labels and no goto, so a TS label becomes a
+// string flag variable read by checks emitted after each enclosing break
+// boundary. The three values mirror the LoopLabel enum of roblox-ts PR #2928
+// so a future upstream release lines up.
+const (
+	labelNone     = "none"
+	labelBreak    = "break"
+	labelContinue = "continue"
+)
+
+// labelEntry is one live TS label. Depth is the break depth of the construct
+// the label is attached to (a label pushed while breakDepth is d attaches to
+// the construct opened next, at d+1). EverBroken/EverContinued record whether
+// any `break <name>` / `continue <name>` actually had to route through the
+// flag; both are known only after the labeled construct's body is transformed,
+// which is why the `local <id>` declaration and the per-iteration reset are
+// decided at that point.
+type labelEntry struct {
+	ID            *luau.TemporaryIdentifier
+	Name          string
+	Depth         int
+	IsLoop        bool
+	EverBroken    bool
+	EverContinued bool
+}
+
+// used reports whether the flag variable is read anywhere, i.e. whether it
+// needs to be declared at all.
+func (e *labelEntry) used() bool { return e.EverBroken || e.EverContinued }
+
+// PushLabel opens a new label scope for the construct about to be transformed.
+func (s *State) PushLabel(name string, isLoop bool) *labelEntry {
+	entry := &labelEntry{
+		ID:     luau.TempID(name),
+		Name:   name,
+		Depth:  s.breakDepth + 1,
+		IsLoop: isLoop,
+	}
+	s.labelStack = append(s.labelStack, entry)
+	return entry
+}
+
+// PopLabel closes the innermost label scope.
+func (s *State) PopLabel() {
+	n := len(s.labelStack)
+	if n == 0 {
+		panic("transformer: PopLabel on empty stack")
+	}
+	s.labelStack = s.labelStack[:n-1]
+}
+
+// FindLabel resolves a label name innermost-first, returning nil when no such
+// label is in scope (only reachable when the TS error was suppressed).
+func (s *State) FindLabel(name string) *labelEntry {
+	for i := len(s.labelStack) - 1; i >= 0; i-- {
+		if s.labelStack[i].Name == name {
+			return s.labelStack[i]
+		}
+	}
+	return nil
+}
+
+// EnterBreakScope opens a break boundary; every loop, switch and labeled
+// non-loop statement transform must pair it with ExitBreakScope (use defer —
+// one missed exit corrupts every later depth).
+func (s *State) EnterBreakScope() { s.breakDepth++ }
+
+// ExitBreakScope closes a break boundary.
+func (s *State) ExitBreakScope() {
+	if s.breakDepth == 0 {
+		panic("transformer: ExitBreakScope below zero")
+	}
+	s.breakDepth--
+}
+
+// BreakDepth reports the current break-boundary depth.
+func (s *State) BreakDepth() int { return s.breakDepth }
+
+// LabelResets returns the `<id> = "none"` statements to unshift into the body
+// of the loop currently being transformed. Only continued labels need one: a
+// "break" value can never be observed twice, since a break always unwinds out
+// of the labeled construct, whereas a "continue" that reached its target loop
+// would otherwise still be set on the next iteration.
+func (s *State) LabelResets() *luau.List[luau.Statement] {
+	result := luau.NewList[luau.Statement]()
+	for _, entry := range s.labelStack {
+		if entry.Depth == s.breakDepth && entry.EverContinued {
+			result.Push(luau.NewAssignment(entry.ID, "=", luau.Str(labelNone)))
+		}
+	}
+	return result
+}
+
+// LabelChecks returns the statements to emit immediately after the break
+// boundary at the current depth ends — that is, in the enclosing boundary at
+// depth-1. Only labels attached FURTHER OUT than this boundary need a check;
+// a label on this very boundary was already satisfied by the plain `break`.
+//
+//	depth-1, loop, continued -> `if _a == "continue" then continue end`
+//	anything else, still set -> `if _a == "break" then break end`
+//
+// The continue check ORs every qualifying label into ONE statement, so two
+// labels on the same loop both work. Everything left over ORs into one break
+// check: a flag targeting a construct further out than the enclosing one must
+// keep unwinding, whichever value it holds.
+func (s *State) LabelChecks() *luau.List[luau.Statement] {
+	result := luau.NewList[luau.Statement]()
+	depth := s.breakDepth
+
+	var continueCondition luau.Expression
+	var breakCondition luau.Expression
+	or := func(into luau.Expression, term luau.Expression) luau.Expression {
+		if into == nil {
+			return term
+		}
+		return luau.NewBinary(into, "or", term)
+	}
+	isFlag := func(entry *labelEntry, value string) luau.Expression {
+		return luau.NewBinary(entry.ID, "==", luau.Str(value))
+	}
+
+	for _, entry := range s.labelStack {
+		if entry.Depth >= depth {
+			continue
+		}
+		targetsEnclosing := entry.Depth == depth-1
+		if entry.EverContinued {
+			if targetsEnclosing && entry.IsLoop {
+				continueCondition = or(continueCondition, isFlag(entry, labelContinue))
+			} else {
+				breakCondition = or(breakCondition, isFlag(entry, labelContinue))
+			}
+		}
+		if entry.EverBroken {
+			breakCondition = or(breakCondition, isFlag(entry, labelBreak))
+		}
+	}
+
+	if continueCondition != nil {
+		result.Push(luau.NewIf(continueCondition,
+			luau.NewList[luau.Statement](luau.NewContinue()), nil))
+	}
+	if breakCondition != nil {
+		result.Push(luau.NewIf(breakCondition,
+			luau.NewList[luau.Statement](luau.NewBreak()), nil))
+	}
+	return result
+}
+
+// WithoutLabels runs fn with an empty label stack and a zeroed break depth,
+// restoring both afterwards. This is the FUNCTION BARRIER: a Luau `break`
+// cannot cross a function boundary and a flag variable read across one would
+// target the wrong loop, so a nested function body (and the functions rotor's
+// try lowering emits) starts from a clean slate.
+func (s *State) WithoutLabels(fn func()) {
+	savedStack, savedDepth := s.labelStack, s.breakDepth
+	s.labelStack, s.breakDepth = nil, 0
+	defer func() { s.labelStack, s.breakDepth = savedStack, savedDepth }()
+	fn()
+}
 
 // ---------------------------------------------------------------------------
 // pushToVar family (upstream lines 267-306)

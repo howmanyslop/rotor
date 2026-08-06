@@ -81,8 +81,14 @@ func DiagNoForInStatement(node *ast.Node) Diagnostic {
 	return errorDiag("noForInStatement", node, "for-in loop statements are not supported!")
 }
 
-func DiagNoLabeledStatement(node *ast.Node) Diagnostic {
-	return errorDiag("noLabeledStatement", node, "labels are not supported!")
+// DiagNoLabeledStatementsWithinTryCatch replaces upstream 3.0.0's blanket
+// `noLabeledStatement`: rotor supports loop labels (see labeledstatement.go)
+// but a label cannot cross a try/catch, whose break/continue reroute rides the
+// TS.TRY_BREAK/TRY_CONTINUE sentinel protocol and carries no label. Message
+// byte-exact with roblox-ts PR #2928 so a future upstream release lines up.
+func DiagNoLabeledStatementsWithinTryCatch(node *ast.Node) Diagnostic {
+	return errorDiag("noLabeledStatementsWithinTryCatch", node,
+		"labels are not supported within try/catch blocks!")
 }
 
 func DiagNoDebuggerStatement(node *ast.Node) Diagnostic {
@@ -401,6 +407,41 @@ func DiagRojoPathInSrc(partitionPath, suggestedPath string) Diagnostic {
 // input always fails loudly instead of producing silently wrong output.
 func DiagRotorNotYetSupported(node *ast.Node, what string) Diagnostic {
 	return errorDiag("rotorNotYetSupported", node, fmt.Sprintf("rotor: %s not yet supported", what))
+}
+
+// DiagRotorUnknownLabel fires when `break <name>` / `continue <name>` names a
+// label that is not in scope. TypeScript already reports this, so it is only
+// reachable when the TS error was suppressed (`// @ts-ignore`); emitting a
+// misdirected `break` instead would be silently wrong output (rotor extension).
+func DiagRotorUnknownLabel(node *ast.Node) Diagnostic {
+	return errorDiag("rotorUnknownLabel", node,
+		fmt.Sprintf("rotor: no enclosing label named `%s`", node.Text()))
+}
+
+// DiagRotorLabeledStatementFlowControl rejects a label on a NON-loop statement
+// whose body also contains an unlabeled `break`/`continue` bound to an
+// enclosing loop or switch. rotor lowers such a label to `repeat ... until
+// true`, which is itself a break boundary, so that inner unlabeled statement
+// would silently retarget the wrapper (rotor extension).
+func DiagRotorLabeledStatementFlowControl(node *ast.Node) Diagnostic {
+	return errorDiag("rotorLabeledStatementFlowControl", node,
+		"rotor: a label on a non-loop statement cannot contain an unlabeled `break`/`continue` that targets an enclosing loop or switch",
+		suggestion("Label the enclosing loop and use `break <label>` / `continue <label>` instead."),
+	)
+}
+
+// DiagRotorLabeledContinueInDoWhile rejects a labeled `continue` that reaches
+// a `do ... while (<condition needing prereqs>)`. The condition's prereq
+// statements live in the emitted `repeat` body, and Luau rejects a `continue`
+// that jumps over a local the `until` condition reads. rbxtsc has the same
+// hole for an UNLABELED `continue` in that position; rotor reproduces that
+// byte-for-byte to keep parity, but refuses to add a second way in through a
+// rotor-only feature (rotor extension).
+func DiagRotorLabeledContinueInDoWhile(node *ast.Node) Diagnostic {
+	return errorDiag("rotorLabeledContinueInDoWhile", node,
+		"rotor: `continue <label>` cannot target a do/while loop whose condition needs temporaries — Luau forbids `continue` before those locals",
+		suggestion("Move the condition into the loop body, or restructure as a `while` loop."),
+	)
 }
 
 // DiagRotorNoProjectContext guards transformer paths that require the Rojo

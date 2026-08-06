@@ -75,6 +75,118 @@ func (t *sourceTraceMap) OriginalSourceFileName() string { return t.fileName }
 
 func (t *sourceTraceMap) OriginalSourceText() string { return t.text }
 
+// diagnosticTraces carries a compile's transformer traces, keyed the way
+// normalizeSourceFilePath keys everything else. It is empty for a project with
+// no transformer plugins, where the compiled text IS the text on disk.
+type diagnosticTraces map[string]*sourceTraceMap
+
+// remap rewrites one diagnostic whose position indexes the sidecar's reprinted
+// text so that it indexes the original file instead. generated is the text the
+// position came out of — the reprinted source the overlay program parsed.
+//
+// Without this, every position a transformer project reports is an index into
+// text no one can see: the reprint collapses blank lines and comments and adds
+// the plugins' own statements, so the offset lands somewhere further down the
+// file and the code frame underlines the wrong token.
+func (t diagnosticTraces) remap(info DiagnosticInfo, generated string) DiagnosticInfo {
+	if len(t) == 0 || info.FileName == "" {
+		return info
+	}
+	trace := t[normalizeSourceFilePath(info.FileName)]
+	if trace == nil {
+		return info
+	}
+	line, column, ok := utf16Position(generated, info.Offset)
+	if !ok {
+		return info
+	}
+	original := trace.OriginalPosition(transformer.SourcePosition{Line: line, Column: column})
+	if original == nil {
+		return info
+	}
+	offset, ok := byteOffsetOf(trace.text, original.Line, original.Column)
+	if !ok {
+		return info
+	}
+	info.Offset = offset
+	info.Line, info.Col = lineColIn(trace.text, offset)
+	// The span is measured in the reprinted text; a token that survived the
+	// reprint keeps its length, but nothing guarantees it fits what is left of
+	// the original file.
+	if remaining := len(trace.text) - offset; info.Len > remaining {
+		info.Len = remaining
+	}
+	return info
+}
+
+// remapAll is remap over a slice of diagnostics that all came out of the same
+// generated text.
+func (t diagnosticTraces) remapAll(infos []DiagnosticInfo, generated string) []DiagnosticInfo {
+	if len(t) == 0 {
+		return infos
+	}
+	for i, info := range infos {
+		infos[i] = t.remap(info, generated)
+	}
+	return infos
+}
+
+// utf16Position converts a byte offset into the 0-based line and UTF-16 column
+// a source map records. Source-map columns are UTF-16 code units because the
+// generator that wrote them counts JavaScript string indices.
+func utf16Position(text string, offset int) (line, column int, ok bool) {
+	if offset < 0 || offset > len(text) {
+		return 0, 0, false
+	}
+	lineStart := 0
+	for i := 0; i < offset; i++ {
+		if text[i] == '\n' {
+			line++
+			lineStart = i + 1
+		}
+	}
+	for _, r := range text[lineStart:offset] {
+		column++
+		if r > 0xFFFF {
+			column++
+		}
+	}
+	return line, column, true
+}
+
+// byteOffsetOf is utf16Position's inverse: the byte offset of a 0-based line
+// and UTF-16 column.
+func byteOffsetOf(text string, line, column int) (int, bool) {
+	if line < 0 || column < 0 {
+		return 0, false
+	}
+	offset := 0
+	for current := 0; current < line; current++ {
+		next := strings.IndexByte(text[offset:], '\n')
+		if next < 0 {
+			return 0, false
+		}
+		offset += next + 1
+	}
+	units := 0
+	for i, r := range text[offset:] {
+		if units >= column {
+			return offset + i, true
+		}
+		if r == '\n' {
+			return 0, false
+		}
+		units++
+		if r > 0xFFFF {
+			units++
+		}
+	}
+	if units >= column {
+		return len(text), true
+	}
+	return 0, false
+}
+
 func (t *sourceTraceMap) OriginalPosition(position transformer.SourcePosition) *transformer.SourcePosition {
 	index := sort.Search(len(t.mappings), func(index int) bool {
 		mapping := t.mappings[index]

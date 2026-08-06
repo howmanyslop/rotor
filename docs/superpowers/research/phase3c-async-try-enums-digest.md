@@ -1177,7 +1177,7 @@ statements (the enum statement is the mapping key).
 
 | id | text | rotor status |
 |---|---|---|
-| noLabeledStatement (L106) | `labels are not supported!` | ported (diagnostics.go:85) |
+| noLabeledStatement (L106) | `labels are not supported!` | NOT ported — loop labels are a rotor extension (docs.md "rotor extensions"); replaced by `noLabeledStatementsWithinTryCatch` ("labels are not supported within try/catch blocks!", byte-exact with roblox-ts PR #2928) plus the rotor-only `rotorUnknownLabel` / `rotorLabeledStatementFlowControl` / `rotorLabeledContinueInDoWhile` |
 | noDebuggerStatement (L107) | `` `debugger` is not supported! `` | ported (:89) |
 | noEnumMerging (L130) | `Enum merging is not supported!` | ported (:148), UNWIRED |
 | noNamespaceMerging (L131) | `Namespace merging is not supported!` | ported (:152), UNWIRED |

@@ -478,6 +478,7 @@ func transformForOfRangeMacro(s *State, node *ast.Node, macroCall *ast.Node) *lu
 	}
 
 	statements.PushList(TransformStatementList(s, forOf.Statement, getStatements(forOf.Statement), nil))
+	statements.UnshiftList(s.LabelResets())
 
 	if step != nil {
 		if _, isLiteralNumber := getLiteralNumberValue(step); !isLiteralNumber {
@@ -560,23 +561,38 @@ func transformForOfStatement(s *State, node *ast.Node) *luau.List[luau.Statement
 		}
 	}
 
+	// One break scope covers the range-macro numeric for and every builder
+	// shape (rotor extension).
+	s.EnterBreakScope()
+	defer s.ExitBreakScope()
+
+	var result *luau.List[luau.Statement]
 	if rangeMacroCall := findRangeMacro(s, node); rangeMacroCall != nil {
-		return transformForOfRangeMacro(s, node, rangeMacroCall)
+		result = transformForOfRangeMacro(s, node, rangeMacroCall)
+	} else {
+		result = luau.NewList[luau.Statement]()
+
+		var exp luau.Expression
+		expPrereqs := s.CaptureStatements(func() {
+			exp = TransformExpression(s, forOf.Expression)
+		})
+		result.PushList(expPrereqs)
+
+		expType := s.GetType(forOf.Expression)
+		statements := TransformStatementList(s, forOf.Statement, getStatements(forOf.Statement), nil)
+		// Unshift into the body list HERE: it is still writable, and every
+		// builder either unshifts its own initializers above these or splices
+		// the list into a larger body.
+		statements.UnshiftList(s.LabelResets())
+
+		loopBuilder := getLoopBuilder(s, forOf.Expression, expType)
+		result.PushList(loopBuilder(s, statements, forOf.Initializer, exp))
+
+		// ORDER-CRITICAL: the varargs pass rebuilds the result list and
+		// re-appends the loop last, so the checks must go on afterwards.
+		result = transformOptimizableVarArgsForOf(s, node, result)
 	}
 
-	result := luau.NewList[luau.Statement]()
-
-	var exp luau.Expression
-	expPrereqs := s.CaptureStatements(func() {
-		exp = TransformExpression(s, forOf.Expression)
-	})
-	result.PushList(expPrereqs)
-
-	expType := s.GetType(forOf.Expression)
-	statements := TransformStatementList(s, forOf.Statement, getStatements(forOf.Statement), nil)
-
-	loopBuilder := getLoopBuilder(s, forOf.Expression, expType)
-	result.PushList(loopBuilder(s, statements, forOf.Initializer, exp))
-
-	return transformOptimizableVarArgsForOf(s, node, result)
+	result.PushList(s.LabelChecks())
+	return result
 }

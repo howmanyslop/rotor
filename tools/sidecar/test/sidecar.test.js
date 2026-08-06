@@ -20,11 +20,17 @@ function toSlash(value) {
   return value.replace(/\\/g, "/");
 }
 
-function createProgram() {
-  const parsed = ts.getParsedCommandLineOfConfigFile(tsConfigPath, {}, ts.sys);
+function resolveOptions(configPath) {
+  const parsed = ts.getParsedCommandLineOfConfigFile(configPath, {}, ts.sys);
   if (!parsed) {
     throw new Error("expected parsed tsconfig");
   }
+
+  return parsed;
+}
+
+function createProgram() {
+  const parsed = resolveOptions(tsConfigPath);
 
   return ts.createProgram({
     rootNames: parsed.fileNames,
@@ -32,6 +38,22 @@ function createProgram() {
     projectReferences: parsed.projectReferences,
   });
 }
+
+function describePluginConfigs(configs) {
+  return configs.map((config) => ({
+    type: config.type ?? "program",
+    import: config.import ?? "default",
+    prefix: config.prefix,
+    after: Boolean(config.after),
+    afterDeclarations: Boolean(config.afterDeclarations),
+  }));
+}
+
+const PROJECT_PLUGIN_CONFIGS = [
+  { type: "program", import: "default", prefix: "after", after: true, afterDeclarations: false },
+  { type: "config", import: "configTransformer", prefix: "before", after: false, afterDeclarations: false },
+  { type: "raw", import: "rawTransformer", prefix: "afterDeclarations", after: false, afterDeclarations: true },
+];
 
 function readProtocolLine(stream) {
   return new Promise((resolve, reject) => {
@@ -64,24 +86,47 @@ function readProtocolLine(stream) {
   });
 }
 
-test("getPluginConfigs keeps child plugins before parent extends plugins", () => {
-  const configs = sidecar.getPluginConfigs(ts, tsConfigPath);
+// The three tests below pin `extends` resolution to what `tsc --showConfig`
+// reports: `plugins` is an array-valued compiler option, so a child that
+// declares it REPLACES the parent's list rather than adding to it. rbxtsc
+// concatenates the whole chain instead, which leaves a child no way to opt out
+// of an inherited transform.
+test("getPluginConfigs takes the child's plugins in place of the parent's", () => {
+  const configs = sidecar.getPluginConfigs(resolveOptions(tsConfigPath).options);
 
-  assert.equal(configs.length, 3);
-  assert.deepEqual(
-    configs.map((config) => ({
-      type: config.type ?? "program",
-      import: config.import ?? "default",
-      prefix: config.prefix,
-      after: Boolean(config.after),
-      afterDeclarations: Boolean(config.afterDeclarations),
-    })),
-    [
-      { type: "program", import: "default", prefix: "after", after: true, afterDeclarations: false },
-      { type: "config", import: "configTransformer", prefix: "before", after: false, afterDeclarations: false },
-      { type: "raw", import: "rawTransformer", prefix: "afterDeclarations", after: false, afterDeclarations: true },
-    ],
+  assert.deepEqual(describePluginConfigs(configs), PROJECT_PLUGIN_CONFIGS);
+  assert.equal(
+    configs.some((config) => config.prefix === "inherited"),
+    false,
+    "expected the parent's replaced plugin to be absent",
   );
+});
+
+test("getPluginConfigs honours a child that overrides plugins with an empty array", () => {
+  const configs = sidecar.getPluginConfigs(resolveOptions(path.join(projectDir, "tsconfig.no-plugins.json")).options);
+
+  assert.deepEqual(configs, []);
+});
+
+test("getPluginConfigs inherits the parent's plugins when the child declares none", () => {
+  const configs = sidecar.getPluginConfigs(resolveOptions(path.join(projectDir, "tsconfig.inherit.json")).options);
+
+  assert.deepEqual(describePluginConfigs(configs), PROJECT_PLUGIN_CONFIGS);
+});
+
+test("a project whose plugins are overridden to empty runs no transformers", () => {
+  const configPath = path.join(projectDir, "tsconfig.no-plugins.json");
+  const session = new sidecar.SidecarProjectSession(ts, projectDir, configPath);
+  const response = session.handleRequest({
+    protocol: 1,
+    projectDir,
+    tsConfigPath: configPath,
+    compileFileNames: [sourcePath],
+    changedFiles: [],
+  });
+
+  assert.deepEqual(response.diagnostics, []);
+  assert.deepEqual(response.transformed, []);
 });
 
 test("createTransformerList instantiates checker and compilerOptions factories", () => {

@@ -30,6 +30,24 @@ type ExportInfo struct {
 // assignments. Iteration stops after a final statement (break/continue/
 // return) — trailing dead code is elided.
 func TransformStatementList(s *State, parent *ast.Node, statements []*ast.Node, exportInfo *ExportInfo) *luau.List[luau.Statement] {
+	// ROTOR EXTENSION (loop labels): a function body is a barrier for label
+	// lowering — a Luau `break` cannot cross it, and a flag check emitted
+	// inside a closure would target the wrong loop. This is the one choke
+	// point every function-like body passes through: function declarations,
+	// function/arrow expressions, methods and class constructors all reach
+	// their body block here, and a block's parent is function-like ONLY when
+	// that block IS the body.
+	if parent != nil && ast.IsBlock(parent) && ast.IsFunctionLike(parent.Parent) {
+		var result *luau.List[luau.Statement]
+		s.WithoutLabels(func() {
+			result = transformStatementListWorker(s, parent, statements, exportInfo)
+		})
+		return result
+	}
+	return transformStatementListWorker(s, parent, statements, exportInfo)
+}
+
+func transformStatementListWorker(s *State, parent *ast.Node, statements []*ast.Node, exportInfo *ExportInfo) *luau.List[luau.Statement] {
 	result := luau.NewList[luau.Statement]()
 
 	for _, statement := range statements {

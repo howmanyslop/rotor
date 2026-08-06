@@ -113,10 +113,41 @@ func stageRuntimeSuiteProject(baseProjectDir string) (string, error) {
 			return "", err
 		}
 	}
+	if err := stageRotorOwnedSpecs(baseProjectDir, tmpProj); err != nil {
+		return "", err
+	}
 	if err := os.WriteFile(filepath.Join(tmpProj, "src", "main.server.ts"), []byte(runtimeSuiteMainSource()), 0o644); err != nil {
 		return "", err
 	}
 	return tmpProj, nil
+}
+
+// stageRotorOwnedSpecs copies testdata/conformance/rotor/*.spec.ts into the
+// staged suite's src/tests. These specs exercise ROTOR EXTENSIONS that rbxtsc
+// rejects outright (loop labels), so they deliberately live outside the shared
+// conformance corpus: they have no byte-parity golden and must never be
+// compared against rbxtsc output.
+func stageRotorOwnedSpecs(baseProjectDir, tmpProj string) error {
+	rotorSpecDir := filepath.Join(filepath.Dir(baseProjectDir), "rotor")
+	entries, err := os.ReadDir(rotorSpecDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".spec.ts") {
+			continue
+		}
+		if err := copyFile(
+			filepath.Join(rotorSpecDir, entry.Name()),
+			filepath.Join(tmpProj, "src", "tests", entry.Name()),
+		); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runtimeSuiteMainSource() string {

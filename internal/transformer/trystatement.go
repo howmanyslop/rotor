@@ -227,7 +227,16 @@ func transformTryStatement(s *State, node *ast.Node) *luau.List[luau.Statement] 
 	returnsID := luau.TempID("returns")   // created SECOND
 
 	tryUses := s.PushTryUsesStack()
-	statements.Push(transformIntoTryCall(s, node, exitTypeID, returnsID, tryUses))
+	// ROTOR EXTENSION (loop labels): TS.try's three callbacks are Luau
+	// functions, so they are label barriers exactly like any other function
+	// body — a label check emitted inside one would have no loop to break.
+	// Labels declared INSIDE the try body still work; only ones crossing it
+	// are rejected (transformBreakStatement).
+	var tryCall luau.Statement
+	s.WithoutLabels(func() {
+		tryCall = transformIntoTryCall(s, node, exitTypeID, returnsID, tryUses)
+	})
+	statements.Push(tryCall)
 	s.PopTryUsesStack()
 
 	statements.PushList(transformFlowControl(s, node, exitTypeID, returnsID, tryUses))
