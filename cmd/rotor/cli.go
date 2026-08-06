@@ -170,7 +170,7 @@ func newRootCommand(streams cliStreams) *cobra.Command {
 func newVersionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-Short: "print sloptor's version",
+		Short: "print sloptor's version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			fmt.Fprintln(cmd.OutOrStdout(), version)

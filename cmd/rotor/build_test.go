@@ -656,7 +656,7 @@ func TestBuildHelpShowsConcurrencyControls(t *testing.T) {
 	}
 	for _, want := range []string{
 		"UV_THREADPOOL_SIZE",
-		"configure the Node sidecar libuv pool",
+		"Node sidecar libuv pool size",
 	} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("root --help does not contain %q", want)
@@ -1043,7 +1043,7 @@ func TestParseBuildArgsWatchDXFlags(t *testing.T) {
 	})
 }
 
-// TestCmdBuildMinify verifies that `sloptor build --minify` produces smaller,
+// TestCmdBuildMinify verifies that `rotor build --minify` produces smaller,
 // still-valid Luau with the header comment stripped, while a normal build keeps
 // it — i.e. the flag is what minifies, and only when set.
 func TestCmdBuildMinify(t *testing.T) {

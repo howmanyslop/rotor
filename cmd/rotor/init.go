@@ -29,7 +29,7 @@ func newInitCommand(streams cliStreams) *cobra.Command {
 	var yes, configOnly bool
 	cmd := &cobra.Command{
 		Use:                   "init [dir] [--template game|package|plain]",
-Short:                 "scaffold a new project (rbxts game; package lib, or plain Luau)",
+		Short:                 "scaffold a new project (rbxts game; package lib, or plain Luau)",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {

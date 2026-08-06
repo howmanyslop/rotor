@@ -196,15 +196,15 @@ func TestRunDoctorCloudNoConfigSuggestsInit(t *testing.T) {
 	checks, _ := runDoctor(dir)
 	byLabel := cloudChecksByLabel(checks)
 
-	// A missing rotor.toml warns and points the user at `sloptor init` (the
+	// A missing rotor.toml warns and points the user at `rotor init` (the
 	// doctor<->init synergy); it only fires for projects that already have a
 	// tsconfig, so plain bundle projects (no tsconfig) never reach this row.
 	configRows := byLabel["rotor.toml"]
 	if len(configRows) != 1 || configRows[0].status != doctorWarn {
 		t.Fatalf("no-config rows = %+v, want a single warn row", configRows)
 	}
-	if !strings.Contains(configRows[0].hint, "sloptor init") {
-		t.Errorf("no-config hint = %q, want a `sloptor init` suggestion", configRows[0].hint)
+	if !strings.Contains(configRows[0].hint, "rotor init") {
+		t.Errorf("no-config hint = %q, want a `rotor init` suggestion", configRows[0].hint)
 	}
 	// The API-key row stays muted info when no config is present (cloud
 	// commands aren't in use yet).

@@ -88,7 +88,7 @@ func TestCmdDiagnosticsJSONClassifiesEveryFile(t *testing.T) {
 		"panicking.ts": "export const x = neverDeclared;\n",
 	})
 
-	// When `sloptor diagnostics --json` runs over it
+	// When `rotor diagnostics --json` runs over it
 	output, code := captureStdout(t, func() int {
 		return withStdin(t, "", func() int {
 			return cmdDiagnostics([]string{"--project", dir, "--json"})
@@ -442,7 +442,7 @@ func TestCmdDiagnosticsWritesNothingToDisk(t *testing.T) {
 	}
 
 	// Then nothing was written: no outDir, no include folder, and none of
-	// `sloptor check`'s rotor.d.ts
+	// `rotor check`'s rotor.d.ts
 	after := treeEntries(t, dir)
 	if strings.Join(after, "\n") != strings.Join(before, "\n") {
 		t.Errorf("tree changed:\nbefore:\n%s\nafter:\n%s", strings.Join(before, "\n"), strings.Join(after, "\n"))
@@ -689,7 +689,7 @@ func TestWriteDiagnosticsTextRoutesFailureToStderr(t *testing.T) {
 	if out.Len() != 0 {
 		t.Errorf("failure text leaked into stdout: %q", out.String())
 	}
-	if got := errOut.String(); !strings.Contains(got, "sloptor diagnostics: census failed: setup failed") ||
+	if got := errOut.String(); !strings.Contains(got, "rotor diagnostics: census failed: setup failed") ||
 		!strings.Contains(got, "  no tsconfig.json here") {
 		t.Errorf("stderr = %q", got)
 	}

@@ -24,7 +24,7 @@ func newDevCommand(streams cliStreams) *cobra.Command {
 	serve := true
 	cmd := &cobra.Command{
 		Use:                   "dev [path] [--no-serve]",
-Short:                 "watch + incrementally compile, serve to Studio via `rojo serve`",
+		Short:                 "watch + incrementally compile, serve to Studio via `rojo serve`",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {

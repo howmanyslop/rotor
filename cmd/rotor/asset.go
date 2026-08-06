@@ -25,7 +25,7 @@ import (
 func newAssetCommand(streams cliStreams) *cobra.Command {
 	asset := &cobra.Command{
 		Use:                   "asset <sync|list> [path] [--dry-run]",
-Short:                 "upload project assets via Open Cloud (sync | list)",
+		Short:                 "upload project assets via Open Cloud (sync | list)",
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {

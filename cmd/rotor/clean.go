@@ -30,7 +30,7 @@ func newCleanCommand(streams cliStreams) *cobra.Command {
 	var types, dryRun bool
 	cmd := &cobra.Command{
 		Use:                   "clean [path] [--types] [--dry-run]",
-Short:                 "remove build outputs; --types also removes generated editor types",
+		Short:                 "remove build outputs; --types also removes generated editor types",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {

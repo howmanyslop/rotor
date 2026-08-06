@@ -24,7 +24,7 @@ func newSchemaCommand(streams cliStreams) *cobra.Command {
 	var rbxts bool
 	cmd := &cobra.Command{
 		Use:                   "schema [--rbxts]",
-Short:                 "print a JSON Schema to stdout (rotor.toml, or tsconfig \"rbxts\")",
+		Short:                 "print a JSON Schema to stdout (rotor.toml, or tsconfig \"rbxts\")",
 		Args:                  cobra.NoArgs,
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {

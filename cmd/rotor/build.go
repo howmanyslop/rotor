@@ -228,7 +228,7 @@ func newBuildCommand(streams cliStreams) *cobra.Command {
 	flags := &buildFlags{maxErrors: 50, clear: true}
 	cmd := &cobra.Command{
 		Use:                   "build [options] [path]",
-Short:                 "compile the project to Luau (tsconfig outDir + include/)",
+		Short:                 "compile the project to Luau (tsconfig outDir + include/)",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {

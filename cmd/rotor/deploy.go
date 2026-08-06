@@ -26,7 +26,7 @@ import (
 func newDeployCommand(streams cliStreams) *cobra.Command {
 	deployCmd := &cobra.Command{
 		Use:                   "deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]",
-Short:                 "declarative Open Cloud deployment from rotor.toml (plan | apply)",
+		Short:                 "declarative Open Cloud deployment from rotor.toml (plan | apply)",
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) == 0 {

@@ -32,7 +32,7 @@ func newDiagnosticsCommand(streams cliStreams) *cobra.Command {
 	var args diagnosticsArgs
 	cmd := &cobra.Command{
 		Use:                   "diagnostics [options] [path]",
-Short:                 "report EVERY file's outcome instead of stopping at the first failure",
+		Short:                 "report EVERY file's outcome instead of stopping at the first failure",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {

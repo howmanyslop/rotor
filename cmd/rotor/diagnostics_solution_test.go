@@ -303,7 +303,7 @@ func TestCmdDiagnosticsBuildFailingProjectStillReportsTheRest(t *testing.T) {
 }
 
 func TestParseDiagnosticsArgsBuildFlagsMatchBuild(t *testing.T) {
-	// Given the --build/--builders argv shapes `sloptor build` accepts
+	// Given the --build/--builders argv shapes `rotor build` accepts
 	cases := []struct {
 		name string
 		args []string
@@ -341,7 +341,7 @@ func TestParseDiagnosticsArgsBuildFlagsMatchBuild(t *testing.T) {
 }
 
 func TestParseDiagnosticsArgsRejectsBuildersWithoutBuild(t *testing.T) {
-	// Given --builders without --build, which `sloptor build` rejects
+	// Given --builders without --build, which `rotor build` rejects
 	stderr, code := captureStderr(t, func() int { return cmdDiagnostics([]string{"--builders", "4"}) })
 	if code != 1 {
 		t.Fatalf("diagnostics --builders without --build exit = %d, want 1", code)

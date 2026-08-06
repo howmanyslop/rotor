@@ -25,7 +25,7 @@ import (
 	"rotor/tsgo/vfs/osvfs"
 )
 
-// checkArgs is the parsed `sloptor check` argv, assembled by newCheckCommand
+// checkArgs is the parsed `rotor check` argv, assembled by newCheckCommand
 // from Cobra flags.
 type checkArgs struct {
 	project  string
@@ -116,7 +116,7 @@ func runCheckCommand(streams cliStreams, args *checkArgs, argv []string) error {
 }
 
 // cmdCheckJSON runs a one-shot check and prints a single jsonResult object
-// (shared with `sloptor build --json`) built from the structured diagnostics.
+// (shared with `rotor build --json`) built from the structured diagnostics.
 // Exit code is unchanged: 1 when any error diagnostic is present, else 0.
 func cmdCheckJSON(out io.Writer, dir string, checkers *int) int {
 	res := runCheckCollect(dir, checkers)
@@ -140,7 +140,7 @@ type checkResult struct {
 	elapsed    time.Duration
 	watchFiles []string
 
-	// jsonDiags is the structured diagnostics list for `sloptor check --json`,
+	// jsonDiags is the structured diagnostics list for `rotor check --json`,
 	// populated only by runCheckCollect (nil on the styled path).
 	jsonDiags []jsonDiagnostic
 }
@@ -316,7 +316,7 @@ func refreshRotorTypesForCheck(dir string, fileNames []string, program *compiler
 			continue
 		}
 		if _, err := compile.WriteRotorTypes(dir); err != nil {
-			fmt.Fprintf(os.Stderr, "sloptor check: warning: cannot write %s: %v\n", compile.RotorTypesFileName, err)
+			fmt.Fprintf(os.Stderr, "rotor check: warning: cannot write %s: %v\n", compile.RotorTypesFileName, err)
 		}
 		return
 	}

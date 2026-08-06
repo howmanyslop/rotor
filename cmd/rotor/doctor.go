@@ -25,7 +25,7 @@ import (
 func newDoctorCommand(streams cliStreams) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:                   "doctor [path]",
-Short:                 "diagnose the project setup (tsconfig, @rbxts, plugins, Rojo)",
+		Short:                 "diagnose the project setup (tsconfig, @rbxts, plugins, Rojo)",
 		Args:                  cobra.MaximumNArgs(1),
 		DisableFlagsInUseLine: true,
 		RunE: func(cmd *cobra.Command, argv []string) error {
