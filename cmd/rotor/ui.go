@@ -148,7 +148,7 @@ func (u *ui) warn(msg string) {
 	fmt.Fprintf(u.w, "  %s  %s\n", u.s.WarnBold(g.Warn), msg)
 }
 
-// checkSummary prints the `rotor check` result line.
+// checkSummary prints the `sloptor check` result line.
 func (u *ui) checkSummary(files int, errs int, elapsed time.Duration) {
 	g := u.s.Glyphs()
 	ms := elapsed.Milliseconds()
@@ -237,43 +237,105 @@ func (u *ui) watchChanges(paths []string) {
 		u.s.Muted(u.s.Glyphs().Dot+" "+label))
 }
 
-// doctorRow prints one `rotor doctor` check: a status glyph, the label, the
-// muted detail, and (for warn/fail) an indented hint line.
-func (u *ui) doctorRow(c doctorCheck) {
-	g := u.s.Glyphs()
-	var mark string
-	switch c.status {
-	case doctorOK:
-		mark = u.s.SuccessBold(g.Check)
-	case doctorInfo:
-		mark = u.s.Muted(g.Dot)
-	case doctorWarn:
-		mark = u.s.WarnBold(g.Warn)
-	case doctorFail:
-		mark = u.s.ErrorBold(g.Cross)
+// events renders one aligned row per uiEvent: `  <status>  <target>  <detail>
+// glyph — carries the signal: green for work done, yellow Skipped, gray
+// Unchanged/Planned, red Failed.
+type eventStatus int
+
+const (
+	eventCreated eventStatus = iota
+	eventUpdated
+	eventWrote
+	eventRemoved
+	eventChecked
+	eventFinished
+	eventSkipped
+	eventUnchanged
+	eventPlanned
+	eventFailed
+)
+
+func (s eventStatus) String() string {
+	switch s {
+	case eventCreated:
+		return "Created"
+	case eventUpdated:
+		return "Updated"
+	case eventWrote:
+		return "Wrote"
+	case eventRemoved:
+		return "Removed"
+	case eventChecked:
+		return "Checked"
+	case eventFinished:
+		return "Finished"
+	case eventSkipped:
+		return "Skipped"
+	case eventUnchanged:
+		return "Unchanged"
+	case eventPlanned:
+		return "Planned"
+	case eventFailed:
+		return "Failed"
 	}
-	fmt.Fprintf(u.w, "  %s  %s  %s\n", mark, u.s.Bold(c.label), u.s.Muted(c.detail))
-	if c.hint != "" && c.status >= doctorWarn {
-		fmt.Fprintf(u.w, "      %s %s\n", u.s.Muted(g.Arrow), u.s.Muted(c.hint))
+	return ""
+}
+
+// uiEvent is one row of a completed batch: a status word, a target (a
+// slash-normalized working-directory-relative file path, or a logical
+// resource name), an optional dim detail, and an optional measured duration.
+type uiEvent struct {
+	Status  eventStatus
+	Target  string
+	Detail  string
+	Elapsed time.Duration
+}
+
+// events renders one aligned row per uiEvent: `  <status>  <target>  <detail>
+// <elapsed>`. The status and target columns are padded to the widest visible
+// cell across the batch; empty trailing columns are omitted rather than
+// placeholder-padded, so a target-less Finished row sits tight against its
+// timing.
+func (u *ui) events(events []uiEvent) {
+	if len(events) == 0 {
+		return
+	}
+	statusW, targetW := 0, 0
+	for _, e := range events {
+		if w := term.VisibleLen(e.Status.String()); w > statusW {
+			statusW = w
+		}
+		if w := term.VisibleLen(e.Target); w > targetW {
+			targetW = w
+		}
+	}
+	for _, e := range events {
+		cells := []string{padVisible(u.statusWord(e.Status), statusW)}
+		if e.Target != "" {
+			cells = append(cells, padVisible(relForDisplay(e.Target), targetW))
+		}
+		if e.Detail != "" {
+			cells = append(cells, u.s.Muted(e.Detail))
+		}
+		if e.Elapsed > 0 {
+			cells = append(cells, u.s.Muted(fmt.Sprintf("in %d ms", e.Elapsed.Milliseconds())))
+		}
+		fmt.Fprintf(u.w, "  %s\n", strings.Join(cells, "  "))
 	}
 }
 
-// doctorSummary prints the closing tally line for `rotor doctor`.
-func (u *ui) doctorSummary(total, fails, warns int) {
-	g := u.s.Glyphs()
-	switch {
-	case fails > 0:
-		fmt.Fprintf(u.w, "\n  %s  %s %s\n\n", u.s.ErrorBold(g.Cross),
-			u.s.Bold(plural(fails, "problem")+" found"),
-			u.s.Muted(fmt.Sprintf("(%d checks, %d warnings)", total, warns)))
-	case warns > 0:
-		fmt.Fprintf(u.w, "\n  %s  %s %s\n\n", u.s.WarnBold(g.Warn),
-			u.s.Bold("ready, with "+plural(warns, "warning")),
-			u.s.Muted(fmt.Sprintf("(%d checks)", total)))
+// statusWord renders the colored status word: green for completed work, yellow
+// Skipped, gray Unchanged/Planned, red Failed.
+func (u *ui) statusWord(s eventStatus) string {
+	switch s {
+	case eventSkipped:
+		return u.s.WarnBold(s.String())
+	case eventUnchanged, eventPlanned:
+		return u.s.Muted(s.String())
+	case eventFailed:
+		return u.s.ErrorBold(s.String())
 	default:
-		fmt.Fprintf(u.w, "\n  %s  %s %s\n\n", u.s.SuccessBold(g.Check),
-			u.s.Bold("everything looks good"),
-			u.s.Muted(fmt.Sprintf("(%d checks)", total)))
+		return u.s.SuccessBold(s.String())
 	}
 }
 

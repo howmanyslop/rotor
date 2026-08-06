@@ -10,6 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
+
 	"rotor/internal/assets"
 	"rotor/internal/compile"
 	"rotor/internal/logservice"
@@ -17,26 +20,18 @@ import (
 	"rotor/tsgo/vfs/osvfs"
 )
 
-// projectTypeChoices are the upstream --type choices (CLI/commands/build.ts
-// L98-101: ProjectType.Game | Model | Package).
-var projectTypeChoices = map[string]transformer.ProjectType{
-	string(transformer.ProjectTypeGame):    transformer.ProjectTypeGame,
-	string(transformer.ProjectTypeModel):   transformer.ProjectTypeModel,
-	string(transformer.ProjectTypePackage): transformer.ProjectTypePackage,
-}
-
-// buildArgs is the parsed `rotor build` argv: the project path (the only
+// buildArgs is the parsed `sloptor build` argv: the project path (the only
 // option with a default — "DO NOT PROVIDE DEFAULTS BELOW HERE",
 // CLI/commands/build.ts L62) plus a Partial<ProjectOptions> of exactly the
-// flags the user passed.
+// flags the user passed. It is assembled by newBuildCommand from Cobra's
+// parsed flags (only Changed booleans enter the partial), and consumed by the
+// runner, profile wiring, and the watch option reload.
 type buildArgs struct {
 	project             string
 	opts                partialProjectOptions
 	build               bool
 	buildPath           string
 	emitDeclarationOnly bool
-	help                bool
-	version             bool
 	builders            *int
 	checkers            *int
 	jsonOut             bool   // rotor DX extension: emit a machine-readable result object
@@ -52,345 +47,282 @@ type buildArgs struct {
 	minify              bool // rotor DX extension: minify emitted Luau before writing
 }
 
-// parseBuildArgs parses the rbxtsc-compatible `build` flag surface
-// (CLI/commands/build.ts L49-118). Booleans accept `--flag`, `--flag=bool`,
-// and the yargs-17 negation `--no-flag`; strings accept `--flag value` and
-// `--flag=value` (a missing value parses as "", like yargs — load-bearing
-// for the `--rojo` empty-string fall-through quirk). `--usePolling` implies
-// `--watch`: yargs errors when usePolling appears in argv without watch.
-// As rotor sugar (kept from the earlier CLI), one positional argument is
-// accepted as the project path.
-func parseBuildArgs(args []string) (*buildArgs, error) {
-	// yargs default: --project "."; maxErrors default 50; clear-on-rebuild on.
-	res := &buildArgs{project: ".", maxErrors: 50, clearScreen: true}
-	positional := ""
-	projectSet := false
+// buildFlags is the parsed flag destination shared by `sloptor build` and
+// `sloptor dev`: every registered flag binds here, and collectBuildArgs turns
+// the Changed subset into a buildArgs (the yargs Object.assign semantics —
+// absent CLI booleans never clobber the tsconfig `rbxts` layer).
+type buildFlags struct {
+	project      string
+	buildPath    string
+	includePath  string
+	rojo         string
+	typeName     string
+	cpuprofile   string
+	traceOut     string
+	blockprofile string
+	mutexprofile string
+	heapprofile  string
+	timings      string
+	maxErrors    int
 
-	boolTargets := func(name string) **bool {
-		switch name {
-		case "watch", "w":
-			return &res.opts.watch
-		case "usePolling":
-			return &res.opts.usePolling
-		case "verbose":
-			return &res.opts.verbose
-		case "noInclude":
-			return &res.opts.noInclude
-		case "logTruthyChanges":
-			return &res.opts.logTruthyChanges
-		case "writeOnlyChanged":
-			return &res.opts.writeOnlyChanged
-		case "writeTransformedFiles":
-			return &res.opts.writeTransformedFiles
-		case "optimizedLoops":
-			return &res.opts.optimizedLoops
-		case "allowCommentDirectives":
-			return &res.opts.allowCommentDirectives
-		case "luau":
-			return &res.opts.luau
+	emitDeclarationOnly    bool
+	watch                  bool
+	usePolling             bool
+	verbose                bool
+	noInclude              bool
+	logTruthyChanges       bool
+	writeOnlyChanged       bool
+	writeTransformedFiles  bool
+	optimizedLoops         bool
+	allowCommentDirectives bool
+	luau                   bool
+	minify                 bool
+	jsonOut                bool
+	bell                   bool
+	clear                  bool
+	version                bool
+	builders               *int
+	checkers               *int
+}
+
+// registerBuildFlags registers the full rbxtsc-compatible build surface in
+// documented order. `dev` registers the same surface (it forwards the build
+// options it accepts) plus its own --serve flag.
+func registerBuildFlags(cmd *cobra.Command, flags *buildFlags) {
+	f := cmd.Flags()
+	f.SortFlags = false
+	addStringFlag(cmd, &flags.project, "project", "p", ".", "<path>",
+		"project path (default \".\"): a tsconfig file, a directory containing one, or any path to search upward from")
+	addStringFlag(cmd, &flags.buildPath, "build", "b", "", "[path]",
+		"build project references (optionally select a tsconfig path)")
+	f.VarP(newPositiveIntValue(&flags.builders), "builders", "",
+		"number of projects to build concurrently (default 4; only with --build)")
+	setFlagPlaceholder(cmd, "builders", "<n>")
+	f.VarP(newPositiveIntValue(&flags.checkers), "checkers", "",
+		"number of checkers per project (default 4; build and check)")
+	setFlagPlaceholder(cmd, "checkers", "<n>")
+	addBoolFlag(cmd, &flags.emitDeclarationOnly, "emitDeclarationOnly", "", false,
+		"only emit declaration files for a solution build (requires --build)")
+	addBoolFlag(cmd, &flags.watch, "watch", "w", false, "enable watch mode")
+	addBoolFlag(cmd, &flags.usePolling, "usePolling", "", false,
+		"use polling for watch mode (requires --watch)")
+	addBoolFlag(cmd, &flags.verbose, "verbose", "", false, "enable verbose logs")
+	addBoolFlag(cmd, &flags.noInclude, "noInclude", "", false, "do not copy include files")
+	addBoolFlag(cmd, &flags.logTruthyChanges, "logTruthyChanges", "", false,
+		"logs changes to truthiness evaluation from Lua truthiness rules")
+	addBoolFlag(cmd, &flags.writeOnlyChanged, "writeOnlyChanged", "", false,
+		"skip rewriting output files whose contents are unchanged")
+	addBoolFlag(cmd, &flags.writeTransformedFiles, "writeTransformedFiles", "", false,
+		"not supported by sloptor (parsed and ignored)")
+	addBoolFlag(cmd, &flags.optimizedLoops, "optimizedLoops", "", true,
+		"numeric-for loop optimization (default true)")
+	f.VarP(newEnumValue(&flags.typeName, "game", "model", "package"), "type", "",
+		"override project type (choices: game, model, package)")
+	setFlagPlaceholder(cmd, "type", "<kind>")
+	addStringFlag(cmd, &flags.includePath, "includePath", "i", "", "<dir>",
+		"folder to copy runtime files to (default <project>/include)")
+	addStringFlag(cmd, &flags.rojo, "rojo", "", "", "<path>",
+		"manually select Rojo project file")
+	addBoolFlag(cmd, &flags.allowCommentDirectives, "allowCommentDirectives", "", false,
+		"allow @ts-ignore et al.")
+	addBoolFlag(cmd, &flags.luau, "luau", "", true,
+		"emit files with .luau extension (default true; --luau=false emits .lua)")
+	addStringFlag(cmd, &flags.cpuprofile, "cpuprofile", "", "", "<path>",
+		"write a pprof CPU profile of the build (diagnostics)")
+	addStringFlag(cmd, &flags.traceOut, "trace-out", "", "", "<path>",
+		"write a Go execution trace of the build (diagnostics)")
+	addStringFlag(cmd, &flags.blockprofile, "blockprofile", "", "", "<path>",
+		"write a blocking profile sampled at 1 ms (diagnostics)")
+	addStringFlag(cmd, &flags.mutexprofile, "mutexprofile", "", "", "<path>",
+		"write a mutex contention profile at fraction 5 (diagnostics)")
+	addStringFlag(cmd, &flags.heapprofile, "heapprofile", "", "", "<path>",
+		"write a heap profile after the build (diagnostics)")
+	addStringFlag(cmd, &flags.timings, "timings", "", "", "<path>",
+		"write aggregate one-shot build timings as JSON (not with --watch)")
+	addBoolFlag(cmd, &flags.minify, "minify", "", false,
+		"minify emitted Luau (strip comments/whitespace, t[\"x\"] -> t.x)")
+	f.VarP(newNonNegativeIntValue(&flags.maxErrors), "max-errors", "",
+		"cap the rendered code frames on failure (default 50; 0 = all)")
+	setFlagPlaceholder(cmd, "max-errors", "<n>")
+	addBoolFlag(cmd, &flags.jsonOut, "json", "", false,
+		"emit one machine-readable result object instead of styled output")
+	addBoolFlag(cmd, &flags.bell, "bell", "", false,
+		"ring the terminal bell on a watch fail<->pass transition")
+	addBoolFlag(cmd, &flags.clear, "clear", "", true,
+		"clear the screen before each rebuild (--no-clear keeps scroll history)")
+	addBoolFlag(cmd, &flags.version, "version", "v", false, "print sloptor's version")
+}
+
+// collectBuildArgs assembles a buildArgs from the parsed flag set: the
+// positional-or---project path, the Changed-only partial options, and the
+// rotor DX fields. It never inspects argv values beyond the single positional
+// (Cobra owns parsing); absent flags stay nil so the tsconfig layer wins.
+func collectBuildArgs(f *pflag.FlagSet, argv []string, flags *buildFlags, ba *buildArgs) error {
+	ba.project = flags.project
+	if len(argv) > 0 {
+		if f.Changed("project") {
+			return usageFailure("unexpected extra argument %q (project already set via --project)", argv[0])
 		}
+		ba.project = argv[0]
+	}
+	if f.Changed("build") {
+		ba.build = true
+		ba.buildPath, _ = f.GetString("build")
+	}
+	if f.Changed("emitDeclarationOnly") {
+		ba.emitDeclarationOnly, _ = f.GetBool("emitDeclarationOnly")
+	}
+	for name, dst := range map[string]**bool{
+		"watch": &ba.opts.watch, "usePolling": &ba.opts.usePolling,
+		"verbose": &ba.opts.verbose, "noInclude": &ba.opts.noInclude,
+		"logTruthyChanges": &ba.opts.logTruthyChanges, "writeOnlyChanged": &ba.opts.writeOnlyChanged,
+		"writeTransformedFiles": &ba.opts.writeTransformedFiles, "optimizedLoops": &ba.opts.optimizedLoops,
+		"allowCommentDirectives": &ba.opts.allowCommentDirectives, "luau": &ba.opts.luau,
+	} {
+		if f.Changed(name) {
+			v, _ := f.GetBool(name)
+			*dst = &v
+		}
+	}
+	for name, dst := range map[string]**string{
+		"includePath": &ba.opts.includePath,
+		"rojo":        &ba.opts.rojo,
+		"type":        &ba.opts.typeName,
+	} {
+		if f.Changed(name) {
+			v, _ := f.GetString(name)
+			*dst = &v
+		}
+	}
+	ba.builders = flags.builders
+	ba.checkers = flags.checkers
+	if f.Changed("clear") {
+		ba.clearScreen, _ = f.GetBool("clear")
+	}
+	ba.bell, _ = f.GetBool("bell")
+	ba.jsonOut, _ = f.GetBool("json")
+	ba.minify, _ = f.GetBool("minify")
+	ba.maxErrors = flags.maxErrors
+	ba.cpuprofile, _ = f.GetString("cpuprofile")
+	ba.traceOut, _ = f.GetString("trace-out")
+	ba.blockprofile, _ = f.GetString("blockprofile")
+	ba.mutexprofile, _ = f.GetString("mutexprofile")
+	ba.heapprofile, _ = f.GetString("heapprofile")
+	ba.timings, _ = f.GetString("timings")
+	return nil
+}
+
+// newBuildCommand is the compile-to-disk command, porting the rbxtsc build
+// handler (CLI/commands/build.ts L120-167) onto the Cobra flag surface: find
+// the tsconfig (file path or upward search), merge ProjectOptions (defaults <
+// tsconfig `rbxts` key < argv), set LogService verbosity, then compile and
+// write outputs.
+//
+// The rbxtsc flag surface is registered exactly as documented: booleans keep
+// their yargs forms (`--flag`, `--flag=<bool>`, and `--no-flag`, the last
+// normalized by execute before parsing), `--build`/`--rojo` keep their
+// present-but-empty fall-through semantics, and the numeric/type validators
+// reproduce the yargs errors. Option implications run in runBuildCommand, in
+// argv order.
+func newBuildCommand(streams cliStreams) *cobra.Command {
+	flags := &buildFlags{maxErrors: 50, clear: true}
+	cmd := &cobra.Command{
+		Use:                   "build [options] [path]",
+		Short:                 "compile the project to Luau (tsconfig outDir + include/)",
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			return runBuildCommand(streams, cmd, flags, argv)
+		},
+	}
+	registerBuildFlags(cmd, flags)
+	return cmd
+}
+
+// runBuildCommand is the post-parse build pipeline. It owns option
+// implication checks (usage failures), the profile lifecycle, and the styled
+// / JSON output split; failures flow to execute as commandFailures.
+func runBuildCommand(streams cliStreams, cmd *cobra.Command, flags *buildFlags, argv []string) error {
+	if flags.version {
+		fmt.Fprintln(streams.out, version)
 		return nil
 	}
-
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch a {
-		case "-h", "--help":
-			res.help = true
-			return res, nil
-		case "-v", "--version":
-			res.version = true
-			return res, nil
-		}
-
-		if !strings.HasPrefix(a, "-") {
-			if positional != "" {
-				return nil, fmt.Errorf("unexpected extra argument %q", a)
-			}
-			positional = a
-			continue
-		}
-
-		// Split --name=value / alias normalization.
-		name := strings.TrimLeft(a, "-")
-		value, hasValue := "", false
-		if eq := strings.IndexByte(name, '='); eq >= 0 {
-			value, name = name[eq+1:], name[:eq]
-			hasValue = true
-		}
-
-		// takeValue consumes the next argv entry as a string value; a
-		// missing/flag-like next token yields "" (yargs string options).
-		takeValue := func() string {
-			if hasValue {
-				return value
-			}
-			if i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
-				i++
-				return args[i]
-			}
-			return ""
-		}
-
-		switch name {
-		case "project", "p":
-			res.project = takeValue()
-			projectSet = true
-			continue
-		case "build", "b":
-			res.build = true
-			res.buildPath = takeValue()
-			continue
-		case "includePath", "i":
-			v := takeValue()
-			res.opts.includePath = &v
-			continue
-		case "rojo":
-			v := takeValue()
-			res.opts.rojo = &v
-			continue
-		case "type":
-			v := takeValue()
-			if _, ok := projectTypeChoices[v]; !ok {
-				return nil, fmt.Errorf("invalid --type %q (choices: game, model, package)", v)
-			}
-			res.opts.typeName = &v
-			continue
-		case "cpuprofile":
-			res.cpuprofile = takeValue()
-			if res.cpuprofile == "" {
-				return nil, errors.New("--cpuprofile requires a path")
-			}
-			continue
-		case "trace-out":
-			res.traceOut = takeValue()
-			if res.traceOut == "" {
-				return nil, errors.New("--trace-out requires a path")
-			}
-			continue
-		case "blockprofile":
-			res.blockprofile = takeValue()
-			if res.blockprofile == "" {
-				return nil, errors.New("--blockprofile requires a path")
-			}
-			continue
-		case "mutexprofile":
-			res.mutexprofile = takeValue()
-			if res.mutexprofile == "" {
-				return nil, errors.New("--mutexprofile requires a path")
-			}
-			continue
-		case "heapprofile":
-			res.heapprofile = takeValue()
-			if res.heapprofile == "" {
-				return nil, errors.New("--heapprofile requires a path")
-			}
-			continue
-		case "timings":
-			res.timings = takeValue()
-			if res.timings == "" {
-				return nil, errors.New("--timings requires a path")
-			}
-			continue
-		case "max-errors":
-			v := takeValue()
-			n := 0
-			if v != "" {
-				if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n < 0 {
-					return nil, fmt.Errorf("invalid --max-errors value %q (must be a non-negative integer)", v)
-				}
-			}
-			res.maxErrors = n
-			continue
-		case "builders", "checkers":
-			v := value
-			if !hasValue && i+1 < len(args) && isNumericFlagValue(args[i+1]) {
-				i++
-				v = args[i]
-			}
-			n, err := parsePositiveIntFlag(name, v)
-			if err != nil {
-				return nil, err
-			}
-			if name == "builders" {
-				res.builders = n
-			} else {
-				res.checkers = n
-			}
-			continue
-		case "json":
-			// rotor DX extension (not in rbxtsc): a plain boolean flag that
-			// swaps the styled UI for one machine-readable result object.
-			res.jsonOut = true
-			continue
-		case "minify":
-			// rotor DX extension: minify emitted Luau before writing.
-			res.minify = true
-			continue
-		}
-
-		// Boolean flags: --flag / --flag=bool / --no-flag.
-		negated := false
-		if rest, ok := strings.CutPrefix(name, "no-"); ok {
-			name, negated = rest, true
-		}
-		if target := boolTargets(name); target != nil {
-			b, err := resolveBool(negated, hasValue, value, name)
-			if err != nil {
-				return nil, err
-			}
-			*target = &b
-			continue
-		}
-		if name == "emitDeclarationOnly" {
-			b, err := resolveBool(negated, hasValue, value, name)
-			if err != nil {
-				return nil, err
-			}
-			res.emitDeclarationOnly = b
-			continue
-		}
-		// rotor DX watch booleans (not part of the rbxtsc flag surface).
-		switch name {
-		case "bell":
-			b, err := resolveBool(negated, hasValue, value, name)
-			if err != nil {
-				return nil, err
-			}
-			res.bell = b
-			continue
-		case "clear":
-			b, err := resolveBool(negated, hasValue, value, name)
-			if err != nil {
-				return nil, err
-			}
-			res.clearScreen = b
-			continue
-		}
-
-		return nil, fmt.Errorf("unknown flag %q", a)
+	f := cmd.Flags()
+	ba := buildArgs{project: ".", maxErrors: 50, clearScreen: true}
+	if err := collectBuildArgs(f, argv, flags, &ba); err != nil {
+		return err
 	}
 
-	if projectSet && positional != "" {
-		return nil, fmt.Errorf("unexpected extra argument %q (project already set via --project)", positional)
-	}
-	if positional != "" {
-		res.project = positional
-	}
-	if res.builders != nil && !res.build {
-		return nil, errors.New("--builders requires --build")
+	for name, path := range map[string]string{
+		"--cpuprofile": ba.cpuprofile, "--trace-out": ba.traceOut,
+		"--blockprofile": ba.blockprofile, "--mutexprofile": ba.mutexprofile,
+		"--heapprofile": ba.heapprofile, "--timings": ba.timings,
+	} {
+		if f.Changed(strings.TrimPrefix(name, "--")) && path == "" {
+			return usageFailure("%s requires a path", name)
+		}
 	}
 
-	// yargs `implies: "watch"` (build.ts L68-72): --usePolling present in
-	// argv without --watch is a usage error.
-	if res.opts.usePolling != nil && res.opts.watch == nil {
-		return nil, errors.New("Implications failed:\n usePolling -> watch")
+	// Option implications (build.ts): the same failures yargs raised at parse
+	// time, in the same order, with the same text.
+	if ba.builders != nil && !ba.build {
+		return usageFailure("--builders requires --build")
 	}
-	if res.emitDeclarationOnly && !res.build {
-		return nil, errors.New("Implications failed:\n emitDeclarationOnly -> build")
+	if ba.opts.usePolling != nil && ba.opts.watch == nil {
+		return usageFailure("Implications failed:\n usePolling -> watch")
 	}
-	if res.build && res.emitDeclarationOnly && res.opts.watch != nil && *res.opts.watch {
-		return nil, errors.New("--build --watch is incompatible with --emitDeclarationOnly (no Luau emit to incrementally watch)")
+	if ba.emitDeclarationOnly && !ba.build {
+		return usageFailure("Implications failed:\n emitDeclarationOnly -> build")
 	}
-	if res.opts.watch != nil && *res.opts.watch {
+	if ba.build && ba.emitDeclarationOnly && ba.opts.watch != nil && *ba.opts.watch {
+		return usageFailure("--build --watch is incompatible with --emitDeclarationOnly (no Luau emit to incrementally watch)")
+	}
+	if ba.opts.watch != nil && *ba.opts.watch {
 		for flag, path := range map[string]string{
-			"--cpuprofile": res.cpuprofile, "--trace-out": res.traceOut,
-			"--blockprofile": res.blockprofile, "--mutexprofile": res.mutexprofile,
-			"--heapprofile": res.heapprofile, "--timings": res.timings,
+			"--cpuprofile": ba.cpuprofile, "--trace-out": ba.traceOut,
+			"--blockprofile": ba.blockprofile, "--mutexprofile": ba.mutexprofile,
+			"--heapprofile": ba.heapprofile, "--timings": ba.timings,
 		} {
 			if path != "" {
-				return nil, fmt.Errorf("%s cannot be used with --watch", flag)
+				return usageFailure("%s cannot be used with --watch", flag)
 			}
 		}
 	}
 
-	return res, nil
+	if err := validateBuildDiagnosticPaths(&ba); err != nil {
+		return runtimeFailure(err)
+	}
+	profiles, err := startBuildProfiles(&ba)
+	if err != nil {
+		return runtimeFailure(err)
+	}
+	buildErr := runBuildBody(streams, &ba)
+	if perr := profiles.stop(); perr != nil {
+		if buildErr == nil {
+			buildErr = runtimeFailure(fmt.Errorf("finalize profiles: %w", perr))
+		}
+	}
+	return buildErr
 }
 
-// resolveBool resolves a yargs-style boolean flag: bare `--flag` is true,
-// `--no-flag` is false, and `--flag=<bool>` takes the explicit value (an outer
-// `no-` prefix inverts it). It rejects non-boolean `=value`s.
-func resolveBool(negated, hasValue bool, value, name string) (bool, error) {
-	b := !negated
-	if hasValue {
-		switch value {
-		case "true", "1":
-			b = true
-		case "false", "0":
-			b = false
-		default:
-			return false, fmt.Errorf("invalid boolean value %q for --%s", value, name)
-		}
-		if negated {
-			b = !b
-		}
-	}
-	return b, nil
-}
-
-// cmdBuild is the compile-to-disk command, porting the rbxtsc build handler
-// (CLI/commands/build.ts L120-167): find the tsconfig (file path or upward
-// search), merge ProjectOptions (defaults < tsconfig `rbxts` key < argv),
-// set LogService verbosity, then compile and write outputs.
-//
-// Flag wiring status: --type/--noInclude/--includePath/--rojo/--luau/
-// --logTruthyChanges/--optimizedLoops/--allowCommentDirectives/--verbose are
-// live; --writeOnlyChanged now runs inside the compile package's output
-// pipeline; --watch/
-// --usePolling drive the polling watch loop;
-// --writeTransformedFiles is parsed and ignored (rbxtsc plugin debug output —
-// out of v1 scope).
-//
-// Exit-code policy: usage errors exit 1, matching upstream
-// (`.fail(...)` sets exitCode 1, CLI/cli.ts L30-35 — rotor's earlier exit 2
-// convention was a documented divergence, removed in Phase 4).
-func cmdBuild(args []string) (exitCode int) {
-	parsed, err := parseBuildArgs(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor build: %v\n\n", err)
-		usage(os.Stderr)
-		return 1
-	}
-	if parsed.help {
-		usage(os.Stdout)
-		return 0
-	}
-	if parsed.version {
-		fmt.Println(version)
-		return 0
-	}
-	if err := validateBuildDiagnosticPaths(parsed); err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor build: %v\n", err)
-		return 1
-	}
-	profiles, err := startBuildProfiles(parsed)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor build: %v\n", err)
-		return 1
-	}
-	defer func() {
-		if err := profiles.stop(); err != nil {
-			fmt.Fprintf(os.Stderr, "sloptor build: finalize profiles: %v\n", err)
-			exitCode = 1
-		}
-	}()
-
+// runBuildBody is the old cmdBuild body: config resolution, merge, and the
+// styled or --json output. It runs with profiles already started; the caller
+// finalizes them.
+func runBuildBody(streams cliStreams, parsed *buildArgs) error {
 	projectPath := parsed.project
 	if parsed.buildPath != "" {
 		projectPath = parsed.buildPath
 	}
 	tsConfigPath, err := findTsConfigPath(projectPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor build: %v\n", err)
-		return 1
+		return runtimeFailure(err)
 	}
 
 	// Merge order (build.ts L125-130): defaults < tsconfig `rbxts` key <
 	// argv. Absent CLI booleans (nil) never clobber `rbxts` values.
 	rbxtsOptions, err := readRbxtsOptionsChecked(tsConfigPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor build: %v\n", err)
-		return 1
+		return runtimeFailure(err)
 	}
 	opts := mergeProjectOptions(defaultProjectOptions, rbxtsOptions, &parsed.opts)
 	opts.minify = parsed.minify // rotor extension: CLI-only, outside the rbxts merge
@@ -398,13 +330,11 @@ func cmdBuild(args []string) (exitCode int) {
 	opts.builders = parsed.builders
 	opts.checkers = parsed.checkers
 	if parsed.timings != "" && opts.watch {
-		fmt.Fprintln(os.Stderr, "sloptor build: --timings cannot be used with --watch")
-		return 1
+		return usageFailure("--timings cannot be used with --watch")
 	}
 	if parsed.timings != "" {
 		if err := prepareBuildTimingsPath(parsed.timings); err != nil {
-			fmt.Fprintf(os.Stderr, "sloptor build: cannot prepare timings output: %v\n", err)
-			return 1
+			return runtimeFailure(fmt.Errorf("cannot prepare timings output: %w", err))
 		}
 	}
 
@@ -419,10 +349,13 @@ func cmdBuild(args []string) (exitCode int) {
 	// stdout. Watch mode has no terminal "end", so it is not JSON-encoded; a
 	// one-shot build is what CI/editor integrations call with --json.
 	if parsed.jsonOut && !opts.watch {
-		return cmdBuildJSON(dir, tsConfigPath, opts, parsed.build, parsed.timings)
+		if code := cmdBuildJSON(streams.out, streams.err, dir, tsConfigPath, opts, parsed.build, parsed.timings); code != 0 {
+			return reportedFailure(errors.New("build failed"))
+		}
+		return nil
 	}
 
-	out := newUI(os.Stdout)
+	out := newUI(streams.out)
 	out.banner(filepath.Base(dir))
 
 	if opts.writeTransformedFiles {
@@ -431,15 +364,17 @@ func cmdBuild(args []string) (exitCode int) {
 	if opts.watch {
 		if parsed.build {
 			reload := newBuildOptionsReload(tsConfigPath, parsed)
-			return runBuildSolutionWatch(tsConfigPath, opts, reload, watchOptions{
+			runBuildSolutionWatch(tsConfigPath, opts, reload, watchOptions{
 				maxErrors: parsed.maxErrors, bell: parsed.bell, clearScreen: parsed.clearScreen,
 			})
+		} else {
+			runBuildWatch(dir, tsConfigPath, opts, watchOptions{
+				maxErrors:   parsed.maxErrors,
+				bell:        parsed.bell,
+				clearScreen: parsed.clearScreen,
+			})
 		}
-		return runBuildWatch(dir, tsConfigPath, opts, watchOptions{
-			maxErrors:   parsed.maxErrors,
-			bell:        parsed.bell,
-			clearScreen: parsed.clearScreen,
-		})
+		return nil // unreachable in practice: watch loops until Ctrl+C
 	}
 
 	if _, statErr := os.Stat(filepath.Join(dir, "package.json")); statErr == nil {
@@ -463,13 +398,12 @@ func cmdBuild(args []string) (exitCode int) {
 	if timings != nil {
 		timings.SetOK(err == nil)
 		if writeErr := writeBuildTimings(parsed.timings, timings); writeErr != nil {
-			fmt.Fprintf(os.Stderr, "sloptor build: write timings: %v\n", writeErr)
-			return 1
+			return runtimeFailure(fmt.Errorf("write timings: %w", writeErr))
 		}
 	}
 	if err != nil {
-		newUI(os.Stderr).buildFailure(err.Error(), diags, parsed.maxErrors)
-		return 1
+		newUI(streams.err).buildFailure(err.Error(), diags, parsed.maxErrors)
+		return reportedFailure(err)
 	}
 
 	if result.WroteRotorTypes {
@@ -483,7 +417,7 @@ func cmdBuild(args []string) (exitCode int) {
 		copiedFiles = 0
 	}
 	out.buildSuccess(len(result.Outputs), len(result.EmittedFiles), copiedFiles, elapsed)
-	return 0
+	return nil
 }
 
 func validateBuildDiagnosticPaths(args *buildArgs) error {
@@ -640,7 +574,7 @@ func projectCompileOptions(tsConfigPath string, opts projectOptions) compile.Pro
 
 // jsonDiagnostic is one entry in the --json diagnostics array. file/line/col
 // are populated from the structured DiagnosticInfo location when available;
-// `rotor check --json` also fills these from its own structured AST diagnostics.
+// `sloptor check --json` also fills these from its own structured AST diagnostics.
 type jsonDiagnostic struct {
 	File     string `json:"file"`
 	Line     int    `json:"line"`
@@ -649,8 +583,8 @@ type jsonDiagnostic struct {
 	Message  string `json:"message"`
 }
 
-// jsonResult is the single object printed by `rotor build --json` /
-// `rotor check --json`. The shape is stable for CI/editor integration.
+// jsonResult is the single object printed by `sloptor build --json` /
+// `sloptor check --json`. The shape is stable for CI/editor integration.
 type jsonResult struct {
 	Version     string           `json:"version"`
 	OK          bool             `json:"ok"`
@@ -672,9 +606,9 @@ func writeJSONResult(w io.Writer, res jsonResult) {
 }
 
 // cmdBuildJSON runs a one-shot build and prints a single jsonResult object
-// instead of the styled UI. Exit code is unchanged from the styled path: 1 on
-// any build error, 0 otherwise.
-func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions, solution bool, timingPath string) int {
+// to out instead of the styled UI. Exit code is unchanged from the styled
+// path: 1 on any build error, 0 otherwise.
+func cmdBuildJSON(out, errOut io.Writer, dir, tsConfigPath string, opts projectOptions, solution bool, timingPath string) int {
 	var result *compile.BuildResult
 	var diags []compile.DiagnosticInfo
 	var elapsed time.Duration
@@ -691,7 +625,7 @@ func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions, solution bool, 
 	if timings != nil {
 		timings.SetOK(err == nil)
 		if writeErr := writeBuildTimings(timingPath, timings); writeErr != nil {
-			fmt.Fprintf(os.Stderr, "sloptor build: write timings: %v\n", writeErr)
+			fmt.Fprintf(errOut, "write timings: %v\n", writeErr)
 			return 1
 		}
 	}
@@ -716,11 +650,11 @@ func cmdBuildJSON(dir, tsConfigPath string, opts projectOptions, solution bool, 
 		if len(diags) == 0 {
 			res.Diagnostics = append(res.Diagnostics, jsonDiagnostic{Severity: "error", Message: err.Error()})
 		}
-		writeJSONResult(os.Stdout, res)
+		writeJSONResult(out, res)
 		return 1
 	}
 	res.Files = len(result.Outputs)
-	writeJSONResult(os.Stdout, res)
+	writeJSONResult(out, res)
 	return 0
 }
 

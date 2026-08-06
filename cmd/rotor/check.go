@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"rotor/internal/compile"
 	"rotor/tsgo/ast"
@@ -22,87 +25,61 @@ import (
 	"rotor/tsgo/vfs/osvfs"
 )
 
+// checkArgs is the parsed `sloptor check` argv, assembled by newCheckCommand
+// from Cobra flags.
 type checkArgs struct {
 	project  string
 	watch    bool
 	jsonOut  bool
 	checkers *int
-	help     bool
 }
 
-func parseCheckArgs(args []string) (*checkArgs, error) {
-	res := &checkArgs{project: "."}
-	positional := false
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch a {
-		case "-w", "--watch":
-			res.watch = true
-			continue
-		case "--json":
-			res.jsonOut = true
-			continue
-		case "-h", "--help":
-			res.help = true
-			return res, nil
-		}
-
-		if !strings.HasPrefix(a, "-") {
-			if positional {
-				return nil, fmt.Errorf("unexpected extra argument %q", a)
-			}
-			res.project = a
-			positional = true
-			continue
-		}
-
-		name := strings.TrimLeft(a, "-")
-		value, hasValue := "", false
-		if eq := strings.IndexByte(name, '='); eq >= 0 {
-			value, name = name[eq+1:], name[:eq]
-			hasValue = true
-		}
-		if name == "checkers" {
-			if !hasValue && i+1 < len(args) && isNumericFlagValue(args[i+1]) {
-				i++
-				value = args[i]
-			}
-			n, err := parsePositiveIntFlag(name, value)
-			if err != nil {
-				return nil, err
-			}
-			res.checkers = n
-			continue
-		}
-		return nil, fmt.Errorf("unknown flag %q", a)
+// newCheckCommand is the native typecheck command: full-strictness program
+// check over the project at [path], styled or --json output, and a watch mode
+// that re-checks on change. Failures flow through the root error policy.
+func newCheckCommand(streams cliStreams) *cobra.Command {
+	var args checkArgs
+	cmd := &cobra.Command{
+		Use:                   "check [path] [-w]",
+		Short:                 "typecheck the project (native, full strictness)",
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			return runCheckCommand(streams, &args, argv)
+		},
 	}
-	return res, nil
+	flags := cmd.Flags()
+	flags.SortFlags = false
+	addBoolFlag(cmd, &args.watch, "watch", "w", false, "enable watch mode")
+	addBoolFlag(cmd, &args.jsonOut, "json", "", false,
+		"emit one machine-readable result object instead of styled output")
+	cmd.Flags().VarP(newPositiveIntValue(&args.checkers), "checkers", "",
+		"number of checkers per project (default 4; build and check)")
+	setFlagPlaceholder(cmd, "checkers", "<n>")
+	return cmd
 }
 
-func cmdCheck(args []string) int {
-	parsed, err := parseCheckArgs(args)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor check: %v\n\n", err)
-		usage(os.Stderr)
-		return 1 // usage errors exit 1 (rbxtsc parity; see main.go)
+// runCheckCommand resolves the project directory, then runs the styled or
+// --json check. A check with type errors is a reported failure: the
+// diagnostics and summary were already rendered, so execute prints nothing
+// extra but still exits 1.
+func runCheckCommand(streams cliStreams, args *checkArgs, argv []string) error {
+	if args.project == "" {
+		args.project = "."
 	}
-	if parsed.help {
-		usage(os.Stdout)
-		return 0
+	if len(argv) > 0 {
+		args.project = argv[0]
 	}
 
-	dir, err := filepath.Abs(parsed.project)
+	dir, err := filepath.Abs(args.project)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor check: cannot resolve path %q: %v\n", parsed.project, err)
-		return 1
+		return runtimeFailure(fmt.Errorf("cannot resolve path %q: %w", args.project, err))
 	}
 	if info, statErr := os.Stat(dir); statErr != nil || !info.IsDir() {
-		fmt.Fprintf(os.Stderr, "sloptor check: %s is not a directory\n", dir)
-		return 1
+		return runtimeFailure(fmt.Errorf("%s is not a directory", dir))
 	}
 	if _, statErr := os.Stat(filepath.Join(dir, "tsconfig.json")); statErr != nil {
-		fmt.Fprintf(os.Stderr, "sloptor check: no tsconfig.json found in %s\n", dir)
-		return 1
+		return runtimeFailure(fmt.Errorf("no tsconfig.json found in %s", dir))
 	}
 
 	// rbxts-style projects resolve all of their types (including the
@@ -110,43 +87,47 @@ func cmdCheck(args []string) int {
 	// produce a wall of confusing diagnostics, so warn up front.
 	if _, statErr := os.Stat(filepath.Join(dir, "package.json")); statErr == nil {
 		if _, statErr := os.Stat(filepath.Join(dir, "node_modules")); statErr != nil {
-			fmt.Fprintf(os.Stderr,
-				"sloptor check: warning: %s has a package.json but no node_modules — type packages (e.g. @rbxts/*) cannot be resolved; install dependencies first\n",
-				dir)
+			newUI(streams.err).warn(fmt.Sprintf(
+				"%s has a package.json but no node_modules — type packages (e.g. @rbxts/*) cannot be resolved; install dependencies first",
+				dir))
 		}
 	}
 
 	// --json: suppress styled chrome and emit exactly one result object on
 	// stdout (watch has no terminal "end", so it stays styled).
-	if parsed.jsonOut && !parsed.watch {
-		return cmdCheckJSON(dir, parsed.checkers)
+	if args.jsonOut && !args.watch {
+		if cmdCheckJSON(streams.out, dir, args.checkers) != 0 {
+			return reportedFailure(errors.New("check failed"))
+		}
+		return nil
 	}
 
-	newUI(os.Stdout).banner(filepath.Base(dir))
+	newUI(streams.out).banner(filepath.Base(dir))
 
-	if parsed.watch {
-		return runWatch(dir, os.Stdout, parsed.checkers)
+	if args.watch {
+		runWatch(dir, streams.out, args.checkers)
+		return nil // unreachable in practice: watch loops until Ctrl+C
 	}
-	res := runCheck(dir, os.Stdout, parsed.checkers)
+	res := runCheck(dir, streams.out, args.checkers)
 	if res.errorCount > 0 {
-		return 1
+		return reportedFailure(errors.New("check failed"))
 	}
-	return 0
+	return nil
 }
 
 // cmdCheckJSON runs a one-shot check and prints a single jsonResult object
-// (shared with `rotor build --json`) built from the structured diagnostics.
+// (shared with `sloptor build --json`) built from the structured diagnostics.
 // Exit code is unchanged: 1 when any error diagnostic is present, else 0.
-func cmdCheckJSON(dir string, checkers *int) int {
+func cmdCheckJSON(out io.Writer, dir string, checkers *int) int {
 	res := runCheckCollect(dir, checkers)
-	out := jsonResult{
+	result := jsonResult{
 		Version:     version,
 		OK:          res.errorCount == 0,
 		Files:       res.fileCount,
 		DurationMs:  res.elapsed.Milliseconds(),
 		Diagnostics: res.jsonDiags,
 	}
-	writeJSONResult(os.Stdout, out)
+	writeJSONResult(out, result)
 	if res.errorCount > 0 {
 		return 1
 	}
@@ -159,7 +140,7 @@ type checkResult struct {
 	elapsed    time.Duration
 	watchFiles []string
 
-	// jsonDiags is the structured diagnostics list for `rotor check --json`,
+	// jsonDiags is the structured diagnostics list for `sloptor check --json`,
 	// populated only by runCheckCollect (nil on the styled path).
 	jsonDiags []jsonDiagnostic
 }

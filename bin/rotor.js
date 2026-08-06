@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// npm/bun shim for the rotor CLI. Resolves the platform binary downloaded by
+// npm/bun shim for the sloptor CLI. Resolves the platform binary downloaded by
 // scripts/install.js (postinstall); if it is missing — e.g. bun skipped the
 // postinstall because "rotor" is not in trustedDependencies — downloads it on
 // first run, then execs it with the original args.

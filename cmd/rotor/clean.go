@@ -2,68 +2,64 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
 
 	"rotor/internal/compile"
 )
 
-// cmdClean removes a project's build outputs — the tsconfig outDir and the
-// runtime-library include folder — and, with --types, the generated editor
+// newCleanCommand removes a project's build outputs — the tsconfig outDir and
+// the runtime-library include folder — and, with --types, the generated editor
 // type companion in the project root (rotor.d.ts, plus the legacy
 // rotor-env.d.ts / rotor-asset.d.ts / rotor-macros.d.ts / rotor-config.d.ts
 // when present). It never touches source: only the resolved output/include
 // directories and the named generated files are removed.
 //
-// Targets are resolved exactly the way `rotor build` resolves them: the
+// Targets are resolved exactly the way `sloptor build` resolves them: the
 // tsconfig is found with findTsConfigPath, the outDir read from that config
 // (default "out"), and the include dir from the merged ProjectOptions
 // (default "<project>/include"). With --dry-run nothing is deleted — every
-// target is listed instead.
-func cmdClean(args []string) int {
-	path := ""
-	types := false
-	dryRun := false
-	for _, a := range args {
-		switch a {
-		case "-h", "--help":
-			usage(os.Stdout)
-			return 0
-		case "--types":
-			types = true
-		case "--dry-run", "-n":
-			dryRun = true
-		default:
-			if strings.HasPrefix(a, "-") {
-				fmt.Fprintf(os.Stderr, "sloptor clean: unknown flag %q\n\n", a)
-				usage(os.Stderr)
-				return 1
+// target is listed as a Planned row instead.
+func newCleanCommand(streams cliStreams) *cobra.Command {
+	var types, dryRun bool
+	cmd := &cobra.Command{
+		Use:                   "clean [path] [--types] [--dry-run]",
+		Short:                 "remove build outputs; --types also removes generated editor types",
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			path := "."
+			if len(argv) > 0 {
+				path = argv[0]
 			}
-			if path != "" {
-				fmt.Fprintf(os.Stderr, "sloptor clean: unexpected extra argument %q\n\n", a)
-				usage(os.Stderr)
-				return 1
-			}
-			path = a
-		}
+			return runCleanCommand(streams, path, types, dryRun)
+		},
 	}
-	if path == "" {
-		path = "."
-	}
+	cmd.Flags().SortFlags = false
+	addBoolFlag(cmd, &types, "types", "", false,
+		"also remove generated editor types (rotor.d.ts and legacy companions)")
+	addBoolFlag(cmd, &dryRun, "dry-run", "n", false, "list what would be removed without deleting anything")
+	return cmd
+}
 
+func runCleanCommand(streams cliStreams, path string, types, dryRun bool) error {
 	// Resolve the tsconfig the same way build does (file, dir, or upward
 	// search). Without one there is nothing to clean deterministically.
 	tsConfigPath, err := findTsConfigPath(path)
 	if err != nil {
-		newUI(os.Stderr).failLine(fmt.Sprintf("sloptor clean: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
 	dir := filepath.Dir(tsConfigPath)
 
-	out := newUI(os.Stdout)
+	out := newUI(streams.out)
 	out.banner("clean  " + filepath.Base(dir))
+	start := time.Now()
 
 	// outDir from the tsconfig (raw single-file read, same JSONC strip the
 	// rbxts-key reader uses); include dir from the merged ProjectOptions, via
@@ -85,35 +81,44 @@ func cmdClean(args []string) int {
 		}
 	}
 
-	removed := 0
+	var events []uiEvent
 	failed := false
 	for _, target := range targets {
 		n, present, err := cleanTarget(target, dryRun)
 		if err != nil {
-			out.failLine(fmt.Sprintf("sloptor clean: cannot remove %s: %v", relDisplay(dir, target), err))
+			events = append(events, uiEvent{
+				Status: eventFailed,
+				Target: relDisplay(dir, target),
+				Detail: fmt.Sprintf("cannot remove: %v", err),
+			})
 			failed = true
 			continue
 		}
 		if !present {
 			continue
 		}
-		removed++
 		verb := "removed"
 		if dryRun {
 			verb = "would remove"
 		}
-		out.okLine(fmt.Sprintf("%s %s", verb, relDisplay(dir, target)), plural(n, "file"))
+		status := eventRemoved
+		if dryRun {
+			status = eventPlanned
+		}
+		events = append(events, uiEvent{Status: status, Target: relDisplay(dir, target), Detail: plural(n, "file") + " " + verb})
 	}
 
+	if len(events) == 0 {
+		events = append(events, uiEvent{Status: eventUnchanged, Target: "nothing to clean"})
+	}
+	events = append(events, uiEvent{Status: eventFinished, Elapsed: time.Since(start)})
+	out.events(events)
+	fmt.Fprintln(streams.out)
+
 	if failed {
-		fmt.Fprintln(os.Stdout)
-		return 1
+		return reportedFailure(errors.New("clean failed"))
 	}
-	if removed == 0 {
-		out.noteLine("nothing to clean")
-	}
-	fmt.Fprintln(os.Stdout)
-	return 0
+	return nil
 }
 
 // cleanTarget removes one file-or-directory target, returning the number of

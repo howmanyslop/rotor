@@ -8,79 +8,58 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
+
+	"github.com/spf13/cobra"
 
 	"rotor/internal/compile"
 	"rotor/internal/config"
 )
 
-// cmdInit scaffolds a new rotor project. The game template (default) is a
-// full rbxts game (package.json, tsconfig.json, DataModel Rojo project,
+// newInitCommand scaffolds a new rotor project. The game template (default)
+// is a full rbxts game (package.json, tsconfig.json, DataModel Rojo project,
 // starter src/); package is an rbxts model/package project; plain is a
 // Luau-only project for bundle/minify/pack users.
 //
 // When stdin and stdout are both terminals and neither --template nor --yes
 // was passed, an interactive wizard collects the options; otherwise (CI,
 // pipes, or explicit flags) the non-interactive default scaffold runs.
-func cmdInit(args []string) int {
-	dir := ""
-	template := ""
-	yes := false
-	configOnly := false
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "-h" || a == "--help":
-			usage(os.Stdout)
-			fmt.Println("Init flags:")
-			fmt.Println("  -t, --template game|package|plain   scaffold non-interactively from a template")
-			fmt.Println("  -y, --yes                           accept all defaults, no prompts")
-			fmt.Println("  --config                            add only sloptor config to an existing project")
-			fmt.Println("  (run in a terminal with neither flag, sloptor init starts an interactive wizard)")
-			return 0
-		case a == "-y" || a == "--yes":
-			yes = true
-		case a == "--config":
-			configOnly = true
-		case a == "-t" || a == "--template":
-			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "sloptor init: %s requires a template name (game|package|plain)\n", a)
-				return 1
+func newInitCommand(streams cliStreams) *cobra.Command {
+	var template string
+	var yes, configOnly bool
+	cmd := &cobra.Command{
+		Use:                   "init [dir] [--template game|package|plain]",
+		Short:                 "scaffold a new project (rbxts game; package lib, or plain Luau)",
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			dir := "."
+			if len(argv) > 0 {
+				dir = argv[0]
 			}
-			i++
-			template = args[i]
-		case strings.HasPrefix(a, "--template="):
-			template = strings.TrimPrefix(a, "--template=")
-		case strings.HasPrefix(a, "-t="):
-			template = strings.TrimPrefix(a, "-t=")
-		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "sloptor init: unknown flag %q\n\n", a)
-			usage(os.Stderr)
-			return 1
-		default:
-			if dir != "" {
-				fmt.Fprintf(os.Stderr, "sloptor init: unexpected extra argument %q\n\n", a)
-				usage(os.Stderr)
-				return 1
-			}
-			dir = a
-		}
+			return runInitCommand(streams, cmd, dir, template, yes, configOnly)
+		},
 	}
-	if dir == "" {
-		dir = "."
-	}
+	cmd.Flags().SortFlags = false
+	addStringFlag(cmd, &template, "template", "t", "", "<name>",
+		"scaffold non-interactively from a template (game, package, or plain)")
+	addBoolFlag(cmd, &yes, "yes", "y", false, "accept all defaults, no prompts")
+	addBoolFlag(cmd, &configOnly, "config", "", false, "add only rotor config to an existing project")
+	return cmd
+}
+
+func runInitCommand(streams cliStreams, cmd *cobra.Command, dir, template string, yes, configOnly bool) error {
 	templateSet := template != ""
 	if template == "" {
 		template = "game"
 	}
 	if template != "game" && template != "package" && template != "plain" {
-		fmt.Fprintf(os.Stderr, "sloptor init: unknown template %q (want game, package, or plain)\n", template)
-		return 1
+		return usageFailure("unknown template %q (want game, package, or plain)", template)
 	}
 
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor init: %v\n", err)
-		return 1
+		return runtimeFailure(err)
 	}
 	name := filepath.Base(abs)
 
@@ -96,25 +75,40 @@ func cmdInit(args []string) int {
 	}
 	if configOnly || existing {
 		if fileExists(filepath.Join(dir, config.ConfigFileName)) {
-			u := newUI(os.Stdout)
+			u := newUI(streams.out)
 			u.banner("init  " + name)
 			fmt.Fprintln(u.w)
-			u.okLine("already configured", config.ConfigFileName+" exists")
+			u.events([]uiEvent{{
+				Status: eventUnchanged,
+				Target: "already configured",
+				Detail: config.ConfigFileName + " exists",
+			}})
 			fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("sloptor doctor"))
-			return 0
+			return nil
 		}
-		return writeAdoptFiles(os.Stdout, dir, detectTemplate(dir))
+		if writeAdoptFiles(streams.out, dir, detectTemplate(dir)) != 0 {
+			return reportedFailure(fmt.Errorf("init failed"))
+		}
+		return nil
 	}
 
 	// Wizard gate: a real terminal on both ends and no overriding flags.
-	if !templateSet && !yes && isTerminal(os.Stdin) && isTerminal(os.Stdout) {
-		return runInitInteractive(dir, name, os.Stdin, os.Stdout)
+	inFile, inIsFile := streams.in.(*os.File)
+	outFile, outIsFile := streams.out.(*os.File)
+	if !templateSet && !yes && inIsFile && outIsFile && isTerminal(inFile) && isTerminal(outFile) {
+		if runInitInteractive(dir, name, streams.in, streams.out) != 0 {
+			return reportedFailure(fmt.Errorf("init failed"))
+		}
+		return nil
 	}
 
 	opts := initOptions{dir: dir, name: name, template: template}
-	u := newUI(os.Stdout)
+	u := newUI(streams.out)
 	u.banner("init  " + name)
-	return writeInitFiles(os.Stdout, opts, scaffold(opts))
+	if writeInitFiles(streams.out, opts, scaffold(opts)) != 0 {
+		return reportedFailure(fmt.Errorf("init failed"))
+	}
+	return nil
 }
 
 // isTerminal reports whether f is an interactive terminal (character device).
@@ -179,11 +173,12 @@ func writeAdoptFiles(out io.Writer, dir, template string) int {
 	u := newUI(out)
 	u.banner("init  " + filepath.Base(mustAbs(dir)) + "  (adopt)")
 	fmt.Fprintf(out, "  %s %s\n\n", u.s.Muted(u.s.Glyphs().Dot), u.s.Muted("detected an existing "+template+" project"))
+	var events []uiEvent
 	wrote := 0
 	for _, f := range adoptFiles() {
 		path := filepath.Join(dir, filepath.FromSlash(f.path))
 		if fileExists(path) {
-			fmt.Fprintf(out, "  %s %s %s\n", u.s.Muted(u.s.Glyphs().Dot), f.path, u.s.Muted("(exists, kept)"))
+			events = append(events, uiEvent{Status: eventUnchanged, Target: f.path, Detail: "(exists, kept)"})
 			continue
 		}
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -194,9 +189,10 @@ func writeAdoptFiles(out io.Writer, dir, template string) int {
 			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: cannot write %q: %v", path, err))
 			return 1
 		}
-		fmt.Fprintf(out, "  %s %s\n", u.s.Green("+"), f.path)
+		events = append(events, uiEvent{Status: eventCreated, Target: f.path})
 		wrote++
 	}
+	u.events(events)
 	printAdoptNextSteps(u, wrote)
 	return 0
 }
@@ -213,11 +209,11 @@ func mustAbs(dir string) string {
 
 func printAdoptNextSteps(u *ui, wrote int) {
 	fmt.Fprintln(u.w)
+	status, target, detail := eventFinished, "added sloptor config to an existing project", plural(wrote, "file")
 	if wrote == 0 {
-		u.okLine("already had sloptor config", "nothing to add")
-	} else {
-		u.okLine("added sloptor config to an existing project", plural(wrote, "file"))
+		status, target, detail = eventUnchanged, "already had sloptor config", "nothing to add"
 	}
+	u.events([]uiEvent{{Status: status, Target: target, Detail: detail}})
 	fmt.Fprintln(u.w)
 	fmt.Fprintf(u.w, "  %s\n", u.s.Bold("next steps"))
 	fmt.Fprintf(u.w, "    %s %s\n", u.s.Muted(u.s.Glyphs().Arrow), u.s.Info("sloptor doctor"))
@@ -437,10 +433,13 @@ print(makeHello("main.client.ts"));
 }
 
 // writeInitFiles writes the scaffold to disk under opts.dir, printing one
-// `+ path` row per file and the next-steps block. out is the wizard/banner
-// stream (a buffer in tests); operational errors still go to stderr.
+// `Created` event row per file plus the final timed row and next-steps block.
+// out is the wizard/banner stream (a buffer in tests); operational errors
+// still go to stderr.
 func writeInitFiles(out io.Writer, opts initOptions, files []initFile) int {
 	u := newUI(out)
+	start := time.Now()
+	events := make([]uiEvent, 0, len(files)+1)
 	for _, f := range files {
 		path := filepath.Join(opts.dir, filepath.FromSlash(f.path))
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -451,8 +450,15 @@ func writeInitFiles(out io.Writer, opts initOptions, files []initFile) int {
 			newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: cannot write %q: %v", path, err))
 			return 1
 		}
-		fmt.Fprintf(out, "  %s %s\n", u.s.Green("+"), f.path)
+		events = append(events, uiEvent{Status: eventCreated, Target: f.path})
 	}
+	events = append(events, uiEvent{
+		Status:  eventFinished,
+		Target:  fmt.Sprintf("scaffolded a %s project", opts.template),
+		Detail:  fmt.Sprintf("%s · %s", opts.dir, plural(len(files), "file")),
+		Elapsed: time.Since(start),
+	})
+	u.events(events)
 	printInitNextSteps(u, opts, len(files))
 	return 0
 }
@@ -731,8 +737,6 @@ func detectPackageManager(dir string) string {
 }
 
 func printInitNextSteps(u *ui, opts initOptions, n int) {
-	fmt.Fprintln(u.w)
-	u.okLine(fmt.Sprintf("scaffolded a %s project", opts.template), fmt.Sprintf("in %s · %s", opts.dir, plural(n, "file")))
 	fmt.Fprintln(u.w)
 	fmt.Fprintf(u.w, "  %s\n", u.s.Bold("next steps"))
 	step := func(cmd, why string) {

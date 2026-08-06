@@ -3,10 +3,13 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"rotor/internal/bundle"
 	"rotor/internal/diagframe"
@@ -14,70 +17,42 @@ import (
 	"rotor/internal/term"
 )
 
-// cmdBundle bundles a Luau require graph rooted at an entry file into one runnable
-// file. Output goes to --output, or stdout when no output path is given. With
-// --minify the bundle is also minified. --exclude <glob> (repeatable) leaves
-// requires whose resolved path matches a glob verbatim (for runtime-provided
-// modules); .json/.txt/.md requires are embedded as data modules; "@alias"
-// requires resolve through the nearest .luaurc.
+// newBundleCommand bundles a Luau require graph rooted at an entry file into
+// one runnable file. Output goes to --output, or stdout when no output path
+// is given. With --minify the bundle is also minified. --exclude <glob>
+// (repeatable) leaves requires whose resolved path matches a glob verbatim
+// (for runtime-provided modules); .json/.txt/.md requires are embedded as
+// data modules; "@alias" requires resolve through the nearest .luaurc.
 //
 // Output discipline: without -o the bundle itself is the stdout stream, so no
-// chrome is printed there; with -o the rotor banner + summary appear on stdout.
-func cmdBundle(args []string) int {
-	entry := ""
-	output := ""
+// chrome is printed there; with -o the rotor banner + event rows appear on
+// stdout.
+func newBundleCommand(streams cliStreams) *cobra.Command {
+	var output string
 	minify := false
 	var exclude []string
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "-h" || a == "--help":
-			usage(os.Stdout)
-			return 0
-		case a == "--minify":
-			minify = true
-		case a == "-o" || a == "--output":
-			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "sloptor bundle: %s requires a path\n", a)
-				return 1
-			}
-			i++
-			output = args[i]
-		case strings.HasPrefix(a, "--output="):
-			output = strings.TrimPrefix(a, "--output=")
-		case strings.HasPrefix(a, "-o="):
-			output = strings.TrimPrefix(a, "-o=")
-		case a == "--exclude":
-			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "sloptor bundle: %s requires a glob\n", a)
-				return 1
-			}
-			i++
-			exclude = append(exclude, args[i])
-		case strings.HasPrefix(a, "--exclude="):
-			exclude = append(exclude, strings.TrimPrefix(a, "--exclude="))
-		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "sloptor bundle: unknown flag %q\n\n", a)
-			usage(os.Stderr)
-			return 1
-		default:
-			if entry != "" {
-				fmt.Fprintf(os.Stderr, "sloptor bundle: unexpected extra argument %q\n\n", a)
-				usage(os.Stderr)
-				return 1
-			}
-			entry = a
-		}
+	cmd := &cobra.Command{
+		Use:                   "bundle <entry> [-o out] [--minify]",
+		Short:                 "inline a Luau require graph into one runnable file",
+		Args:                  cobra.ExactArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			return runBundleCommand(streams, argv[0], output, minify, exclude)
+		},
 	}
-	if entry == "" {
-		fmt.Fprintln(os.Stderr, "sloptor bundle: an entry .luau/.lua file is required")
-		usage(os.Stderr)
-		return 1
-	}
+	cmd.Flags().SortFlags = false
+	addStringFlag(cmd, &output, "output", "o", "", "<file>",
+		"write the bundle to this file instead of stdout")
+	addBoolFlag(cmd, &minify, "minify", "", false, "minify the bundled output")
+	cmd.Flags().StringSliceVar(&exclude, "exclude", nil,
+		"leave requires whose resolved path matches a glob verbatim (repeatable)")
+	setFlagPlaceholder(cmd, "exclude", "<glob>")
+	return cmd
+}
 
-	errUI := newUI(os.Stderr)
+func runBundleCommand(streams cliStreams, entry, output string, minify bool, exclude []string) error {
 	if output != "" {
-		newUI(os.Stdout).banner("bundle  " + filepath.Base(entry))
+		newUI(streams.out).banner("bundle  " + filepath.Base(entry))
 	}
 
 	start := time.Now()
@@ -85,16 +60,16 @@ func cmdBundle(args []string) int {
 	if err != nil {
 		var pe *bundle.ParseError
 		if errors.As(err, &pe) {
-			errUI.failLine("sloptor bundle: syntax error")
-			color := term.ColorEnabled(os.Stderr)
-			fmt.Fprint(os.Stderr, diagframe.RenderGroups(
+			u := newUI(streams.err)
+			u.events([]uiEvent{{Status: eventFailed, Target: entry, Detail: "syntax error"}})
+			color := term.ColorEnabled(streams.err)
+			fmt.Fprint(streams.err, diagframe.RenderGroups(
 				[]diagframe.Group{{Path: pe.Path, Source: pe.Source, Lang: diagframe.Luau,
 					Spots: []diagframe.Spot{{Offset: pe.Diag.Pos.Offset, Len: 1, Severity: diagframe.Error, Message: pe.Diag.Message}}}},
 				diagframe.Options{Color: color, Link: color}, 0))
-			return 1
+			return reportedFailure(err)
 		}
-		errUI.failLine(fmt.Sprintf("sloptor bundle: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
 	// Display-only module tally: one `local function impl_<id>(` per bundled
 	// module in the assembled output (counted before minification).
@@ -104,29 +79,27 @@ func cmdBundle(args []string) int {
 	if minify {
 		minified, diags := cst.Minify(out)
 		if len(diags) != 0 {
-			errUI.failLine(fmt.Sprintf("sloptor bundle: internal error minifying bundle: %s", diags[0].Message))
-			return 1
+			return runtimeFailure(fmt.Errorf("internal error minifying bundle: %s", diags[0].Message))
 		}
 		out = minified
 	}
 
 	if output == "" {
-		_, _ = os.Stdout.WriteString(out)
-		return 0
+		_, _ = io.WriteString(streams.out, out)
+		return nil
 	}
 	if err := os.WriteFile(output, []byte(out), 0o644); err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor bundle: cannot write %q: %v", output, err))
-		return 1
+		return runtimeFailure(fmt.Errorf("cannot write %q: %w", output, err))
 	}
 
-	u := newUI(os.Stdout)
-	u.okLine(fmt.Sprintf("bundled %s", plural(modules, "module")),
-		fmt.Sprintf("in %d ms", time.Since(start).Milliseconds()))
-	detail := fmt.Sprintf("%s  %s", output, formatBytes(len(out)))
+	detail := fmt.Sprintf("%d modules · %s", modules, formatBytes(len(out)))
 	if minify {
 		detail += fmt.Sprintf(" (minified, %s)", shrinkPercent(rawSize, len(out)))
 	}
-	u.noteLine(detail)
-	fmt.Println()
-	return 0
+	newUI(streams.out).events([]uiEvent{
+		{Status: eventWrote, Target: output, Detail: detail},
+		{Status: eventFinished, Elapsed: time.Since(start)},
+	})
+	fmt.Fprintln(streams.out)
+	return nil
 }

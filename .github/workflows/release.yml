@@ -84,7 +84,7 @@ jobs:
           CGO_ENABLED: "0"
         run: |
           mkdir -p dist
-          output="dist/rotor-v$VERSION-$GOOS-$GOARCH-bin$SUFFIX"
+          output="dist/sloptor-v-$GOOS-$GOARCH-bin$SUFFIX"
           go build -trimpath -ldflags="-s -w" -o "$output" ./cmd/rotor
           test -s "$output"
           go version -m "$output"
@@ -135,9 +135,9 @@ jobs:
             target_os="$1"
             target_arch="$2"
             suffix="$3"
-            bare_name="rotor-v$VERSION-$target_os-$target_arch-bin$suffix"
+            bare_name="sloptor-v-$target_os-$target_arch-bin$suffix"
             stage_dir="$RUNNER_TEMP/package-$target_os-$target_arch"
-            executable="rotor$suffix"
+            executable="sloptor"
 
             test -s "dist/$bare_name"
             mkdir -p "$stage_dir"
@@ -148,10 +148,10 @@ jobs:
             if [ "$target_os" = "windows" ]; then
               (
                 cd "$stage_dir"
-                zip -q "$GITHUB_WORKSPACE/dist/rotor-v$VERSION-$target_os-$target_arch.zip" "$executable" README.md LICENSE
+                zip -q "$GITHUB_WORKSPACE/dist/sloptor-v-$target_os-$target_arch.zip" "$executable" README.md LICENSE
               )
             else
-              tar -C "$stage_dir" -czf "dist/rotor-v$VERSION-$target_os-$target_arch.tar.gz" "$executable" README.md LICENSE
+              tar -C "$stage_dir" -czf "dist/sloptor-v-$target_os-$target_arch.tar.gz" "$executable" README.md LICENSE
             fi
           }
 
@@ -168,28 +168,28 @@ jobs:
             cd dist
             LC_ALL=C
             export LC_ALL
-            checksum_file="rotor-v$VERSION-checksums.txt"
+            checksum_file="sloptor-v-checksums.txt"
             checksum_tmp="$RUNNER_TEMP/$checksum_file"
             find . -maxdepth 1 -type f ! -name "$checksum_file" -exec basename {} \; | sort | xargs sha256sum > "$checksum_tmp"
             mv "$checksum_tmp" "$checksum_file"
-            sha256sum --check "rotor-v$VERSION-checksums.txt"
+            sha256sum --check "sloptor-v-checksums.txt"
           )
 
           test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 13
 
-          for archive in "dist/rotor-v$VERSION-"*.tar.gz; do
-            test "$(tar -tzf "$archive" | sort | paste -sd ' ' -)" = "LICENSE README.md rotor"
+          for archive in "dist/sloptor-v-"*.tar.gz; do
+            test "$(tar -tzf "$archive" | sort | paste -sd ' ' -)" = "LICENSE README.md sloptor"
           done
-          for archive in "dist/rotor-v$VERSION-"*.zip; do
-            test "$(unzip -Z1 "$archive" | sort | paste -sd ' ' -)" = "LICENSE README.md rotor.exe"
+          for archive in "dist/sloptor-v-"*.zip; do
+            test "$(unzip -Z1 "$archive" | sort | paste -sd ' ' -)" = "LICENSE README.md sloptor.exe"
           done
 
-          file "dist/rotor-v$VERSION-darwin-amd64-bin" | grep -q "Mach-O.*x86_64"
-          file "dist/rotor-v$VERSION-darwin-arm64-bin" | grep -q "Mach-O.*arm64"
-          file "dist/rotor-v$VERSION-linux-amd64-bin" | grep -q "ELF 64-bit.*x86-64"
-          file "dist/rotor-v$VERSION-linux-arm64-bin" | grep -q "ELF 64-bit.*ARM aarch64"
-          file "dist/rotor-v$VERSION-windows-amd64-bin.exe" | grep -q "PE32+.*x86-64"
-          file "dist/rotor-v$VERSION-windows-arm64-bin.exe" | grep -q "PE32+.*Aarch64"
+          file "dist/sloptor-v-darwin-amd64-bin" | grep -q "Mach-O.*x86_64"
+          file "dist/sloptor-v-darwin-arm64-bin" | grep -q "Mach-O.*arm64"
+          file "dist/sloptor-v-linux-amd64-bin" | grep -q "ELF 64-bit.*x86-64"
+          file "dist/sloptor-v-linux-arm64-bin" | grep -q "ELF 64-bit.*ARM aarch64"
+          file "dist/sloptor-v-windows-amd64-bin.exe" | grep -q "PE32+.*x86-64"
+          file "dist/sloptor-v-windows-arm64-bin.exe" | grep -q "PE32+.*Aarch64"
 
       - name: Upload release bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -226,7 +226,7 @@ jobs:
 
           (
             cd dist
-            sha256sum --check "rotor-v$VERSION-checksums.txt"
+            sha256sum --check "sloptor-v-checksums.txt"
           )
           test "$(find dist -maxdepth 1 -type f | wc -l)" -eq 13
 
@@ -268,6 +268,6 @@ jobs:
               echo "$filename digest mismatch: $remote_digest != sha256:$hash"
               exit 1
             fi
-          done < "dist/rotor-v$VERSION-checksums.txt"
+          done < "dist/sloptor-v-checksums.txt"
 
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url

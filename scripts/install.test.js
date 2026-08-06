@@ -6,7 +6,7 @@
 //
 // Verifies, without needing a published GitHub release:
 //   1. install() downloads the platform asset from ROTOR_INSTALL_BASE_URL,
-//      writes bin/rotor-<os>-<arch>(.exe), and makes it executable (unix).
+//      writes bin/sloptor-<os>-<arch>(.exe), and makes it executable (unix).
 //   2. install() skips the download when the binary already exists (>1MB).
 //   3. install() fails with a clear error naming the URL on HTTP 404.
 //   4. bin/rotor.js spawns the binary, forwarding args, stdout, and exit code.
@@ -15,7 +15,7 @@
 //      probed first and skipped with a warning where blocked (some sandboxes).
 //   6. `npm pack --dry-run` ships only the intended files.
 //
-// The fake "rotor binary" served over HTTP is a copy of the current Node
+// The fake "sloptor binary" served over HTTP is a copy of the current Node
 // executable: it is >1MB and runnable on every platform, so the shim's
 // spawn/arg-forwarding/exit-code path can be tested for real.
 "use strict";
@@ -35,8 +35,8 @@ const ARCH_MAP = { x64: "amd64", arm64: "arm64" };
 const osName = PLATFORM_MAP[process.platform];
 const archName = ARCH_MAP[process.arch];
 const ext = osName === "windows" ? ".exe" : "";
-const assetName = `rotor-v${pkg.version}-${osName}-${archName}-bin${ext}`;
-const localBinName = `rotor-${osName}-${archName}${ext}`;
+const assetName = `sloptor-v-${osName}-${archName}-bin${ext}`;
+const localBinName = `sloptor--`;
 
 let passed = 0;
 function ok(name) {
@@ -74,7 +74,7 @@ function childCanReachLoopback(url) {
 async function main() {
   // -- stage a copy of the package layout in a temp dir, so downloads never
   //    land in the real repo's bin/ ------------------------------------------
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "rotor-npm-test-"));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "sloptor-npm-test-"));
   fs.mkdirSync(path.join(tmp, "bin"));
   fs.mkdirSync(path.join(tmp, "scripts"));
   fs.copyFileSync(path.join(repoRoot, "package.json"), path.join(tmp, "package.json"));
@@ -109,7 +109,7 @@ async function main() {
   try {
     process.env.ROTOR_INSTALL_BASE_URL = baseUrl;
 
-    // 1. install() downloads the asset to bin/rotor-<os>-<arch>(.exe)
+    // 1. install() downloads the asset to bin/sloptor-<os>-<arch>(.exe)
     assert.strictEqual(installer.binaryPath(), installedBin, "binaryPath mismatch");
     assert.strictEqual(installer.assetUrl(), `${baseUrl}/${assetName}`, "assetUrl mismatch");
     let dest = await installer.install({ quiet: true });

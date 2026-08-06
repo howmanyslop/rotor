@@ -23,12 +23,12 @@ bun add -d @rotor-rbx/rotor    # or: npm i -D @rotor-rbx/rotor — see Install f
 **Compile & check** — the rbxtsc replacement:
 
 ```sh
-rotor check ./my-game -w     # native full-strictness typecheck: 222 files in 161 ms
-rotor build ./my-game -w     # parity Luau, watch mode, incremental rebuilds
-rotor doctor                 # diagnose tsconfig, @rbxts packages, plugins, Rojo, cloud setup
+sloptor check ./my-game -w     # native full-strictness typecheck: 222 files in 161 ms
+sloptor build ./my-game -w     # parity Luau, watch mode, incremental rebuilds
+sloptor doctor                 # diagnose tsconfig, @rbxts packages, plugins, Rojo, cloud setup
 ```
 
-Both `build` and `check` accept `--checkers <n>` to tune type-checker workers per project (default 4). Solution builds (`--build`) also accept `--builders <n>` for project concurrency (default 4). `rotor build --build --builders 2 --checkers 4` is a typical tuned command.
+Both `build` and `check` accept `--checkers <n>` to tune type-checker workers per project (default 4). Solution builds (`--build`) also accept `--builders <n>` for project concurrency (default 4). `sloptor build --build --builders 2 --checkers 4` is a typical tuned command.
 
 Same `tsconfig.json`, same `@rbxts/*` packages, same transformer plugins (Flamework etc.), same CLI flags — plus built-in compile-time macros rbxtsc doesn't have (no plugins, no Node sidecar, fully typed):
 
@@ -49,7 +49,7 @@ The verified `@isentinel/roblox-ts@4.0.11` fork archive in `roblox-ts.zip` is au
 For the tsconfig extension schema, publish the Rotor copy once at the repository or project location you want editors to use:
 
 ```sh
-rotor schema --rbxts > rbxts-tsconfig.schema.json
+sloptor schema --rbxts > rbxts-tsconfig.schema.json
 ```
 
 Then point `tsconfig.json` at that file with its top-level `"$schema"` field. This is separate from `rotor.schema.json`, which describes `rotor.toml`.
@@ -57,26 +57,28 @@ Then point `tsconfig.json` at that file with its top-level `"$schema"` field. Th
 **Luau toolchain** — works on any Rojo project, no rbxts required:
 
 ```sh
-rotor dev                    # watch + incremental compile + rojo serve to Studio
-rotor bundle entry.luau -o bundle.luau --minify   # inline a require graph, still runnable
-rotor minify file.luau       # strip comments/whitespace, keep --! directives
-rotor pack --as luau         # whole project -> one self-reconstructing script (or rbxm/rbxmx)
-rotor sourcemap -o sourcemap.json                 # Rojo-compatible, for luau-lsp
+sloptor dev                    # watch + incremental compile + rojo serve to Studio
+sloptor bundle entry.luau -o bundle.luau --minify   # inline a require graph, still runnable
+sloptor minify file.luau       # strip comments/whitespace, keep --! directives
+sloptor pack --as luau         # whole project -> one self-reconstructing script (or rbxm/rbxmx)
+sloptor sourcemap -o sourcemap.json                 # Rojo-compatible, for luau-lsp
 ```
 
 **Cloud** — assets and deployment from one typed config (see below):
 
 ```sh
-rotor asset sync             # upload new/changed assets, lockfile, typed codegen
-rotor deploy plan -e prod    # diff config vs live state (terraform-style, no network writes)
-rotor deploy apply -e prod   # publish places, settings, badges — only what drifted
+sloptor asset sync             # upload new/changed assets, lockfile, typed codegen
+sloptor deploy plan -e prod    # diff config vs live state (terraform-style, no network writes)
+sloptor deploy apply -e prod   # publish places, settings, badges — only what drifted
 ```
 
-**Scaffolding** — `rotor init` runs an interactive wizard (template, Biome/oxlint, starter packages, asset/deploy config) or scripts cleanly with `--yes`/`--template`.
+**Scaffolding** — `sloptor init` runs an interactive wizard (template, Biome/oxlint, starter packages, asset/deploy config) or scripts cleanly with `--yes`/`--template`.
+
+**Shell completion** — `sloptor completion bash|zsh|fish|powershell` writes a native completion script to stdout (e.g. `sloptor completion fish > ~/.config/fish/completions/sloptor.fish`); see `sloptor completion --help` for the one-line install per shell.
 
 ## Configuration — `rotor.toml`
 
-One typed TOML config drives the cloud tools. `rotor init` writes it with a `#:schema` directive that points at the schema **hosted in this repo** (served via raw GitHub), so taplo / Even Better TOML give validation + autocomplete with no per-project `rotor.schema.json` to generate or commit. Need a local copy for offline editing? `rotor schema > rotor.schema.json`. (Upgrading from a 1.x `rotor.config.ts`? Run `rotor migrate`.)
+One typed TOML config drives the cloud tools. `sloptor init` writes it with a `#:schema` directive that points at the schema **hosted in this repo** (served via raw GitHub), so taplo / Even Better TOML give validation + autocomplete with no per-project `rotor.schema.json` to generate or commit. Need a local copy for offline editing? `sloptor schema > rotor.schema.json`. (Upgrading from a 1.x `rotor.config.ts`? Run `sloptor migrate`.)
 
 ```toml
 #:schema https://raw.githubusercontent.com/uproot/rotor/master/rotor.schema.json
@@ -109,9 +111,9 @@ url = "https://discord.gg/x"
 type = "discord"
 ```
 
-- **`rotor asset sync`** scans the globs, uploads new/changed files via Open Cloud (SHA-256 lockfile `rotor-lock.json` — unchanged files never re-upload, updates keep asset ids stable). In `mode = "module"` it generates `assets.luau` + `assets.d.ts`; in `mode = "macro"` you reference assets inline with **`$asset("assets/logo.png")`**, which resolves from the cache and auto-uploads any miss when `ROBLOX_API_KEY` is set. An optional `[assets] base` directory is prepended to non-relative `$asset` paths, so files can live under e.g. `assets/images/` while references stay short. Image uploads are unwrapped to the underlying **Image** asset id (an upload creates a Decal wrapper whose id doesn't render in `ImageLabel.Image` and friends).
-- **`rotor deploy`** is infrastructure-as-code: it diffs the config against per-environment state (`.rotor/deploy/<env>.json`), shows a plan, and applies only the drift — place file publishing + place settings, experience settings, badges and game passes (icons upload automatically first, shared icons dedupe), experience icon + thumbnails, developer products, and social links. Deletes require `--allow-deletes`.
-- Auth is an Open Cloud key in **`ROBLOX_API_KEY`** (scopes: Assets R/W, Legacy Assets manage — used to unwrap image uploads to their Image id, Universe Places W, Universe R/W). `rotor doctor` checks your config and key setup.
+- **`sloptor asset sync`** scans the globs, uploads new/changed files via Open Cloud (SHA-256 lockfile `rotor-lock.json` — unchanged files never re-upload, updates keep asset ids stable). In `mode = "module"` it generates `assets.luau` + `assets.d.ts`; in `mode = "macro"` you reference assets inline with **`$asset("assets/logo.png")`**, which resolves from the cache and auto-uploads any miss when `ROBLOX_API_KEY` is set. An optional `[assets] base` directory is prepended to non-relative `$asset` paths, so files can live under e.g. `assets/images/` while references stay short. Image uploads are unwrapped to the underlying **Image** asset id (an upload creates a Decal wrapper whose id doesn't render in `ImageLabel.Image` and friends).
+- **`sloptor deploy`** is infrastructure-as-code: it diffs the config against per-environment state (`.rotor/deploy/<env>.json`), shows a plan, and applies only the drift — place file publishing + place settings, experience settings, badges and game passes (icons upload automatically first, shared icons dedupe), experience icon + thumbnails, developer products, and social links. Deletes require `--allow-deletes`.
+- Auth is an Open Cloud key in **`ROBLOX_API_KEY`** (scopes: Assets R/W, Legacy Assets manage — used to unwrap image uploads to their Image id, Universe Places W, Universe R/W). `sloptor doctor` checks your config and key setup.
 
 Full config shape, every command flag, generated build-state file, environment variable, and all the macros: [docs.md](docs.md).
 

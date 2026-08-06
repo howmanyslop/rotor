@@ -6,9 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"rotor/internal/cloud"
 	"rotor/internal/config"
@@ -16,207 +17,189 @@ import (
 	"rotor/internal/term"
 )
 
-// cmdDeploy is `rotor deploy <plan|apply> [path] -e <env> [--yes]
+// newDeployCommand is `sloptor deploy <plan|apply> [path] -e <env> [--yes]
 // [--allow-deletes]`: the mantle-style IaC front end over internal/deploy.
 // plan diffs the config's resource graph against .rotor/deploy/<env>.json
-// and prints terraform-style +/~/-/· lines without touching the network;
-// apply executes the plan in dependency order against Open Cloud
-// (ROBLOX_API_KEY), persisting state after every resource.
-func cmdDeploy(args []string) int {
-	return deployMain(args, os.Stdin, os.Stdout, os.Stderr)
+// and prints planned event rows without touching the network; apply executes
+// the plan in dependency order against Open Cloud (ROBLOX_API_KEY),
+// persisting state after every resource.
+func newDeployCommand(streams cliStreams) *cobra.Command {
+	deployCmd := &cobra.Command{
+		Use:                   "deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]",
+		Short:                 "declarative Open Cloud deployment from rotor.toml (plan | apply)",
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return usageFailure("expected a subcommand (plan or apply)")
+			}
+			return usageFailure("unknown subcommand %q (want plan or apply)", args[0])
+		},
+	}
+	for _, sub := range []string{"plan", "apply"} {
+		child := newDeploySubcommand(streams, sub)
+		deployCmd.AddCommand(child)
+	}
+	return deployCmd
 }
 
-// deployMain is cmdDeploy with injectable streams so tests can drive the
-// confirmation prompt and inspect output.
-func deployMain(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	if len(args) == 0 {
-		fmt.Fprintln(stderr, "sloptor deploy: missing subcommand (plan or apply)")
-		deployUsage(stderr)
-		return 1
-	}
-	if args[0] == "-h" || args[0] == "--help" {
-		deployUsage(stdout)
-		return 0
-	}
-	sub := args[0]
-	if sub != "plan" && sub != "apply" {
-		fmt.Fprintf(stderr, "sloptor deploy: unknown subcommand %q (want plan or apply)\n", sub)
-		deployUsage(stderr)
-		return 1
-	}
+// deployFlags is the shared plan/apply flag surface.
+type deployFlags struct {
+	projectDir   string
+	env          string
+	yes          bool
+	allowDeletes bool
+}
 
-	projectDir := "."
-	env := ""
-	yes := false
-	allowDeletes := false
-	haveDir := false
-	rest := args[1:]
-	for i := 0; i < len(rest); i++ {
-		a := rest[i]
-		switch {
-		case a == "-h" || a == "--help":
-			deployUsage(stdout)
-			return 0
-		case a == "--yes" || a == "-y":
-			yes = true
-		case a == "--allow-deletes":
-			allowDeletes = true
-		case a == "-e" || a == "--env":
-			if i+1 >= len(rest) {
-				fmt.Fprintf(stderr, "sloptor deploy: %s requires an environment name\n", a)
-				return 1
-			}
-			i++
-			env = rest[i]
-		case strings.HasPrefix(a, "--env="):
-			env = strings.TrimPrefix(a, "--env=")
-		case strings.HasPrefix(a, "-e="):
-			env = strings.TrimPrefix(a, "-e=")
-		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(stderr, "sloptor deploy: unknown flag %q\n\n", a)
-			deployUsage(stderr)
-			return 1
-		default:
-			if haveDir {
-				fmt.Fprintf(stderr, "sloptor deploy: unexpected extra argument %q\n\n", a)
-				deployUsage(stderr)
-				return 1
-			}
-			projectDir = a
-			haveDir = true
-		}
+func newDeploySubcommand(streams cliStreams, sub string) *cobra.Command {
+	var flags deployFlags
+	short := "show what apply would do (no network, no API key needed)"
+	if sub == "apply" {
+		short = "execute the plan against Open Cloud (needs ROBLOX_API_KEY)"
 	}
-	if env == "" {
-		fmt.Fprintln(stderr, "sloptor deploy: an environment is required (-e <env>)")
-		return 1
+	cmd := &cobra.Command{
+		Use:                   sub + " [path] -e <env> [--yes] [--allow-deletes]",
+		Short:                 short,
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			flags.projectDir = "."
+			if len(argv) > 0 {
+				flags.projectDir = argv[0]
+			}
+			if flags.env == "" {
+				return usageFailure("an environment is required (-e <env>)")
+			}
+			return runDeployCommand(streams, sub, &flags)
+		},
 	}
+	cmd.Flags().SortFlags = false
+	addStringFlag(cmd, &flags.env, "env", "e", "", "<env>", "deploy environment from rotor.toml (required)")
+	addBoolFlag(cmd, &flags.yes, "yes", "y", false, "skip the type-the-environment-name confirmation prompt")
+	addBoolFlag(cmd, &flags.allowDeletes, "allow-deletes", "", false, "permit removing resources that left the config")
+	return cmd
+}
 
-	u := newUI(stdout)
-	errUI := newUI(stderr)
-	u.banner("deploy " + sub + "  " + env)
+func runDeployCommand(streams cliStreams, sub string, flags *deployFlags) error {
+	u := newUI(streams.out)
+	errUI := newUI(streams.err)
+	u.banner("deploy " + sub + "  " + flags.env)
 
 	// Load + validate the config, build the desired graph, load state, plan.
 	// None of this needs an API key or the network.
-	cfg, err := config.Load(projectDir)
+	cfg, err := config.Load(flags.projectDir)
 	if err != nil {
 		if errors.Is(err, config.ErrNotFound) {
-			errUI.failLine(fmt.Sprintf("sloptor deploy: no rotor.toml found in %s", projectDir))
-			return 1
+			return runtimeFailure(fmt.Errorf("no rotor.toml found in %s", flags.projectDir))
 		}
-		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
 	for _, w := range cfg.Warnings {
-		errUI.warn("sloptor deploy: " + w)
+		errUI.warn(w)
 	}
 	if errs := cfg.Validate(); len(errs) > 0 {
+		var b strings.Builder
 		for _, e := range errs {
-			errUI.failLine(fmt.Sprintf("sloptor deploy: config: %v", e))
+			b.WriteString("config: " + e.Error() + "\n")
 		}
-		return 1
+		return runtimeFailure(errors.New(strings.TrimSuffix(b.String(), "\n")))
 	}
 
-	resources, universeID, err := deploy.BuildResources(projectDir, cfg, env)
+	resources, universeID, err := deploy.BuildResources(flags.projectDir, cfg, flags.env)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
-	statePath := deploy.StatePath(projectDir, env)
+	statePath := deploy.StatePath(flags.projectDir, flags.env)
 	state, err := deploy.LoadState(statePath)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
-	plan, err := deploy.BuildPlan(resources, state, deploy.PlanOptions{AllowDeletes: allowDeletes})
+	plan, err := deploy.BuildPlan(resources, state, deploy.PlanOptions{AllowDeletes: flags.allowDeletes})
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
 
 	if sub == "plan" {
-		printDeployPlan(stdout, plan)
-		return 0
+		printDeployPlan(streams.out, plan)
+		return nil
 	}
 
 	// apply
 	if plan.BlockedDeletes > 0 {
-		errUI.failLine(fmt.Sprintf("sloptor deploy: plan contains %s no longer in the config; re-run with --allow-deletes to remove them",
+		return runtimeFailure(fmt.Errorf("plan contains %s no longer in the config; re-run with --allow-deletes to remove them",
 			plural(plan.BlockedDeletes, "resource")))
-		return 1
 	}
 	if !plan.HasChanges() {
-		printDeployPlan(stdout, plan)
-		s := term.For(stdout)
-		fmt.Fprintf(stdout, "  %s\n\n", s.Muted("nothing to apply"))
-		return 0
+		printDeployPlan(streams.out, plan)
+		s := termFor(streams.out)
+		fmt.Fprintf(streams.out, "  %s\n\n", s.Muted("nothing to apply"))
+		return nil
 	}
-	printDeployPlan(stdout, plan)
+	printDeployPlan(streams.out, plan)
 
 	client, err := cloud.FromEnv()
 	if err != nil {
 		if errors.Is(err, cloud.ErrNoAPIKey) {
-			errUI.failLine("sloptor deploy: ROBLOX_API_KEY is not set")
-			fmt.Fprintln(stderr, "    create an Open Cloud API key at https://create.roblox.com/dashboard/credentials")
-			fmt.Fprintln(stderr, "    (scopes: universe + place publishing, badges, asset upload)")
-			return 1
+			fmt.Fprintln(streams.err, "ROBLOX_API_KEY is not set")
+			fmt.Fprintln(streams.err, "    create an Open Cloud API key at https://create.roblox.com/dashboard/credentials")
+			fmt.Fprintln(streams.err, "    (scopes: universe + place publishing, badges, asset upload)")
+			return runtimeFailure(err)
 		}
-		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
 
-	if !yes {
-		s := term.For(stdout)
-		fmt.Fprintf(stdout, "  %s  type the environment name to confirm: ", s.WarnBold(s.Glyphs().Warn))
-		line, _ := bufio.NewReader(stdin).ReadString('\n')
-		if strings.TrimSpace(line) != env {
-			errUI.failLine("sloptor deploy: confirmation did not match; aborted (use --yes to skip)")
-			return 1
+	if !flags.yes {
+		s := termFor(streams.out)
+		fmt.Fprintf(streams.out, "  %s  type the environment name to confirm: ", s.WarnBold(s.Glyphs().Warn))
+		line, _ := bufio.NewReader(streams.in).ReadString('\n')
+		if strings.TrimSpace(line) != flags.env {
+			return runtimeFailure(errors.New("confirmation did not match; aborted (use --yes to skip)"))
 		}
 	}
 
 	start := time.Now()
-	s := term.For(stdout)
 	result, err := deploy.Apply(context.Background(), plan, deploy.ApplyOptions{
 		Providers:  deploy.DefaultProviders(),
 		Cloud:      client,
 		UniverseID: universeID,
-		ProjectDir: projectDir,
+		ProjectDir: flags.projectDir,
 		State:      state,
 		SaveState:  func(st *deploy.State) error { return st.Save(statePath) },
-		OnStep:     func(r deploy.StepResult) { printDeployStep(stdout, s, r) },
+		OnStep:     func(r deploy.StepResult) { deployStepEvent(streams.out, r) },
 	})
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor deploy: %v", err))
-		return 1
+		return runtimeFailure(err)
 	}
-	printDeploySummary(stdout, s, result, time.Since(start))
+	printDeploySummary(streams.out, result, time.Since(start))
 	if result.Failed > 0 {
-		return 1
+		return reportedFailure(errors.New("deploy had failures"))
 	}
-	return 0
+	return nil
 }
 
-// printDeployPlan renders the terraform-style plan listing (the banner above
-// it is printed by deployMain; the +/~/-/· row colors are deliberate
-// terraform idiom and stay as-is).
+// termFor returns a Styler for a writer, used by the deploy rendering paths
+// that bypass the ui row helpers.
+func termFor(w io.Writer) *term.Styler { return term.For(w) }
+
+// printDeployPlan renders the plan as aligned event rows (Planned / Unchanged)
+// plus the terraform-style "Plan:" tally line.
 func printDeployPlan(w io.Writer, plan *deploy.Plan) {
-	s := term.For(w)
+	var events []uiEvent
 	for _, step := range plan.Steps {
 		key := step.Ref.Key()
 		switch step.Op {
 		case deploy.OpCreate:
-			fmt.Fprintf(w, "  %s %-7s %s\n", s.Green("+"), "create", key)
+			events = append(events, uiEvent{Status: eventPlanned, Target: key, Detail: "create"})
 		case deploy.OpUpdate:
-			fmt.Fprintf(w, "  %s %-7s %s\n", s.Yellow("~"), "update", key)
+			events = append(events, uiEvent{Status: eventPlanned, Target: key, Detail: "update"})
 		case deploy.OpDelete:
-			fmt.Fprintf(w, "  %s %-7s %s\n", s.Red("-"), "delete", key)
+			events = append(events, uiEvent{Status: eventPlanned, Target: key, Detail: "delete"})
 		case deploy.OpBlockedDelete:
-			fmt.Fprintf(w, "  %s %-7s %s %s\n", s.Red("-"), "delete", key,
-				s.Muted("(blocked: pass --allow-deletes)"))
+			events = append(events, uiEvent{Status: eventPlanned, Target: key, Detail: "delete (blocked: pass --allow-deletes)"})
 		case deploy.OpNoop:
-			fmt.Fprintf(w, "  %s %-7s %s\n", s.Muted("·"), "no-op", s.Muted(key))
+			events = append(events, uiEvent{Status: eventUnchanged, Target: key, Detail: "no-op"})
 		}
 	}
+	newUI(w).events(events)
 	parts := []string{
 		fmt.Sprintf("%d to create", plan.Creates),
 		fmt.Sprintf("%d to update", plan.Updates),
@@ -227,51 +210,47 @@ func printDeployPlan(w io.Writer, plan *deploy.Plan) {
 	if plan.BlockedDeletes > 0 {
 		line += fmt.Sprintf(", %d delete(s) blocked", plan.BlockedDeletes)
 	}
+	s := termFor(w)
 	fmt.Fprintf(w, "\n  %s\n\n", s.Bold(line))
 }
 
-// printDeployStep renders one apply progress line.
-func printDeployStep(w io.Writer, s *term.Styler, r deploy.StepResult) {
+// deployStepEvent maps one apply step result to an event row.
+func deployStepEvent(w io.Writer, r deploy.StepResult) {
 	key := r.Step.Ref.Key()
+	var event uiEvent
 	switch r.Status {
 	case deploy.StatusApplied:
-		verb := map[deploy.Op]string{
-			deploy.OpCreate: "created",
-			deploy.OpUpdate: "updated",
-			deploy.OpDelete: "deleted",
-		}[r.Step.Op]
-		fmt.Fprintf(w, "  %s  %s %s\n", s.SuccessBold(s.Glyphs().Check), key, s.Muted(verb))
+		switch r.Step.Op {
+		case deploy.OpCreate:
+			event = uiEvent{Status: eventCreated, Target: key}
+		case deploy.OpUpdate:
+			event = uiEvent{Status: eventUpdated, Target: key}
+		case deploy.OpDelete:
+			event = uiEvent{Status: eventRemoved, Target: key}
+		default:
+			event = uiEvent{Status: eventUpdated, Target: key}
+		}
 	case deploy.StatusUnchanged:
-		fmt.Fprintf(w, "  %s  %s\n", s.Muted("·"), s.Muted(key+" unchanged"))
+		event = uiEvent{Status: eventUnchanged, Target: key}
 	case deploy.StatusFailed:
-		fmt.Fprintf(w, "  %s  %s %s\n", s.ErrorBold(s.Glyphs().Cross), key, s.Error(fmt.Sprintf("failed: %v", r.Err)))
+		event = uiEvent{Status: eventFailed, Target: key, Detail: fmt.Sprintf("failed: %v", r.Err)}
 	case deploy.StatusSkipped:
-		fmt.Fprintf(w, "  %s  %s %s\n", s.WarnBold(s.Glyphs().Warn), key, s.Muted(fmt.Sprintf("skipped (%v)", r.Err)))
+		event = uiEvent{Status: eventSkipped, Target: key, Detail: fmt.Sprintf("skipped (%v)", r.Err)}
+	default:
+		event = uiEvent{Status: eventUnchanged, Target: key}
 	}
+	newUI(w).events([]uiEvent{event})
 }
 
-// printDeploySummary renders the closing tally in the house ok/x shape.
-func printDeploySummary(w io.Writer, s *term.Styler, r *deploy.ApplyResult, elapsed time.Duration) {
+// printDeploySummary renders the closing tally as the final event row.
+func printDeploySummary(w io.Writer, r *deploy.ApplyResult, elapsed time.Duration) {
 	line := fmt.Sprintf("Applied: %d created, %d updated, %d deleted, %d unchanged",
 		r.Created, r.Updated, r.Deleted, r.Unchanged)
-	suffix := s.Muted(fmt.Sprintf("in %d ms", elapsed.Milliseconds()))
+	status := eventFinished
 	if r.Failed > 0 || r.Skipped > 0 {
 		line += fmt.Sprintf(", %d failed, %d skipped", r.Failed, r.Skipped)
-		fmt.Fprintf(w, "\n  %s  %s %s\n\n", s.ErrorBold(s.Glyphs().Cross), s.Bold(line), suffix)
-		return
+		status = eventFailed
 	}
-	fmt.Fprintf(w, "\n  %s  %s %s\n\n", s.SuccessBold(s.Glyphs().Check), s.Bold(line), suffix)
-}
-
-func deployUsage(w io.Writer) {
-	fmt.Fprintln(w, "Usage: sloptor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]")
+	newUI(w).events([]uiEvent{{Status: status, Target: line, Elapsed: elapsed}})
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "  plan             show what apply would do (no network, no API key needed)")
-	fmt.Fprintln(w, "  apply            execute the plan against Open Cloud (needs ROBLOX_API_KEY)")
-	fmt.Fprintln(w, "  path             project directory containing rotor.toml (default \".\")")
-	fmt.Fprintln(w, "  -e, --env <env>  deploy environment from rotor.toml (required)")
-	fmt.Fprintln(w, "  --yes            skip the type-the-environment-name confirmation prompt")
-	fmt.Fprintln(w, "  --allow-deletes  permit removing resources that left the config")
-	fmt.Fprintln(w)
-	fmt.Fprintln(w, "State lives in .rotor/deploy/<env>.json and updates after every applied resource.")
 }

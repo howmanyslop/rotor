@@ -40,7 +40,7 @@ export default defineConfig({
 func runMigrate(t *testing.T, args []string) (code int, stdout, stderr string) {
 	t.Helper()
 	var out, errBuf bytes.Buffer
-	code = migrateMain(args, &out, &errBuf)
+	code = execute(append([]string{"migrate"}, args...), cliStreams{in: strings.NewReader(""), out: &out, err: &errBuf})
 	return code, out.String(), errBuf.String()
 }
 

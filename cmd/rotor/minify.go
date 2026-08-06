@@ -1,109 +1,98 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
+
+	"github.com/spf13/cobra"
 
 	"rotor/internal/diagframe"
 	"rotor/internal/luau/cst"
 	"rotor/internal/term"
 )
 
-// cmdMinify minifies a single Luau file: it strips comments (except leading `--!`
-// directives) and superfluous whitespace, preserving program semantics. Output goes
-// to --output, or to stdout when no output path is given.
+// newMinifyCommand minifies a single Luau file: it strips comments (except
+// leading `--!` directives) and superfluous whitespace, preserving program
+// semantics. Output goes to --output, or to stdout when no output path is
+// given.
 //
 // Output discipline: when the artifact goes to stdout (no -o), NO chrome is
 // written to stdout — errors go to stderr and the pipe stays clean. With -o,
-// the rotor banner + summary are printed to stdout like build/check.
-func cmdMinify(args []string) int {
-	input := ""
-	output := ""
+// the rotor banner + event rows are printed to stdout like build/check.
+func newMinifyCommand(streams cliStreams) *cobra.Command {
+	var output string
 	indexToField := true // rotor DX: collapse t["foo"] -> t.foo (opt out with --no-index-field)
-	for i := 0; i < len(args); i++ {
-		a := args[i]
-		switch {
-		case a == "-h" || a == "--help":
-			usage(os.Stdout)
-			return 0
-		case a == "-o" || a == "--output":
-			if i+1 >= len(args) {
-				fmt.Fprintf(os.Stderr, "sloptor minify: %s requires a path\n", a)
-				return 1
-			}
-			i++
-			output = args[i]
-		case strings.HasPrefix(a, "--output="):
-			output = strings.TrimPrefix(a, "--output=")
-		case strings.HasPrefix(a, "-o="):
-			output = strings.TrimPrefix(a, "-o=")
-		case a == "--no-index-field":
-			indexToField = false
-		case strings.HasPrefix(a, "-"):
-			fmt.Fprintf(os.Stderr, "sloptor minify: unknown flag %q\n\n", a)
-			usage(os.Stderr)
-			return 1
-		default:
-			if input != "" {
-				fmt.Fprintf(os.Stderr, "sloptor minify: unexpected extra argument %q\n\n", a)
-				usage(os.Stderr)
-				return 1
-			}
-			input = a
-		}
+	cmd := &cobra.Command{
+		Use:                   "minify <file> [-o out]",
+		Short:                 "minify a Luau file (keeps --! directives)",
+		Args:                  cobra.ExactArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			return runMinifyCommand(streams, argv[0], output, indexToField)
+		},
 	}
-	if input == "" {
-		fmt.Fprintln(os.Stderr, "sloptor minify: an input .luau/.lua file is required")
-		usage(os.Stderr)
-		return 1
-	}
+	cmd.Flags().SortFlags = false
+	addStringFlag(cmd, &output, "output", "o", "", "<file>",
+		"write the minified output to this file instead of stdout")
+	addBoolFlag(cmd, &indexToField, "index-field", "", true,
+		"collapse t[\"x\"] into t.x (--no-index-field disables)")
+	return cmd
+}
 
-	errUI := newUI(os.Stderr)
+func runMinifyCommand(streams cliStreams, input, output string, indexToField bool) error {
 	if output != "" {
-		newUI(os.Stdout).banner("minify  " + filepath.Base(input))
+		newUI(streams.out).banner("minify  " + filepath.Base(input))
 	}
 
 	start := time.Now()
 	src, err := os.ReadFile(input)
 	if err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor minify: cannot read %q: %v", input, err))
-		return 1
+		return runtimeFailure(fmt.Errorf("cannot read %q: %w", input, err))
 	}
 
 	minified, diags := cst.MinifyWith(string(src), cst.MinifyOptions{ConvertIndexToField: indexToField})
 	if len(diags) != 0 {
-		errUI.failLine(fmt.Sprintf("sloptor minify: %s has %s", input, plural(len(diags), "syntax error")))
+		u := newUI(streams.err)
+		u.events([]uiEvent{{
+			Status: eventFailed,
+			Target: input,
+			Detail: plural(len(diags), "syntax error"),
+		}})
 		spots := make([]diagframe.Spot, len(diags))
 		for i, d := range diags {
 			spots[i] = diagframe.Spot{Offset: d.Pos.Offset, Len: 1, Severity: diagframe.Error, Message: d.Message}
 		}
-		color := term.ColorEnabled(os.Stderr)
-		fmt.Fprint(os.Stderr, diagframe.RenderGroups(
+		color := term.ColorEnabled(streams.err)
+		fmt.Fprint(streams.err, diagframe.RenderGroups(
 			[]diagframe.Group{{Path: input, Source: string(src), Lang: diagframe.Luau, Spots: spots}},
 			diagframe.Options{Color: color, Link: color},
 			0,
 		))
-		return 1
+		return reportedFailure(errors.New("minify failed"))
 	}
 
 	if output == "" {
-		_, _ = os.Stdout.WriteString(minified)
-		return 0
+		_, _ = io.WriteString(streams.out, minified)
+		return nil
 	}
 	if err := os.WriteFile(output, []byte(minified), 0o644); err != nil {
-		errUI.failLine(fmt.Sprintf("sloptor minify: cannot write %q: %v", output, err))
-		return 1
+		return runtimeFailure(fmt.Errorf("cannot write %q: %w", output, err))
 	}
 
-	out := newUI(os.Stdout)
-	out.okLine("minified "+filepath.Base(input), fmt.Sprintf("in %d ms", time.Since(start).Milliseconds()))
-	out.noteLine(fmt.Sprintf("%s  %s %s %s (%s)", output,
-		formatBytes(len(src)), out.s.Glyphs().Arrow, formatBytes(len(minified)), shrinkPercent(len(src), len(minified))))
-	fmt.Println()
-	return 0
+	newUI(streams.out).events([]uiEvent{
+		{
+			Status: eventWrote,
+			Target: output,
+			Detail: fmt.Sprintf("%s → %s (%s)", formatBytes(len(src)), formatBytes(len(minified)), shrinkPercent(len(src), len(minified))),
+		},
+		{Status: eventFinished, Elapsed: time.Since(start)},
+	})
+	fmt.Fprintln(streams.out)
+	return nil
 }
 
 // shrinkPercent renders the size delta of a minify/bundle pass ("43% smaller").

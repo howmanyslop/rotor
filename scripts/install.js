@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Downloads the prebuilt rotor binary for the current platform from GitHub
+// Downloads the prebuilt sloptor binary for the current platform from GitHub
 // Releases. Runs as the package's postinstall hook; also required as a module
 // by bin/rotor.js for a first-run download when the postinstall was skipped
 // (e.g. bun without trustedDependencies).
@@ -19,7 +19,7 @@ const pkg = require(path.join(__dirname, "..", "package.json"));
 const PLATFORM_MAP = { win32: "windows", linux: "linux", darwin: "darwin" };
 const ARCH_MAP = { x64: "amd64", arm64: "arm64" };
 
-// Anything smaller than this is not a real rotor binary (real ones are >10MB).
+// Anything smaller than this is not a real sloptor binary (real ones are >10MB).
 const MIN_BINARY_SIZE = 1024 * 1024;
 
 function targetInfo() {
@@ -27,7 +27,7 @@ function targetInfo() {
   const arch = ARCH_MAP[process.arch];
   if (!os || !arch) {
     throw new Error(
-      `rotor: unsupported platform ${process.platform}-${process.arch} ` +
+      `sloptor: unsupported platform ${process.platform}-${process.arch} ` +
         `(supported: windows/linux/darwin on amd64/arm64). ` +
         `Build from source instead: go build ./cmd/rotor`
     );
@@ -38,7 +38,7 @@ function targetInfo() {
 // Where the platform binary lives inside the installed package.
 function binaryPath() {
   const { os, arch, ext } = targetInfo();
-  return path.join(__dirname, "..", "bin", `rotor-${os}-${arch}${ext}`);
+  return path.join(__dirname, "..", "bin", `sloptor--`);
 }
 
 function assetUrl() {
@@ -47,7 +47,7 @@ function assetUrl() {
     process.env.ROTOR_INSTALL_BASE_URL ||
     `https://github.com/howmanysmall/rotor/releases/download/v${pkg.version}`
   ).replace(/\/+$/, "");
-  return `${base}/rotor-v${pkg.version}-${os}-${arch}-bin${ext}`;
+  return `${base}/sloptor-v-${os}-${arch}-bin${ext}`;
 }
 
 async function install({ force = false, quiet = false } = {}) {
@@ -62,20 +62,20 @@ async function install({ force = false, quiet = false } = {}) {
   }
 
   const url = assetUrl();
-  if (!quiet) console.error(`rotor: downloading ${url}`);
+  if (!quiet) console.error(`sloptor: downloading ${url}`);
 
   let res;
   try {
     res = await fetch(url, { redirect: "follow" });
   } catch (err) {
     throw new Error(
-      `rotor: download failed for ${url}\n  ${err && err.message ? err.message : err}`
+      `sloptor: download failed for ${url}\n  ${err && err.message ? err.message : err}`
     );
   }
 
   if (res.status === 404) {
     throw new Error(
-      `rotor: binary not found (HTTP 404):\n  ${url}\n` +
+      `sloptor: binary not found (HTTP 404):\n  ${url}\n` +
         `The v${pkg.version} release may not be published yet, or the asset for ` +
         `this platform is missing.\n` +
         `Grab a binary from https://github.com/howmanysmall/rotor/releases or build ` +
@@ -83,7 +83,7 @@ async function install({ force = false, quiet = false } = {}) {
     );
   }
   if (!res.ok) {
-    throw new Error(`rotor: download failed (HTTP ${res.status}) for ${url}`);
+    throw new Error(`sloptor: download failed (HTTP ${res.status}) for ${url}`);
   }
 
   const buf = Buffer.from(await res.arrayBuffer());
@@ -97,7 +97,7 @@ async function install({ force = false, quiet = false } = {}) {
 
   if (!quiet) {
     console.error(
-      `rotor: installed ${path.basename(dest)} (${(buf.length / 1048576).toFixed(1)} MB)`
+      `sloptor: installed ${path.basename(dest)} (${(buf.length / 1048576).toFixed(1)} MB)`
     );
   }
   return dest;

@@ -1,57 +1,77 @@
 package main
 
 import (
-	"fmt"
+	"errors"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 
+	"github.com/spf13/cobra"
+
 	"rotor/internal/logservice"
 )
 
-// cmdDev runs the developer inner loop: it watches the project and incrementally
-// compiles to Luau (like `rotor build -w`) while supervising a `rojo serve` child so
-// Roblox Studio live-syncs the fresh output. One Ctrl-C tears down both. rotor does
-// not speak the Rojo protocol itself — it launches the installed `rojo` CLI. Use
-// --no-serve to watch and build without serving.
-func cmdDev(args []string) int {
-	noServe := false
-	rest := make([]string, 0, len(args))
-	for _, a := range args {
-		if a == "--no-serve" {
-			noServe = true
-			continue
-		}
-		rest = append(rest, a)
+// newDevCommand is the developer inner loop: it watches the project and
+// incrementally compiles to Luau (like `sloptor build -w`) while supervising a
+// `rojo serve` child so Roblox Studio live-syncs the fresh output. One Ctrl-C
+// tears down both. rotor does not speak the Rojo protocol itself — it
+// launches the installed `rojo` CLI. Use --no-serve to watch and build
+// without serving. The build option surface is registered as-is (dev forwards
+// the flags it accepts); watch mode is forced after parsing.
+func newDevCommand(streams cliStreams) *cobra.Command {
+	flags := &buildFlags{maxErrors: 50, clear: true}
+	serve := true
+	cmd := &cobra.Command{
+		Use:                   "dev [path] [--no-serve]",
+		Short:                 "watch + incrementally compile, serve to Studio via `rojo serve`",
+		Args:                  cobra.MaximumNArgs(1),
+		DisableFlagsInUseLine: true,
+		RunE: func(cmd *cobra.Command, argv []string) error {
+			return runDevCommand(streams, cmd, flags, serve, argv)
+		},
+	}
+	registerBuildFlags(cmd, flags)
+	cmd.Flags().SortFlags = false
+	addBoolFlag(cmd, &serve, "serve", "", true,
+		"serve to Studio via `rojo serve` (--no-serve disables)")
+	return cmd
+}
+
+// runDevCommand forces watch mode, launches rojo serve unless disabled, and
+// blocks until Ctrl-C or the watch loop exits. The build-side implication
+// checks run as they did for `sloptor dev` (which always parses the build
+// surface); the finite-diagnostics watch conflicts do not apply because dev
+// never started profiles.
+func runDevCommand(streams cliStreams, cmd *cobra.Command, flags *buildFlags, serve bool, argv []string) error {
+	ba := buildArgs{project: ".", maxErrors: 50, clearScreen: true}
+	if err := collectBuildArgs(cmd.Flags(), argv, flags, &ba); err != nil {
+		return err
+	}
+	if ba.builders != nil && !ba.build {
+		return usageFailure("--builders requires --build")
+	}
+	if ba.opts.usePolling != nil && ba.opts.watch == nil {
+		return usageFailure("Implications failed:\n usePolling -> watch")
+	}
+	if ba.emitDeclarationOnly && !ba.build {
+		return usageFailure("Implications failed:\n emitDeclarationOnly -> build")
 	}
 
-	parsed, err := parseBuildArgs(rest)
+	tsConfigPath, err := findTsConfigPath(ba.project)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor dev: %v\n\n", err)
-		usage(os.Stderr)
-		return 1
+		return runtimeFailure(err)
 	}
-	if parsed.help {
-		usage(os.Stdout)
-		return 0
-	}
-
-	tsConfigPath, err := findTsConfigPath(parsed.project)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "sloptor dev: %v\n", err)
-		return 1
-	}
-	opts := mergeProjectOptions(defaultProjectOptions, readRbxtsOptions(tsConfigPath), &parsed.opts)
+	opts := mergeProjectOptions(defaultProjectOptions, readRbxtsOptions(tsConfigPath), &ba.opts)
 	opts.watch = true
 	logservice.Verbose = opts.verbose
 	dir := filepath.Dir(tsConfigPath)
 
-	out := newUI(os.Stdout)
+	out := newUI(streams.out)
 	out.banner("dev  " + filepath.Base(dir))
 
 	var rojoCmd *exec.Cmd
-	if !noServe {
+	if serve {
 		rojoCmd = startRojoServe(dir, opts.rojo, out)
 	}
 	defer stopRojo(rojoCmd)
@@ -62,14 +82,17 @@ func cmdDev(args []string) int {
 
 	done := make(chan int, 1)
 	go func() {
-		done <- runBuildWatch(dir, tsConfigPath, opts, watchOptions{maxErrors: 50, clearScreen: true})
+		done <- runBuildWatch(dir, tsConfigPath, opts, watchOptions{maxErrors: ba.maxErrors, clearScreen: ba.clearScreen})
 	}()
 
 	select {
 	case <-sigc:
-		return 0
+		return nil
 	case code := <-done:
-		return code
+		if code != 0 {
+			return reportedFailure(errors.New("dev loop failed"))
+		}
+		return nil
 	}
 }
 

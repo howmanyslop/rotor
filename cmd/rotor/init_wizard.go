@@ -1,6 +1,6 @@
 package main
 
-// The interactive `rotor init` wizard: line-based prompts (no raw mode, no
+// The interactive `sloptor init` wizard: line-based prompts (no raw mode, no
 // cursor addressing) that assemble an initOptions consumed by the same
 // scaffold() as the non-interactive path. The wizard runs only when stdin and
 // stdout are both terminals and neither --template nor --yes was passed, so
