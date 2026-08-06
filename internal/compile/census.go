@@ -88,6 +88,10 @@ type censusCollector struct {
 	files          []FileDiagnostics
 	diagnostics    []DiagnosticInfo
 	overlayMatches int
+	// traces is the pass's transformer traces, set once compileProjectSourceFiles
+	// knows them; record() needs them to put a file's positions back into the
+	// coordinates of the file on disk.
+	traces diagnosticTraces
 }
 
 func (c *censusCollector) addProjectDiagnostics(diags []DiagnosticInfo) {
@@ -104,11 +108,12 @@ func (c *censusCollector) record(sourceFile *ast.SourceFile, precheck prechecked
 
 	if len(precheck.tsDiags) > 0 {
 		entry.Outcome = FileOutcomeTypeError
-		entry.Diagnostics = append(entry.Diagnostics, tsDiagnosticInfos(precheck.tsDiags)...)
+		entry.Diagnostics = append(entry.Diagnostics, tsDiagnosticInfos(precheck.tsDiags, c.traces)...)
 	}
 	if len(precheck.commentDiags) > 0 {
 		entry.Outcome = FileOutcomeTransformerDiagnostic
-		entry.Diagnostics = append(entry.Diagnostics, commentDirectiveInfos(sourceFile, precheck.commentDiags)...)
+		entry.Diagnostics = append(entry.Diagnostics,
+			c.traces.remapAll(commentDirectiveInfos(sourceFile, precheck.commentDiags), sourceFile.Text())...)
 	}
 	if len(result.diags) > 0 {
 		entry.Outcome = FileOutcomeTransformerDiagnostic

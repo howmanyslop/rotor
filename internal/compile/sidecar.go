@@ -72,19 +72,19 @@ type preparedTransformerProgram struct {
 	program                  *compiler.Program
 	sourceFiles              []*ast.SourceFile
 	declarations             []sidecarOutputFile
-	sourceTraces             map[string]*sourceTraceMap
+	sourceTraces             diagnosticTraces
 	sidecarRoundTripDuration time.Duration
 	overlayProgramDuration   time.Duration
 	sidecarRoundTripRecorded bool
 	overlayProgramRecorded   bool
 }
 
-func prepareProjectProgramForCompile(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*compiler.Program, []*ast.SourceFile, []string, error) {
+func prepareProjectProgramForCompile(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*compiler.Program, []*ast.SourceFile, diagnosticTraces, []string, error) {
 	prepared, diags, err := prepareTransformerProgram(dir, program, sourceFiles)
 	if err != nil {
-		return nil, nil, diags, err
+		return nil, nil, nil, diags, err
 	}
-	return prepared.program, prepared.sourceFiles, nil, nil
+	return prepared.program, prepared.sourceFiles, prepared.sourceTraces, nil, nil
 }
 
 func prepareProjectProgramForBuild(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*preparedTransformerProgram, []string, error) {
@@ -164,7 +164,7 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	if len(errorDiags) > 0 {
 		return nil, errorDiags, errors.New("compile: transformer sidecar diagnostics")
 	}
-	sourceTraces := make(map[string]*sourceTraceMap)
+	sourceTraces := make(diagnosticTraces)
 	for _, file := range response.Transformed {
 		if file.TraceMap == "" {
 			continue

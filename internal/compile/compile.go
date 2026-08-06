@@ -86,7 +86,7 @@ func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOpti
 	if sourceFile == nil {
 		return "", nil, fmt.Errorf("compile: source file not in program: %s", filePath)
 	}
-	program, preparedFiles, diags, err := prepareProjectProgramForCompile(dir, program, []*ast.SourceFile{sourceFile})
+	program, preparedFiles, traces, diags, err := prepareProjectProgramForCompile(dir, program, []*ast.SourceFile{sourceFile})
 	if err != nil {
 		return "", stringDiagnostics(diags), err
 	}
@@ -96,6 +96,7 @@ func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOpti
 	if err != nil {
 		return "", stringDiagnostics(diags), err
 	}
+	pctx.sourceTraces = traces
 	ctx := context.Background()
 
 	// Program-level option diagnostics (e.g. removed-option checks) plus this
@@ -105,7 +106,7 @@ func CompileFileDetailedWithOptions(projectDir, relPath string, opts ProjectOpti
 	tsDiags := program.GetProgramDiagnostics()
 	tsDiags = append(tsDiags, preEmitDiagnostics(ctx, program, sourceFile)...)
 	if len(tsDiags) > 0 {
-		return "", tsDiagnosticInfos(tsDiags), errors.New("compile: TypeScript diagnostics")
+		return "", tsDiagnosticInfos(tsDiags, pctx.sourceTraces), errors.New("compile: TypeScript diagnostics")
 	}
 	if !opts.AllowCommentDirectives {
 		if diags := commentDirectiveDiagnostics(sourceFile); len(diags) > 0 {
@@ -262,10 +263,10 @@ func stringDiagnostics(diags []string) []DiagnosticInfo {
 	return out
 }
 
-func tsDiagnosticInfos(diags []*ast.Diagnostic) []DiagnosticInfo {
+func tsDiagnosticInfos(diags []*ast.Diagnostic, traces diagnosticTraces) []DiagnosticInfo {
 	out := make([]DiagnosticInfo, len(diags))
 	for i, d := range diags {
-		out[i] = infoFromTSDiag(d)
+		out[i] = infoFromTSDiag(d, traces)
 	}
 	return out
 }
@@ -289,13 +290,14 @@ func infoFromNodeDiag(d transformer.Diagnostic) DiagnosticInfo {
 	return info
 }
 
-func infoFromTSDiag(d *ast.Diagnostic) DiagnosticInfo {
+func infoFromTSDiag(d *ast.Diagnostic, traces diagnosticTraces) DiagnosticInfo {
 	info := DiagnosticInfo{Code: "TS" + strconv.FormatInt(int64(d.Code()), 10), Message: d.String()}
 	if f := d.File(); f != nil {
 		info.FileName = f.FileName()
 		info.Offset = d.Pos()
 		info.Len = d.Len()
 		info.Line, info.Col = lineColIn(f.Text(), d.Pos())
+		info = traces.remap(info, f.Text())
 	}
 	return info
 }

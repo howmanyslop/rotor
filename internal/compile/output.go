@@ -256,6 +256,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	if err != nil {
 		return nil, diags, err
 	}
+	pctx.sourceTraces = prepared.sourceTraces
 	stopNativeCompile := timings.startStage(nativeDiagnosticsTransformRenderStage)
 	outputs, sourceMaps, infos, err := compileProjectSourceFiles(dir, program, pctx, selectedFiles, opts)
 	stopNativeCompile()
