@@ -1,8 +1,6 @@
 package transformer
 
 import (
-	"slices"
-
 	"rotor/internal/luau"
 	"rotor/tsgo/ast"
 	"rotor/tsgo/checker"
@@ -12,14 +10,6 @@ func isSynchronousNonGeneratorFunctionExpression(node *ast.Node) bool {
 	return ast.IsFunctionExpression(node) &&
 		!ast.HasSyntacticModifier(node, ast.ModifierFlagsAsync) &&
 		node.AsFunctionExpression().AsteriskToken == nil
-}
-
-func isDirectCallArgument(node *ast.Node) bool {
-	parent := node.Parent
-	if parent == nil || !ast.IsCallExpression(parent) {
-		return false
-	}
-	return slices.Contains(parent.AsCallExpression().Arguments.Nodes, node)
 }
 
 func transformNamedFunctionExpressionBody(
