@@ -143,9 +143,6 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 	case ast.KindForInStatement:
 		s.Diags.Add(DiagNoForInStatement(node))
 		return luau.NewList[luau.Statement]()
-	case ast.KindLabeledStatement:
-		s.Diags.Add(DiagNoLabeledStatement(node))
-		return luau.NewList[luau.Statement]()
 	case ast.KindDebuggerStatement:
 		s.Diags.Add(DiagNoDebuggerStatement(node))
 		return luau.NewList[luau.Statement]()
@@ -179,6 +176,8 @@ func transformStatementDispatch(s *State, node *ast.Node) *luau.List[luau.Statem
 		return transformImportEqualsDeclaration(s, node)
 	case ast.KindIfStatement:
 		return transformIfStatement(s, node)
+	case ast.KindLabeledStatement:
+		return transformLabeledStatement(s, node)
 	case ast.KindModuleDeclaration:
 		return transformModuleDeclaration(s, node)
 	case ast.KindReturnStatement:

@@ -146,6 +146,12 @@ func transformCaseClause(
 func transformSwitchStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
 	switchStatement := node.AsSwitchStatement()
 
+	// The `repeat ... until true` below IS a break boundary, so labels must
+	// count it — otherwise `outer: for { switch { case 1: break outer } }`
+	// would emit a bare `break` that only leaves the switch (rotor extension).
+	s.EnterBreakScope()
+	defer s.ExitBreakScope()
+
 	expression := s.PushToVarIfComplex(TransformExpression(s, switchStatement.Expression), "exp")
 	fallThroughFlagID := luau.TempID("fallthrough")
 
@@ -180,7 +186,9 @@ func transformSwitchStatement(s *State, node *ast.Node) *luau.List[luau.Statemen
 		statements.Unshift(luau.NewVariableDeclaration(fallThroughFlagID, luau.Bool(false)))
 	}
 
-	return luau.NewList[luau.Statement](
+	result := luau.NewList[luau.Statement](
 		luau.NewRepeat(luau.Bool(true), statements),
 	)
+	result.PushList(s.LabelChecks())
+	return result
 }

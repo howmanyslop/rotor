@@ -19,6 +19,8 @@ import (
 // `if not cond then break end`, and the while condition becomes `true`.
 func transformWhileStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
 	statement := node.AsWhileStatement()
+	s.EnterBreakScope()
+	defer s.ExitBreakScope()
 	whileStatements := luau.NewList[luau.Statement]()
 
 	conditionExp, conditionPrereqs := s.Capture(func() luau.Expression {
@@ -38,7 +40,14 @@ func transformWhileStatement(s *State, node *ast.Node) *luau.List[luau.Statement
 
 	whileStatements.PushList(TransformStatementList(s, statement.Statement, getStatements(statement.Statement), nil))
 
-	return luau.NewList[luau.Statement](luau.NewWhile(conditionExp, whileStatements))
+	// Label bookkeeping (rotor extension): the resets go above the hoisted
+	// condition prereqs so a labeled `continue` reaching this loop starts the
+	// iteration with a cleared flag.
+	whileStatements.UnshiftList(s.LabelResets())
+
+	result := luau.NewList[luau.Statement](luau.NewWhile(conditionExp, whileStatements))
+	result.PushList(s.LabelChecks())
+	return result
 }
 
 // ---------------------------------------------------------------------------
@@ -54,6 +63,8 @@ func transformWhileStatement(s *State, node *ast.Node) *luau.List[luau.Statement
 func transformDoStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
 	doStatement := node.AsDoStatement()
 	expression := doStatement.Expression
+	s.EnterBreakScope()
+	defer s.ExitBreakScope()
 	statements := TransformStatementList(s, doStatement.Statement, getStatements(doStatement.Statement), nil)
 
 	conditionIsInvertedInLuau := true
@@ -66,15 +77,28 @@ func transformDoStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
 		return CreateTruthinessChecks(s, TransformExpression(s, expression), expression, s.GetType(expression))
 	})
 
+	conditionNeedsPrereqs := conditionPrereqs.IsNonEmpty()
+
 	repeatStatements := luau.NewList[luau.Statement]()
 	repeatStatements.Push(luau.NewDo(statements))
 	repeatStatements.PushList(conditionPrereqs)
+	// Above the inner `do ... end`, so a labeled `continue` reaching this loop
+	// clears the flag before the body runs again. A non-empty reset list also
+	// means an inner boundary emitted a `continue` inside this repeat, which
+	// Luau rejects when the condition declared locals after it.
+	resets := s.LabelResets()
+	if resets.IsNonEmpty() && conditionNeedsPrereqs {
+		s.Diags.Add(DiagRotorLabeledContinueInDoWhile(node))
+	}
+	repeatStatements.UnshiftList(resets)
 
 	if conditionIsInvertedInLuau {
 		condition = luau.NewUnary("not", condition)
 	}
 
-	return luau.NewList[luau.Statement](luau.NewRepeat(condition, repeatStatements))
+	result := luau.NewList[luau.Statement](luau.NewRepeat(condition, repeatStatements))
+	result.PushList(s.LabelChecks())
+	return result
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +416,10 @@ func transformForStatementFallback(s *State, node *ast.Node) *luau.List[luau.Sta
 		whileStatements.PushList(finalizerStatements)
 	}
 
+	// Label resets go at the very top, above the incrementor guard: a labeled
+	// `continue` reaching this loop lands there like any other `continue`.
+	whileStatements.UnshiftList(s.LabelResets())
+
 	result.Push(luau.NewWhile(conditionExp, whileStatements))
 
 	// Assembly (L286-296): multiple statements wrap in `do ... end` to scope
@@ -638,6 +666,7 @@ func transformForStatementOptimized(s *State, node *ast.Node) *luau.List[luau.St
 
 	step := luau.Num(stepValue)
 	statements := TransformStatementList(s, statement, getStatements(statement), nil)
+	statements.UnshiftList(s.LabelResets())
 
 	if operatorKind == ast.KindLessThanToken {
 		end = offsetExpr(end, -1)
@@ -653,11 +682,22 @@ func transformForStatementOptimized(s *State, node *ast.Node) *luau.List[luau.St
 // transformForStatement ports transformForStatement (L491-499): the
 // optimized pass is gated on `projectOptions.optimizedLoops` (default true),
 // plumbed from `--optimizedLoops` through State.OptimizedLoops.
+//
+// The break scope wraps BOTH paths so the label bookkeeping stays balanced
+// when the optimized pass bails out (it bails before transforming anything,
+// so no label state leaks); the checks are appended to whichever list wins,
+// which for the fallback is the outer `do ... end` wrap.
 func transformForStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	s.EnterBreakScope()
+	defer s.ExitBreakScope()
+
+	var result *luau.List[luau.Statement]
 	if s.OptimizedLoops {
-		if optimized := transformForStatementOptimized(s, node); optimized != nil {
-			return optimized
-		}
+		result = transformForStatementOptimized(s, node)
 	}
-	return transformForStatementFallback(s, node)
+	if result == nil {
+		result = transformForStatementFallback(s, node)
+	}
+	result.PushList(s.LabelChecks())
+	return result
 }

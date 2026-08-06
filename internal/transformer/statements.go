@@ -461,16 +461,36 @@ func transformReturnStatement(s *State, node *ast.Node) *luau.List[luau.Statemen
 // transformContinueStatement.ts
 // ---------------------------------------------------------------------------
 
-// transformBreakStatement ports transformBreakStatement.ts (L8-25). Labeled
-// break is banned; a break blocked by a try statement (nearest-of try vs
-// loop-or-switch) reroutes as `return TS.TRY_BREAK` and marks the enclosing
-// try's TryUses.
+// transformBreakStatement ports transformBreakStatement.ts (L8-25). A break
+// blocked by a try statement (nearest-of try vs loop-or-switch) reroutes as
+// `return TS.TRY_BREAK` and marks the enclosing try's TryUses.
+//
+// ROTOR EXTENSION: `break <label>` targeting the innermost break boundary is a
+// plain `break`; targeting anything further out sets the label's flag first,
+// and the checks emitted after each enclosing boundary keep unwinding
+// (labeledstatement.go, State.LabelChecks). A label crossing a try is rejected
+// — the TS.TRY_BREAK sentinel protocol carries no label.
 func transformBreakStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	blockedByTry := isBreakBlockedByTryStatement(node)
+
 	if label := node.AsBreakStatement().Label; label != nil {
-		s.Diags.Add(DiagNoLabeledStatement(label))
-		return luau.NewList[luau.Statement]()
+		if blockedByTry {
+			s.Diags.Add(DiagNoLabeledStatementsWithinTryCatch(label))
+			return luau.NewList[luau.Statement]()
+		}
+		entry := s.FindLabel(label.Text())
+		if entry == nil {
+			s.Diags.Add(DiagRotorUnknownLabel(label))
+			return luau.NewList[luau.Statement]()
+		}
+		if entry.Depth != s.BreakDepth() {
+			entry.EverBroken = true
+			s.Prereq(luau.NewAssignment(entry.ID, "=", luau.Str(labelBreak)))
+		}
+		return luau.NewList[luau.Statement](luau.NewBreak())
 	}
-	if isBreakBlockedByTryStatement(node) {
+
+	if blockedByTry {
 		s.MarkTryUsesBreak()
 		return luau.NewList[luau.Statement](luau.NewReturn(s.RuntimeLib(node, "TRY_BREAK")))
 	}
@@ -480,12 +500,33 @@ func transformBreakStatement(s *State, node *ast.Node) *luau.List[luau.Statement
 // transformContinueStatement ports transformContinueStatement.ts (L8-25):
 // identical shape — Luau has native `continue`; the try-blocked reroute emits
 // `return TS.TRY_CONTINUE`.
+//
+// ROTOR EXTENSION: `continue <label>` on the innermost boundary is a plain
+// `continue`; otherwise the flag is set and a plain `break` leaves the
+// innermost boundary, after which the check emitted inside the labeled loop
+// does the `continue`.
 func transformContinueStatement(s *State, node *ast.Node) *luau.List[luau.Statement] {
+	blockedByTry := isBreakBlockedByTryStatement(node)
+
 	if label := node.AsContinueStatement().Label; label != nil {
-		s.Diags.Add(DiagNoLabeledStatement(label))
-		return luau.NewList[luau.Statement]()
+		if blockedByTry {
+			s.Diags.Add(DiagNoLabeledStatementsWithinTryCatch(label))
+			return luau.NewList[luau.Statement]()
+		}
+		entry := s.FindLabel(label.Text())
+		if entry == nil {
+			s.Diags.Add(DiagRotorUnknownLabel(label))
+			return luau.NewList[luau.Statement]()
+		}
+		if entry.Depth == s.BreakDepth() && entry.IsLoop {
+			return luau.NewList[luau.Statement](luau.NewContinue())
+		}
+		entry.EverContinued = true
+		s.Prereq(luau.NewAssignment(entry.ID, "=", luau.Str(labelContinue)))
+		return luau.NewList[luau.Statement](luau.NewBreak())
 	}
-	if isBreakBlockedByTryStatement(node) {
+
+	if blockedByTry {
 		s.MarkTryUsesContinue()
 		return luau.NewList[luau.Statement](luau.NewReturn(s.RuntimeLib(node, "TRY_CONTINUE")))
 	}
