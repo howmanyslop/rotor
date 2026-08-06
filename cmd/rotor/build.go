@@ -20,7 +20,7 @@ import (
 	"rotor/tsgo/vfs/osvfs"
 )
 
-// buildArgs is the parsed `rotor build` argv: the project path (the only
+// buildArgs is the parsed `sloptor build` argv: the project path (the only
 // option with a default — "DO NOT PROVIDE DEFAULTS BELOW HERE",
 // CLI/commands/build.ts L62) plus a Partial<ProjectOptions> of exactly the
 // flags the user passed. It is assembled by newBuildCommand from Cobra's
@@ -47,8 +47,8 @@ type buildArgs struct {
 	minify              bool // rotor DX extension: minify emitted Luau before writing
 }
 
-// buildFlags is the parsed flag destination shared by `rotor build` and
-// `rotor dev`: every registered flag binds here, and collectBuildArgs turns
+// buildFlags is the parsed flag destination shared by `sloptor build` and
+// `sloptor dev`: every registered flag binds here, and collectBuildArgs turns
 // the Changed subset into a buildArgs (the yargs Object.assign semantics —
 // absent CLI booleans never clobber the tsconfig `rbxts` layer).
 type buildFlags struct {
@@ -150,7 +150,7 @@ func registerBuildFlags(cmd *cobra.Command, flags *buildFlags) {
 		"ring the terminal bell on a watch fail<->pass transition")
 	addBoolFlag(cmd, &flags.clear, "clear", "", true,
 		"clear the screen before each rebuild (--no-clear keeps scroll history)")
-	addBoolFlag(cmd, &flags.version, "version", "v", false, "print rotor's version")
+	addBoolFlag(cmd, &flags.version, "version", "v", false, "print sloptor's version")
 }
 
 // collectBuildArgs assembles a buildArgs from the parsed flag set: the
@@ -574,7 +574,7 @@ func projectCompileOptions(tsConfigPath string, opts projectOptions) compile.Pro
 
 // jsonDiagnostic is one entry in the --json diagnostics array. file/line/col
 // are populated from the structured DiagnosticInfo location when available;
-// `rotor check --json` also fills these from its own structured AST diagnostics.
+// `sloptor check --json` also fills these from its own structured AST diagnostics.
 type jsonDiagnostic struct {
 	File     string `json:"file"`
 	Line     int    `json:"line"`
@@ -583,8 +583,8 @@ type jsonDiagnostic struct {
 	Message  string `json:"message"`
 }
 
-// jsonResult is the single object printed by `rotor build --json` /
-// `rotor check --json`. The shape is stable for CI/editor integration.
+// jsonResult is the single object printed by `sloptor build --json` /
+// `sloptor check --json`. The shape is stable for CI/editor integration.
 type jsonResult struct {
 	Version     string           `json:"version"`
 	OK          bool             `json:"ok"`

@@ -123,7 +123,7 @@ func runDoctor(path string) ([]doctorCheck, string) {
 			status: doctorFail,
 			label:  "tsconfig.json",
 			detail: "not found",
-			hint:   "run from a roblox-ts project, or pass a path: rotor doctor <project>",
+			hint:   "run from a roblox-ts project, or pass a path: sloptor doctor <project>",
 		})
 		return checks, ""
 	}
@@ -243,14 +243,14 @@ func cloudChecks(dir string) []doctorCheck {
 			status: doctorWarn,
 			label:  config.ConfigFileName,
 			detail: "not found",
-			hint:   "run `rotor init` to add sloptor config (needed for rotor asset / rotor deploy)",
+			hint:   "run `sloptor init` to add sloptor config (needed for sloptor asset / sloptor deploy)",
 		})
 	case err != nil:
 		checks = append(checks, doctorCheck{
 			status: doctorFail,
 			label:  config.ConfigFileName,
 			detail: err.Error(),
-			hint:   "rotor asset / rotor deploy cannot run until the config loads",
+			hint:   "sloptor asset / sloptor deploy cannot run until the config loads",
 		})
 	default:
 		validateErrs := cfg.Validate()
@@ -262,7 +262,7 @@ func cloudChecks(dir string) []doctorCheck {
 				status: doctorFail,
 				label:  config.ConfigFileName,
 				detail: verr.Error(),
-				hint:   "rotor asset / rotor deploy cannot run until the config is valid",
+				hint:   "sloptor asset / sloptor deploy cannot run until the config is valid",
 			})
 		}
 		for _, warning := range cfg.Warnings {
@@ -280,13 +280,13 @@ func cloudChecks(dir string) []doctorCheck {
 			status: doctorWarn,
 			label:  "ROBLOX_API_KEY",
 			detail: "not set",
-			hint:   "set ROBLOX_API_KEY to use rotor asset / rotor deploy",
+			hint:   "set ROBLOX_API_KEY to use sloptor asset / sloptor deploy",
 		})
 	default:
 		checks = append(checks, doctorCheck{
 			status: doctorInfo,
 			label:  "ROBLOX_API_KEY",
-			detail: "not set (only needed for rotor asset / rotor deploy)",
+			detail: "not set (only needed for sloptor asset / sloptor deploy)",
 		})
 	}
 	return checks

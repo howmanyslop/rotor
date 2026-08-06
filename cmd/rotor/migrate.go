@@ -12,7 +12,7 @@ import (
 	"rotor/internal/config"
 )
 
-// newMigrateCommand is `rotor migrate [path] [--force]`: it converts a legacy
+// newMigrateCommand is `sloptor migrate [path] [--force]`: it converts a legacy
 // rotor.config.ts (or rotor.config.js) into rotor.toml.
 //
 // It loads the old config through the retained goja/esbuild path (the only
@@ -57,7 +57,7 @@ func runMigrateCommand(streams cliStreams, dir string, force bool) error {
 	}
 	if legacyPath == "" {
 		return runtimeFailure(fmt.Errorf(
-			"no rotor.config.ts (or rotor.config.js) found in %s\n    migrate converts an existing TypeScript config to rotor.toml;\n    there is nothing to migrate here. Use `rotor init` to start fresh.", dir))
+			"no rotor.config.ts (or rotor.config.js) found in %s\n    migrate converts an existing TypeScript config to rotor.toml;\n    there is nothing to migrate here. Use `sloptor init` to start fresh.", dir))
 	}
 
 	tomlPath := filepath.Join(dir, config.ConfigFileName)

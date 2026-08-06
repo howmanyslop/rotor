@@ -1,6 +1,6 @@
 package main
 
-// The interactive `rotor init` wizard: line-based prompts (no raw mode, no
+// The interactive `sloptor init` wizard: line-based prompts (no raw mode, no
 // cursor addressing) that assemble an initOptions consumed by the same
 // scaffold() as the non-interactive path. The wizard runs only when stdin and
 // stdout are both terminals and neither --template nor --yes was passed, so
@@ -23,7 +23,7 @@ import (
 func runInitInteractive(dir, name string, in io.Reader, out io.Writer) int {
 	opts, ok, err := runInitWizard(in, out, initOptions{dir: dir, name: name, template: "game"})
 	if err != nil {
-		newUI(os.Stderr).failLine(fmt.Sprintf("rotor init: %v", err))
+		newUI(os.Stderr).failLine(fmt.Sprintf("sloptor init: %v", err))
 		return 1
 	}
 	if !ok {

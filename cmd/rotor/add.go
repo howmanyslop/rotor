@@ -51,7 +51,7 @@ func runAddCommand(streams cliStreams, dev bool, pkgs []string) error {
 	pkgJSONPath := filepath.Join(dir, "package.json")
 	data, err := os.ReadFile(pkgJSONPath)
 	if err != nil {
-		return runtimeFailure(fmt.Errorf("no package.json in %s (run `rotor init` first)", absOrSelf(dir)))
+		return runtimeFailure(fmt.Errorf("no package.json in %s (run `sloptor init` first)", absOrSelf(dir)))
 	}
 
 	depKey := "dependencies"

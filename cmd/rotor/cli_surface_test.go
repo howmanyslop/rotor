@@ -26,7 +26,7 @@ func TestRootHelpRendersCargoStyleLayout(t *testing.T) {
 		t.Fatalf("--help exit = %d, stderr: %s", code, errOut)
 	}
 	for _, want := range []string{
-		"rotor — an all-in-one Roblox toolchain",
+		"sloptor — an all-in-one Roblox toolchain",
 		"Usage:",
 		"Options:",
 		"Compile & check", "Project & deps", "Cloud", "Other",
@@ -105,7 +105,7 @@ func TestInvalidCommandRendersCompactError(t *testing.T) {
 	if !strings.HasPrefix(errOut, "error: ") {
 		t.Errorf("stderr = %q, want a red error: prefix", errOut)
 	}
-	if !strings.Contains(errOut, "Run 'rotor --help' for usage.") {
+	if !strings.Contains(errOut, "Run 'sloptor --help' for usage.") {
 		t.Errorf("stderr = %q, want the dim usage hint", errOut)
 	}
 	if out != "" {
@@ -117,8 +117,8 @@ func TestInvalidCommandRendersCompactError(t *testing.T) {
 // a subcommand parse failure.
 func TestSubcommandUsageErrorNamesTheCommand(t *testing.T) {
 	_, _, errOut := runCLI(t, "build", "--bogus")
-	if !strings.Contains(errOut, "Run 'rotor build --help' for usage.") {
-		t.Errorf("stderr = %q, want the rotor build hint", errOut)
+	if !strings.Contains(errOut, "Run 'sloptor build --help' for usage.") {
+		t.Errorf("stderr = %q, want the sloptor build hint", errOut)
 	}
 }
 
@@ -139,7 +139,7 @@ func TestVersionSurfaces(t *testing.T) {
 	}
 }
 
-// TestBuildVersionFlag pins `rotor build -v` printing the bare version.
+// TestBuildVersionFlag pins `sloptor build -v` printing the bare version.
 func TestBuildVersionFlag(t *testing.T) {
 	old := version
 	version = "9.9.9-test"
@@ -154,7 +154,7 @@ func TestBuildVersionFlag(t *testing.T) {
 }
 
 // TestCompletionGeneratesNativeScripts pins the completion contract: each
-// shell's script names rotor, exposes the current subcommands, writes no
+// shell's script names sloptor, exposes the current subcommands, writes no
 // banner, and is pure script on stdout (no ANSI).
 func TestCompletionGeneratesNativeScripts(t *testing.T) {
 	for _, shell := range []string{"bash", "zsh", "fish", "powershell"} {
@@ -163,8 +163,8 @@ func TestCompletionGeneratesNativeScripts(t *testing.T) {
 			if code != 0 {
 				t.Fatalf("completion %s exit = %d, stderr: %s", shell, code, errOut)
 			}
-			if !strings.Contains(out, "rotor") {
-				t.Errorf("%s script does not name rotor", shell)
+			if !strings.Contains(out, "sloptor") {
+				t.Errorf("%s script does not name sloptor", shell)
 			}
 			// Cobra's scripts resolve commands at runtime through the
 			// __complete protocol rather than embedding a static list.
@@ -174,7 +174,7 @@ func TestCompletionGeneratesNativeScripts(t *testing.T) {
 			if strings.Contains(out, "\x1b[") {
 				t.Errorf("%s script contains ANSI escapes", shell)
 			}
-			if strings.HasPrefix(out, "\n  rotor v") {
+			if strings.HasPrefix(out, "\n  sloptor v") {
 				t.Errorf("%s script starts with a UI banner:\n%s", shell, out[:min(200, len(out))])
 			}
 			if errOut != "" {
@@ -202,7 +202,7 @@ func TestCompletionHelpShowsInstallExamples(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("completion --help exit = %d, stderr: %s", code, errOut)
 	}
-	for _, want := range []string{"Examples:", "rotor completion bash", "rotor completion zsh", "rotor completion fish", "rotor completion powershell"} {
+	for _, want := range []string{"Examples:", "sloptor completion bash", "sloptor completion zsh", "sloptor completion fish", "sloptor completion powershell"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("completion help missing %q:\n%s", want, out)
 		}

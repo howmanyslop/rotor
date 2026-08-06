@@ -17,7 +17,7 @@ import (
 	"rotor/internal/term"
 )
 
-// newDeployCommand is `rotor deploy <plan|apply> [path] -e <env> [--yes]
+// newDeployCommand is `sloptor deploy <plan|apply> [path] -e <env> [--yes]
 // [--allow-deletes]`: the mantle-style IaC front end over internal/deploy.
 // plan diffs the config's resource graph against .rotor/deploy/<env>.json
 // and prints planned event rows without touching the network; apply executes

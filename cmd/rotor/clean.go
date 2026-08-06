@@ -21,7 +21,7 @@ import (
 // when present). It never touches source: only the resolved output/include
 // directories and the named generated files are removed.
 //
-// Targets are resolved exactly the way `rotor build` resolves them: the
+// Targets are resolved exactly the way `sloptor build` resolves them: the
 // tsconfig is found with findTsConfigPath, the outDir read from that config
 // (default "out"), and the include dir from the merged ProjectOptions
 // (default "<project>/include"). With --dry-run nothing is deleted — every

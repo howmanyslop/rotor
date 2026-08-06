@@ -74,7 +74,7 @@ rotor deploy apply -e prod   # publish places, settings, badges — only what dr
 
 **Scaffolding** — `rotor init` runs an interactive wizard (template, Biome/oxlint, starter packages, asset/deploy config) or scripts cleanly with `--yes`/`--template`.
 
-**Shell completion** — `rotor completion bash|zsh|fish|powershell` writes a native completion script to stdout (e.g. `rotor completion fish > ~/.config/fish/completions/rotor.fish`); see `rotor completion --help` for the one-line install per shell.
+**Shell completion** — `sloptor completion bash|zsh|fish|powershell` writes a native completion script to stdout (e.g. `sloptor completion fish > ~/.config/fish/completions/sloptor.fish`); see `sloptor completion --help` for the one-line install per shell.
 
 ## Configuration — `rotor.toml`
 

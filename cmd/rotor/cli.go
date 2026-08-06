@@ -25,7 +25,7 @@ type cliStreams struct {
 
 // commandFailure is the single error type command RunE bodies return. It is
 // not an error message by itself: `cause` is the text, `usage` selects the
-// dim "Run 'rotor <command> --help' for usage." hint, `render` preserves rich
+// dim "Run .sloptor <command> --help' for usage." hint, `render` preserves rich
 // diagnostic output (buildFailure code frames, Luau frames), and `reported`
 // marks failures the command's own diagnostic writer already rendered so
 // execute does not print a duplicate generic error line.
@@ -105,7 +105,7 @@ func renderError(streams cliStreams, commandPath string, cause error, usage bool
 	s := term.For(streams.err)
 	fmt.Fprintf(streams.err, "%s %s\n", s.Error("error:"), cause)
 	if usage {
-		hint := "rotor --help"
+		hint := "sloptor --help"
 		if commandPath != "" && commandPath != "rotor" {
 			hint = commandPath + " --help"
 		}
@@ -118,7 +118,7 @@ func renderError(streams cliStreams, commandPath string, cause error, usage bool
 // so help renders the surface the way it is documented, not alphabetically.
 func newRootCommand(streams cliStreams) *cobra.Command {
 	root := &cobra.Command{
-		Use:                   "rotor <command> [flags]",
+		Use: "sloptor <command> [flags]",
 		Short:                 "an all-in-one Roblox toolchain (rbxtsc-parity compiler, Luau tools, assets, deploy)",
 		SilenceErrors:         true,
 		SilenceUsage:          true,
@@ -165,7 +165,7 @@ func newRootCommand(streams cliStreams) *cobra.Command {
 	return root
 }
 
-// newVersionCommand is the explicit `rotor version` subcommand: the same bare
+// newVersionCommand is the explicit `sloptor version` subcommand: the same bare
 // version string the root -v/--version flag prints.
 func newVersionCommand() *cobra.Command {
 	return &cobra.Command{

@@ -98,9 +98,9 @@ rotor deploy <plan|apply> [path] -e <env> [--yes] [--allow-deletes]
                               badges, game passes, icon assets, experience
                               icon + thumbnails, developer products, and
                               social links
-rotor completion <bash|zsh|fish|powershell>
+sloptor completion <bash|zsh|fish|powershell>
                               generate a shell completion script (writes to
-                              stdout; see `rotor completion --help` for the
+                              stdout; see `sloptor completion --help` for the
                               one-line install per shell)
 ```
 
@@ -249,15 +249,15 @@ Options may also be set under the top-level `"rbxts"` key of `tsconfig.json`; me
 
 ### Shell completion
 
-`rotor completion <bash|zsh|fish|powershell>` writes a native completion
+`sloptor completion <bash|zsh|fish|powershell>` writes a native completion
 script to stdout — no installation side effects, so redirection works
 unchanged:
 
 ```sh
-rotor completion bash > /etc/bash_completion.d/rotor
-rotor completion zsh > "${fpath[1]}/_rotor"
-rotor completion fish > ~/.config/fish/completions/rotor.fish
-rotor completion powershell | Out-String | Invoke-Expression
+sloptor completion bash > /etc/bash_completion.d/sloptor
+sloptor completion zsh > "${fpath[1]}/_sloptor"
+sloptor completion fish > ~/.config/fish/completions/sloptor.fish
+sloptor completion powershell | Out-String | Invoke-Expression
 ```
 
 The scripts are generated from the live command tree, so they stay in sync

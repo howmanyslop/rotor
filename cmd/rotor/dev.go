@@ -13,7 +13,7 @@ import (
 )
 
 // newDevCommand is the developer inner loop: it watches the project and
-// incrementally compiles to Luau (like `rotor build -w`) while supervising a
+// incrementally compiles to Luau (like `sloptor build -w`) while supervising a
 // `rojo serve` child so Roblox Studio live-syncs the fresh output. One Ctrl-C
 // tears down both. rotor does not speak the Rojo protocol itself — it
 // launches the installed `rojo` CLI. Use --no-serve to watch and build
@@ -40,7 +40,7 @@ func newDevCommand(streams cliStreams) *cobra.Command {
 
 // runDevCommand forces watch mode, launches rojo serve unless disabled, and
 // blocks until Ctrl-C or the watch loop exits. The build-side implication
-// checks run as they did for `rotor dev` (which always parses the build
+// checks run as they did for `sloptor dev` (which always parses the build
 // surface); the finite-diagnostics watch conflicts do not apply because dev
 // never started profiles.
 func runDevCommand(streams cliStreams, cmd *cobra.Command, flags *buildFlags, serve bool, argv []string) error {

@@ -50,7 +50,7 @@ func newSchemaCommand(streams cliStreams) *cobra.Command {
 // the emitted bytes can be asserted in tests without capturing os.Stdout.
 func writeSchema(w io.Writer) int {
 	if _, err := io.WriteString(w, config.Schema); err != nil {
-		fmt.Fprintf(os.Stderr, "rotor schema: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor schema: %v\n", err)
 		return 1
 	}
 	return 0
@@ -58,7 +58,7 @@ func writeSchema(w io.Writer) int {
 
 func writeRbxtsSchema(w io.Writer) int {
 	if _, err := io.WriteString(w, compile.RbxtsTsConfigSchema); err != nil {
-		fmt.Fprintf(os.Stderr, "rotor schema: %v\n", err)
+		fmt.Fprintf(os.Stderr, "sloptor schema: %v\n", err)
 		return 1
 	}
 	return 0

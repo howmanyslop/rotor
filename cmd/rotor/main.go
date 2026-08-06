@@ -1,6 +1,6 @@
 // Command rotor is the rotor CLI.
 //
-// `rotor check` is a fast native TypeScript project checker; `rotor build`
+// `sloptor check` is a fast native TypeScript project checker; `sloptor build`
 // compiles to Luau with the full rbxtsc build flag surface (ProjectOptions
 // merged from defaults < tsconfig `rbxts` key < argv). Build watch mode is
 // available; incremental rebuild selection remains later Phase 4 work.
@@ -18,7 +18,7 @@ import (
 )
 
 // version is rotor's own release version, used for `--version` and the
-// `rotor build` emit header (`-- Compiled with rotor v...`). Library/test
+// `sloptor build` emit header (`-- Compiled with rotor v...`). Library/test
 // compilation keeps the upstream rbxtsc header so differential
 // byte-comparison stays strict. The value is defined in code
 // (internal/version) — no ldflags injection; kept as a var so tests can

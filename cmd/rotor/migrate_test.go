@@ -142,7 +142,7 @@ func TestMigrateHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("migrate -h: exit %d", code)
 	}
-	if !strings.Contains(out, "rotor migrate") {
+	if !strings.Contains(out, "sloptor migrate") {
 		t.Errorf("help missing usage:\n%s", out)
 	}
 }

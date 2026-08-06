@@ -148,7 +148,7 @@ func (u *ui) warn(msg string) {
 	fmt.Fprintf(u.w, "  %s  %s\n", u.s.WarnBold(g.Warn), msg)
 }
 
-// checkSummary prints the `rotor check` result line.
+// checkSummary prints the `sloptor check` result line.
 func (u *ui) checkSummary(files int, errs int, elapsed time.Duration) {
 	g := u.s.Glyphs()
 	ms := elapsed.Milliseconds()

@@ -10,7 +10,7 @@ import (
 	"rotor/tsgo/checker"
 )
 
-// writeCheckableProject writes a minimal project `rotor check` can typecheck
+// writeCheckableProject writes a minimal project `sloptor check` can typecheck
 // without node_modules (noLib + local global stubs). mainSrc overrides
 // src/main.ts when non-empty.
 func writeCheckableProject(t *testing.T, mainSrc string) string {

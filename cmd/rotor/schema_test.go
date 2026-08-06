@@ -9,7 +9,7 @@ import (
 	"rotor/internal/config"
 )
 
-// `rotor schema` emits the canonical rotor.toml JSON Schema verbatim (so it can
+// `sloptor schema` emits the canonical rotor.toml JSON Schema verbatim (so it can
 // be redirected to publish the hosted file or to keep a local copy). The output
 // must be byte-identical to config.Schema and itself valid JSON.
 func TestCmdSchemaPrintsSchema(t *testing.T) {

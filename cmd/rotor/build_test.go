@@ -1043,7 +1043,7 @@ func TestParseBuildArgsWatchDXFlags(t *testing.T) {
 	})
 }
 
-// TestCmdBuildMinify verifies that `rotor build --minify` produces smaller,
+// TestCmdBuildMinify verifies that `sloptor build --minify` produces smaller,
 // still-valid Luau with the header comment stripped, while a normal build keeps
 // it — i.e. the flag is what minifies, and only when set.
 func TestCmdBuildMinify(t *testing.T) {
