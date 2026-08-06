@@ -1,6 +1,7 @@
 package compile
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"slices"
@@ -153,6 +154,112 @@ func TestBuildProjectIncrementalRecreatesMissingOutputs(t *testing.T) {
 				t.Fatalf("actual writes = %d, want 1; changed outputs = %v", timings.Counts.ActualWrites, changed)
 			}
 		})
+	}
+}
+
+func TestBuildProjectIncrementalNoChangeKeepsManifestAndOutputs(t *testing.T) {
+	dir := writeProject(t, "@scope/incremental-nochange-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	writeIncrementalFixture(t, dir)
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("seed build: %v (diags: %v)", err, diags)
+	}
+
+	manifestPath := filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")
+	before, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := time.Unix(100, 0)
+	outputPaths := []string{"out/main.luau", "out/util.luau", "out/side.luau"}
+	for _, rel := range outputPaths {
+		if err := os.Chtimes(filepath.Join(dir, filepath.FromSlash(rel)), old, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	timings := NewBuildTimings()
+	result, diags, err := BuildProjectWithOptions(dir, ProjectOptions{Timings: timings})
+	if err != nil {
+		t.Fatalf("no-change build: %v (diags: %v)", err, diags)
+	}
+	if timings.Counts.SelectedSources != 0 {
+		t.Fatalf("selected sources = %d, want 0", timings.Counts.SelectedSources)
+	}
+	if timings.Counts.ActualWrites != 0 {
+		t.Fatalf("actual writes = %d, want 0", timings.Counts.ActualWrites)
+	}
+	if len(result.EmittedFiles) != 0 {
+		t.Fatalf("emitted files = %v, want none", result.EmittedFiles)
+	}
+	after, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Fatal("no-change build rewrote the incremental manifest")
+	}
+	for _, rel := range outputPaths {
+		info, err := os.Stat(filepath.Join(dir, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !info.ModTime().Equal(old) {
+			t.Fatalf("%s modtime = %v, want preserved %v", rel, info.ModTime(), old)
+		}
+	}
+}
+
+func TestBuildIncrementalManifestRecomputesAllReferencesAfterSourceChange(t *testing.T) {
+	dir := writeProject(t, "@scope/incremental-refs-fixture", "")
+	enableIncrementalBuilds(t, dir)
+	for rel, text := range map[string]string{
+		"src/main.ts": "import { VALUE } from \"./util\";\nexport const main = VALUE;\n",
+		"src/util.ts": "export const VALUE = 1;\n",
+		"src/side.ts": "import { VALUE } from \"./util\";\nexport const side = VALUE;\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(rel)), []byte(text), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("first build: %v (diags: %v)", err, diags)
+	}
+
+	manifestPath := filepath.Join(dir, "out", "cache.rbxtsc.tsbuildinfo")
+	seeded, err := readIncrementalManifest(manifestPath)
+	if err != nil || seeded == nil {
+		t.Fatalf("read seeded manifest: %v", err)
+	}
+	mainKey := normalizeSourceFilePath(filepath.Join(dir, "src", "main.ts"))
+	utilKey := normalizeSourceFilePath(filepath.Join(dir, "src", "util.ts"))
+	sideKey := normalizeSourceFilePath(filepath.Join(dir, "src", "side.ts"))
+	sideState := seeded.Files[sideKey]
+	if !slices.Equal(sideState.Refs, []string{utilKey}) {
+		t.Fatalf("seeded side.ts refs = %v, want [%s]", sideState.Refs, utilKey)
+	}
+	sideState.Refs = []string{"sentinel"}
+	seeded.Files[sideKey] = sideState
+	if err := writeIncrementalManifest(manifestPath, seeded); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "src", "util.ts"), []byte("export const VALUE = 2;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{}); err != nil {
+		t.Fatalf("second build: %v (diags: %v)", err, diags)
+	}
+
+	rebuilt, err := readIncrementalManifest(manifestPath)
+	if err != nil || rebuilt == nil {
+		t.Fatalf("read rebuilt manifest: %v", err)
+	}
+	if got := rebuilt.Files[sideKey].Refs; !slices.Equal(got, []string{utilKey}) {
+		t.Fatalf("side.ts refs = %v, want recomputed [%s]", got, utilKey)
+	}
+	if got := rebuilt.Files[mainKey].Refs; !slices.Equal(got, []string{utilKey}) {
+		t.Fatalf("main.ts refs = %v, want recomputed [%s]", got, utilKey)
 	}
 }
 

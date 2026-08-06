@@ -104,6 +104,7 @@ func assertBuildTimingsNonNegative(t *testing.T, timings *BuildTimings) {
 		"native compile":                timings.Stages.NativeDiagnosticsTransformRenderMs,
 		"compiled output writes":        timings.Stages.CompiledOutputWritesMs,
 		"declaration emit writes":       timings.Stages.DeclarationEmitWritesMs,
+		"incremental manifest":          timings.Stages.IncrementalManifestMs,
 		"persistence":                   timings.Stages.PersistenceMs,
 	} {
 		if duration < 0 {

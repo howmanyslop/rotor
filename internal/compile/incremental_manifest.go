@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	stdjson "encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -85,12 +86,33 @@ func sameIncrementalManifest(a, b *incrementalManifest) bool {
 	return reflect.DeepEqual(a, b)
 }
 
-func buildIncrementalManifest(program *compiler.Program, sourceFiles []*ast.SourceFile, salt string) (*incrementalManifest, error) {
+func buildIncrementalManifest(program *compiler.Program, sourceFiles []*ast.SourceFile, salt string, previous *incrementalManifest) (*incrementalManifest, error) {
 	manifest := &incrementalManifest{
 		Version: 2,
 		Salt:    salt,
 		Files:   make(map[string]incrementalFileState, len(sourceFiles)),
 		Outputs: map[string]string{},
+	}
+	currentHashes := make(map[string]string, len(sourceFiles))
+	for _, sourceFile := range sourceFiles {
+		path := normalizeSourceFilePath(sourceFile.FileName())
+		sum := sha256.Sum256([]byte(sourceFile.Text()))
+		currentHashes[path] = hex.EncodeToString(sum[:])
+	}
+	if previous != nil && previous.Salt == salt && len(previous.Files) == len(currentHashes) {
+		unchanged := true
+		for path, hash := range currentHashes {
+			if prev, ok := previous.Files[path]; !ok || prev.Hash != hash {
+				unchanged = false
+				break
+			}
+		}
+		if unchanged {
+			// No source changed: reuse the previous reference graph verbatim,
+			// so the manifest stays byte-identical and no checker work runs.
+			manifest.Files = maps.Clone(previous.Files)
+			return manifest, nil
+		}
 	}
 	sourceSet := make(map[string]struct{}, len(sourceFiles))
 	for _, sourceFile := range sourceFiles {
@@ -98,12 +120,8 @@ func buildIncrementalManifest(program *compiler.Program, sourceFiles []*ast.Sour
 	}
 	for _, sourceFile := range sourceFiles {
 		path := normalizeSourceFilePath(sourceFile.FileName())
-		hash, err := hashFile(path)
-		if err != nil {
-			return nil, err
-		}
 		refs := referencedProjectFiles(program, sourceFile, sourceSet)
-		manifest.Files[path] = incrementalFileState{Hash: hash, Refs: refs}
+		manifest.Files[path] = incrementalFileState{Hash: currentHashes[path], Refs: refs}
 	}
 	return manifest, nil
 }
@@ -148,10 +166,9 @@ func incrementalSalt(program *compiler.Program, opts ProjectOptions, pathTransla
 	return hex.EncodeToString(sum[:]), nil
 }
 
-func pruneMissingOutputs(writer *outputWriter, outputs map[string]string) {
+func pruneMissingOutputs(index *outputPresenceIndex, outputs map[string]string) {
 	for path := range outputs {
-		info, err := writer.lstat(filepath.Join(writer.projectDir, filepath.FromSlash(path)))
-		if err != nil || !info.Mode().IsRegular() {
+		if !index.hasRegular(path) {
 			delete(outputs, path)
 		}
 	}
@@ -304,13 +321,4 @@ func resolveReferencedFile(program *compiler.Program, fileName, sourceFileDirect
 
 func normalizeSourceFilePath(path string) string {
 	return filepath.Clean(filepath.FromSlash(path))
-}
-
-func hashFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(data)
-	return hex.EncodeToString(sum[:]), nil
 }

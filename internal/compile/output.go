@@ -77,22 +77,26 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	pathTranslator := createPathTranslator(program, !opts.LuaExtension)
 	sourceFiles := projectSourceFiles(program)
 	timings.setSourceCounts(len(sourceFiles), len(sourceFiles))
+	stopManifest := timings.startStage(incrementalManifestStage)
 	manifestPath := pathTranslator.BuildInfoOutputPath
 	if manifestPath == "" {
 		manifestPath = outputManifestPath(filepath.FromSlash(dir), program.Options().ConfigFilePath)
 	}
 	previousManifest, err := readIncrementalManifest(manifestPath)
 	if err != nil {
+		stopManifest()
 		return nil, nil, err
 	}
 	salt, err := incrementalSalt(program, opts, manifestPath)
 	if err != nil {
+		stopManifest()
 		return nil, nil, err
 	}
 	var currentManifest *incrementalManifest
 	if program.Options().IsIncremental() && pathTranslator.BuildInfoOutputPath != "" {
-		currentManifest, err = buildIncrementalManifest(program, sourceFiles, salt)
+		currentManifest, err = buildIncrementalManifest(program, sourceFiles, salt, previousManifest)
 		if err != nil {
+			stopManifest()
 			return nil, nil, err
 		}
 		if previousManifest != nil && previousManifest.Salt == currentManifest.Salt {
@@ -113,9 +117,12 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		previousOutputs = previousManifest.Outputs
 	}
 	if err := writer.useHashes(filepath.FromSlash(dir), previousOutputs, currentManifest.Outputs); err != nil {
+		stopManifest()
 		return nil, nil, err
 	}
+	stopManifest()
 	defer writer.close()
+	previousPresence := writer.newOutputPresenceIndex(previousOutputs)
 	if opts.EmitDeclarationOnly {
 		if !program.Options().GetEmitDeclarations() {
 			msg := "Option 'emitDeclarationOnly' cannot be specified without specifying option 'declaration' or option 'composite'."
@@ -133,12 +140,16 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			return nil, nil, err
 		}
 		timings.setHashSkips(writer.hashSkipCount())
-		pruneMissingOutputs(writer, currentManifest.Outputs)
+		stopPersistence := timings.startStage(persistenceStage)
+		currentPresence := writer.newOutputPresenceIndex(currentManifest.Outputs)
+		pruneMissingOutputs(currentPresence, currentManifest.Outputs)
 		if !sameIncrementalManifest(previousManifest, currentManifest) {
 			if err := writeIncrementalManifest(manifestPath, currentManifest); err != nil {
+				stopPersistence()
 				return nil, nil, err
 			}
 		}
+		stopPersistence()
 		timings.setEmittedEntries(len(emitted))
 		return &BuildResult{Outputs: map[string]string{}, EmittedFiles: emitted}, nil, nil
 	}
@@ -166,11 +177,10 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 				selectedPaths[normalizeSourceFilePath(sourceFile.FileName())] = struct{}{}
 			}
 			for outputPath := range previousOutputs {
-				absolutePath := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(outputPath))
-				info, err := writer.lstat(absolutePath)
-				if err == nil && info.Mode().IsRegular() {
+				if previousPresence.hasRegular(outputPath) {
 					continue
 				}
+				absolutePath := filepath.Join(filepath.FromSlash(dir), filepath.FromSlash(outputPath))
 				inputPath := strings.TrimSuffix(absolutePath, ".map")
 				for _, candidate := range pathTranslator.GetInputPaths(inputPath) {
 					selectedPaths[normalizeSourceFilePath(candidate)] = struct{}{}
@@ -353,7 +363,16 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 	timings.setHashSkips(writer.hashSkipCount())
 
 	stopPersistence := timings.startStage(persistenceStage)
-	pruneMissingOutputs(writer, currentManifest.Outputs)
+	if copyFilesGate.SkipCleanup {
+		// No cleanup ran and nothing was selected, so the output tree is
+		// exactly the pre-build tree: the previous-output index is still valid.
+		pruneMissingOutputs(previousPresence, currentManifest.Outputs)
+	} else {
+		// Cleanup and/or emission changed the tree; index the freshly written
+		// output set so just-written files are never pruned.
+		currentPresence := writer.newOutputPresenceIndex(currentManifest.Outputs)
+		pruneMissingOutputs(currentPresence, currentManifest.Outputs)
+	}
 	// rotor extension: keep the consolidated on-disk rotor.d.ts editor companion
 	// fresh for projects that reference any macro ($env / $asset / $nameof /
 	// $keys / $file / $git / $buildTime). Editors never see the synthetic
