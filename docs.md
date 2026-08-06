@@ -61,7 +61,8 @@ rotor build [options] [path]  compile the project to Luau
 rotor diagnostics [options] [path]
                               report EVERY file's outcome instead of stopping at
                               the first failure, optionally over in-memory source
-                              overlays read as JSON on stdin; writes nothing
+                              overlays read as JSON on stdin; writes nothing.
+                              --build [path] censuses a whole solution
 rotor doctor [path]           diagnose the setup: tsconfig, @rbxts packages,
                               Node.js + transformer plugins, Rojo wiring
 rotor minify <file> [-o out] [--no-index-field]
@@ -145,6 +146,9 @@ rotor diagnostics --project tsconfig.json --json
 ```
 
 - `--project <path>` selects the config; `--checkers <n>` sets checker count.
+  `-b/--build [path]` censuses a whole solution of project references, with
+  `--builders <n>` — the same flags, values and `--builders requires --build`
+  rule `rotor build` uses.
 - `--json` extends the `rotor build --json` result shape with a `transformed`
   count, an `overlayMatches` count and a `fileDiagnostics` array. Diagnostic
   positions are resolved against the text that was compiled, so they stay
@@ -182,16 +186,47 @@ cannot carry a project's worth of source, which is why this is stdin.
   no-op. Compare `overlayMatches` against the number you sent: a green census
   of the unmodified tree is exactly the failure this prevents. Keys may use
   either separator, and match case-insensitively where the filesystem does.
+  Under `--build` the check is against the **union of every project**, since a
+  solution's files are split between them; `overlayMatches` counts distinct
+  overlays, not per-project matches.
 - Unknown top-level fields in the request are rejected, so a typo'd wrapper key
   fails instead of parsing to an empty overlay set.
 - Overlays **cannot be combined with transformer plugins** (or with declaration
   emit through `baseUrl`/`paths`). Those route through the Node sidecar, which
   is handed file *names* and reads the text off disk itself; the overlays would
   be silently discarded and disk text reported as `ok`. The combination is
-  refused instead.
+  refused instead. Under `--build` the refusal is per project and fires only
+  where an overlay actually lands: a solution may reference a plugin project
+  the census never overlays, and refusing the whole run for it would refuse a
+  run in which nothing of yours could be discarded.
 
-Solution builds (`--build`), project references and per-project attribution are
-not supported yet.
+#### Solutions (`--build`)
+
+`rotor diagnostics --build [path]` censuses every project the entry tsconfig
+references, transitively, in dependency order.
+
+- A project that cannot be censused at all does **not** stop the others. A
+  solution *build* blocks the dependents of a failed project, because they
+  consume its missing output; a census reads no project's output (TypeScript
+  redirects a project reference to source), so blocking would only mean
+  projects going unreported. The failure is reported against its own project
+  and the run exits 1.
+- `--json` adds a `projects` array: `projectDir`, `configPath`, `ok`, `files`,
+  `transformed`, `overlayMatches`, and the diagnostics that belong to the
+  project rather than to one of its files. Each `fileDiagnostics` entry gains a
+  `project` key naming the same `configPath`, so the files stay in one flat
+  array instead of being repeated per project.
+- Every top-level number is a **solution-wide aggregate**: `files`,
+  `transformed`, `overlayMatches` and `diagnostics` are the totals, and
+  `fileDiagnostics` holds every project's files. A project's `diagnostics` are
+  the attributed subset of the top-level array, not an addition to it;
+  solution-level failures belong to no project and appear only at the top.
+- **Without `--build` the output is byte-identical to a solution-unaware
+  rotor**: `projects` and the per-file `project` are the only new keys and both
+  are omitted.
+- `allowCommentDirectives` is forced off for every project of the solution, not
+  only the entry, so one referenced project's `rbxts` key cannot change how its
+  files are classified.
 
 A standalone `.ts` file isn't compilable by itself — like `rbxtsc`, rotor needs the rbxts project around it (`package.json` with `@rbxts/compiler-types` + `@rbxts/types` installed, `tsconfig.json`, `default.project.json`). The fixture project above is a minimal working example of that setup.
 
