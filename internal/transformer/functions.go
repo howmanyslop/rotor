@@ -119,16 +119,20 @@ func transformFunctionBody(s *State, node *ast.Node) transformedFunctionBody {
 }
 
 // transformFunctionExpression ports transformFunctionExpression.ts (L11-47):
-// FunctionExpression and ArrowFunction share one transform. A direct,
-// synchronous named call argument is lifted to a local declaration; other
-// named expressions report a diagnostic and continue with the name dropped.
-// Arrow expression bodies reuse the full return transform with prereqs
-// captured into the function body — that is the only implicit-return
-// mechanism.
+// FunctionExpression and ArrowFunction share one transform. A synchronous
+// named function expression is lifted to a local function declaration in
+// ANY expression position — the prereq machinery already places the
+// declaration where the expression is evaluated, so short-circuit operands
+// and conditional arms stay conditional. Only async and generator
+// expressions keep the diagnostic: their name binds to the TS.async /
+// TS.generator wrapper rather than to the lifted closure, so a
+// self-reference inside the body would reach the wrong function. Arrow
+// expression bodies reuse the full return transform with prereqs captured
+// into the function body — that is the only implicit-return mechanism.
 func transformFunctionExpression(s *State, node *ast.Node) luau.Expression {
 	if ast.IsFunctionExpression(node) {
 		if name := node.AsFunctionExpression().Name(); name != nil {
-			if isSynchronousNonGeneratorFunctionExpression(node) && isDirectCallArgument(node) {
+			if isSynchronousNonGeneratorFunctionExpression(node) {
 				ValidateIdentifier(s, name)
 				identifier := luau.ExactTempID(name.Text())
 				body := transformNamedFunctionExpressionBody(s, node, identifier)

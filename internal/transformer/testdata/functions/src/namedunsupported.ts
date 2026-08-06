@@ -1,18 +1,7 @@
-declare function consume(value: unknown): void;
-
-const mismatch = function different() {};
-let letNamed = function letNamed() {};
-export const exportedNamed = function exportedNamed() {};
-const wrapped = (function wrapped() {});
-const asserted = function asserted() {} as () => void;
+// The two forms that still keep the diagnostic. Their name binds to the
+// TS.async / TS.generator wrapper, not to the closure a lift would declare,
+// so a self-reference inside the body would reach the wrong function.
 const asyncNamed = async function asyncNamed() {};
 const generatorNamed = function* generatorNamed() {};
-const objectValue = { value: function objectNamed() {} };
-const first = function first() {}, second = function second() {};
-const { value } = { value: function destructured() {} };
-const separatelyExported = function separatelyExported() {};
-export { separatelyExported };
 
-(function callee() {})();
-consume((function wrappedArgument() {}));
-consume(function assertedArgument() {} as () => void);
+print(asyncNamed, generatorNamed);
