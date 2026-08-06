@@ -12,6 +12,13 @@
         "import": "configTransformer",
         "type": "config",
         "prefix": "before"
+      },
+      {
+        "transform": "./plugins/prefix-string-named.js",
+        "import": "rawTransformer",
+        "type": "raw",
+        "prefix": "afterDeclarations",
+        "afterDeclarations": true
       }
     ]
   }

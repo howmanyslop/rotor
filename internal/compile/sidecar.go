@@ -632,13 +632,36 @@ func remapProgramSourceFiles(program *compiler.Program, sourceFiles []*ast.Sourc
 	return remapped, nil
 }
 
+// projectUsesTransformerPlugins reports whether this project has a transformer
+// to run — the gate on spawning the Node sidecar at all.
+//
+// `plugins` is an array-valued compiler option, so `extends` REPLACES it rather
+// than merging: whichever config in the chain declares `plugins` last settles
+// the list, and `"plugins": []` drops an inherited transform entirely. That is
+// what `tsc --showConfig` reports, and it is what the sidecar runs (tools/
+// sidecar/lib/plugins.js). The project's own config therefore answers on its
+// own whenever it declares `plugins`, whatever its ancestors say.
+//
+// When it stays silent the list is inherited, and this cannot resolve it
+// exactly: tsgo drops `plugins` while parsing options (a language-service
+// option with no CompilerOptions field) and reports ExtendedSourceFiles sorted
+// by path rather than in chain order, so the nearest declaring ancestor is not
+// identifiable here. Asking whether ANY ancestor declares a transform is exact
+// unless two levels of one chain disagree, where it over-approximates: the
+// sidecar starts, resolves the list properly, and finds nothing to run. The
+// cost is a wasted worker, never a dropped transform.
 func projectUsesTransformerPlugins(parsed *tsoptions.ParsedCommandLine) bool {
 	if parsed == nil {
 		return false
 	}
-	configFiles := append([]string{parsed.ConfigName()}, parsed.ExtendedSourceFiles()...)
+	if configName := parsed.ConfigName(); configName != "" {
+		if declaresTransform, declared := configFilePluginsDeclaration(normalizeSourceFilePath(configName)); declared {
+			return declaresTransform
+		}
+	}
+
 	seen := map[string]struct{}{}
-	for _, configPath := range configFiles {
+	for _, configPath := range parsed.ExtendedSourceFiles() {
 		if configPath == "" {
 			continue
 		}
@@ -647,39 +670,45 @@ func projectUsesTransformerPlugins(parsed *tsoptions.ParsedCommandLine) bool {
 			continue
 		}
 		seen[path] = struct{}{}
-		if configFileUsesTransformerPlugins(path) {
+		if declaresTransform, _ := configFilePluginsDeclaration(path); declaresTransform {
 			return true
 		}
 	}
 	return false
 }
 
-func configFileUsesTransformerPlugins(configPath string) bool {
+// configFilePluginsDeclaration reports whether configPath's own
+// `compilerOptions.plugins` names a transform, and whether it declares the key
+// at all. The two answers differ for `"plugins": []`: declared, no transform —
+// an override that replaces whatever the config extends. A key that is present
+// but not an array is left undeclared so the caller falls back to the chain;
+// tsgo reports the malformed value as a config error of its own.
+func configFilePluginsDeclaration(configPath string) (declaresTransform bool, declared bool) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
-		return false
+		return false, false
 	}
 
 	var root map[string]any
 	if json.Unmarshal([]byte(stripJSONC(string(data))), &root) != nil {
-		return false
+		return false, false
 	}
 	compilerOptions, ok := root["compilerOptions"].(map[string]any)
 	if !ok {
-		return false
+		return false, false
 	}
 	plugins, ok := compilerOptions["plugins"].([]any)
 	if !ok {
-		return false
+		return false, false
 	}
 	for _, plugin := range plugins {
 		if pluginConfig, ok := plugin.(map[string]any); ok {
 			if transform, ok := pluginConfig["transform"].(string); ok && transform != "" {
-				return true
+				return true, true
 			}
 		}
 	}
-	return false
+	return false, true
 }
 
 func formatSidecarDiagnostic(diag sidecarDiagnostic) string {
