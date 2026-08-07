@@ -38,7 +38,7 @@ function targetInfo() {
 // Where the platform binary lives inside the installed package.
 function binaryPath() {
   const { os, arch, ext } = targetInfo();
-  return path.join(__dirname, "..", "bin", `sloptor--`);
+  return path.join(__dirname, "..", "bin", `sloptor-${os}-${arch}${ext}`);
 }
 
 function assetUrl() {
@@ -47,7 +47,7 @@ function assetUrl() {
     process.env.ROTOR_INSTALL_BASE_URL ||
     `https://github.com/howmanysmall/rotor/releases/download/v${pkg.version}`
   ).replace(/\/+$/, "");
-  return `${base}/sloptor-v-${os}-${arch}-bin${ext}`;
+  return `${base}/sloptor-v${pkg.version}-${os}-${arch}-bin${ext}`;
 }
 
 async function install({ force = false, quiet = false } = {}) {

@@ -35,8 +35,8 @@ const ARCH_MAP = { x64: "amd64", arm64: "arm64" };
 const osName = PLATFORM_MAP[process.platform];
 const archName = ARCH_MAP[process.arch];
 const ext = osName === "windows" ? ".exe" : "";
-const assetName = `sloptor-v-${osName}-${archName}-bin${ext}`;
-const localBinName = `sloptor--`;
+const assetName = `sloptor-v${pkg.version}-${osName}-${archName}-bin${ext}`;
+const localBinName = `sloptor-${osName}-${archName}${ext}`;
 
 let passed = 0;
 function ok(name) {
