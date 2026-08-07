@@ -513,6 +513,81 @@ func TestCmdDiagnosticsNeverAllowsCommentDirectives(t *testing.T) {
 	}
 }
 
+func TestCmdDiagnosticsJSONCarriesDiagnosticCodes(t *testing.T) {
+	// Given one file TypeScript rejects and one the transformer rejects
+	dir := writeDiagnosticsProject(t, map[string]string{
+		"typebad.ts": "export const s: string = 5;\n",
+		"noany.ts":   "declare const loose: any;\nexport const taken = loose.field;\n",
+	})
+
+	// When the census runs
+	output, code := captureStdout(t, func() int {
+		return withStdin(t, "", func() int {
+			return cmdDiagnostics([]string{"--project", dir, "--json"})
+		})
+	})
+	if code != 0 {
+		t.Fatalf("exit = %d, want 0; output:\n%s", code, output)
+	}
+
+	// Then each diagnostic names its own class. A file's outcome cannot answer
+	// this: a file can carry a type error AND a transformer diagnostic at once,
+	// and outcome reports only the most severe. Without the code the message is
+	// the only thing a consumer can group or route on.
+	byName := diagnosticsByFile(decodeDiagnosticsResult(t, output))
+	for _, tc := range []struct {
+		name     string
+		wantCode string
+	}{
+		{"typebad.ts", "TS2322"},
+		{"noany.ts", "noAny"},
+	} {
+		file, ok := byName[tc.name]
+		if !ok || len(file.Diagnostics) == 0 {
+			t.Errorf("%s carries no diagnostics: %+v", tc.name, file)
+			continue
+		}
+		if got := file.Diagnostics[0].Code; got != tc.wantCode {
+			t.Errorf("%s code = %q, want %q (message %q)", tc.name, got, tc.wantCode, file.Diagnostics[0].Message)
+		}
+	}
+}
+
+func TestCmdDiagnosticsOmitsTheCodeKeyWhenThereIsNone(t *testing.T) {
+	// Given a run that fails as a whole rather than at a diagnostic — an
+	// overlay matching no file — so the reported failure is a bare message that
+	// never had a code to carry
+	dir := writeDiagnosticsProject(t, map[string]string{"main.ts": "export const clean = 1;\n"})
+	request, err := json.Marshal(map[string]any{
+		"overlays": map[string]string{
+			filepath.Join(dir, "src", "typo.ts"): "export const nothing = 1;\n",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// When the census runs
+	output, code := captureStdout(t, func() int {
+		return withStdin(t, string(request), func() int {
+			return cmdDiagnostics([]string{"--project", dir, "--json"})
+		})
+	})
+	if code != 1 {
+		t.Fatalf("exit = %d, want 1; output:\n%s", code, output)
+	}
+
+	// Then the key is absent rather than present-and-empty, so an entry that
+	// never had a code reads exactly as it did before the field existed
+	if strings.Contains(output, `"code"`) {
+		t.Errorf("output carries a code key for a codeless diagnostic:\n%s", output)
+	}
+	res := decodeDiagnosticsResult(t, output)
+	if len(res.Diagnostics) == 0 {
+		t.Fatal("setup failure reported no diagnostic at all")
+	}
+}
+
 func TestCmdDiagnosticsSetupFailureExitsNonZero(t *testing.T) {
 	// Given a directory with no project in it
 	dir := t.TempDir()

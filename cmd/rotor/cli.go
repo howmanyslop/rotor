@@ -118,7 +118,7 @@ func renderError(streams cliStreams, commandPath string, cause error, usage bool
 // so help renders the surface the way it is documented, not alphabetically.
 func newRootCommand(streams cliStreams) *cobra.Command {
 	root := &cobra.Command{
-		Use: "sloptor <command> [flags]",
+		Use:                   "sloptor <command> [flags]",
 		Short:                 "an all-in-one Roblox toolchain (rbxtsc-parity compiler, Luau tools, assets, deploy)",
 		SilenceErrors:         true,
 		SilenceUsage:          true,

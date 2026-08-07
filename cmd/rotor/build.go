@@ -576,9 +576,17 @@ func projectCompileOptions(tsConfigPath string, opts projectOptions) compile.Pro
 // are populated from the structured DiagnosticInfo location when available;
 // `sloptor check --json` also fills these from its own structured AST diagnostics.
 type jsonDiagnostic struct {
-	File     string `json:"file"`
-	Line     int    `json:"line"`
-	Col      int    `json:"col"`
+	File string `json:"file"`
+	Line int    `json:"line"`
+	Col  int    `json:"col"`
+	// Code is the diagnostic's stable identity: "TS####" for a TypeScript
+	// diagnostic, the upstream factory name ("noAny") for a transformer one.
+	// Without it the message is the only thing telling the two families apart,
+	// and a `sloptor diagnostics` file can carry both at once — so a consumer
+	// grouping or routing by class had no key but prose. Omitted when the
+	// diagnostic has no code (a bare run failure), so entries that had none
+	// keep the shape they had.
+	Code     string `json:"code,omitempty"`
 	Severity string `json:"severity"`
 	Message  string `json:"message"`
 }
@@ -640,7 +648,7 @@ func cmdBuildJSON(out, errOut io.Writer, dir, tsConfigPath string, opts projectO
 			if d.Warning {
 				sev = "warning"
 			}
-			jd := jsonDiagnostic{Severity: sev, Message: d.Message}
+			jd := jsonDiagnostic{Code: d.Code, Severity: sev, Message: d.Message}
 			if d.FileName != "" {
 				jd.File = relForDisplay(d.FileName)
 				jd.Line, jd.Col = lineColOf(d.FileName, d.Offset)
