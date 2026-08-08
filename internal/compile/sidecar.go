@@ -192,14 +192,14 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	// project. Rebuilding on that alone would read every other file off disk
 	// and drop the caller's overlay on it, so the two layer: transformed text
 	// wins where it exists, the caller's overlay stands everywhere else.
-	transformedOverlays := normalizeOverlays(overlays)
+	programOverlays := normalizeOverlays(overlays)
 	caseSensitive := osvfs.FS().UseCaseSensitiveFileNames()
 	for _, file := range response.Transformed {
-		transformedOverlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
+		programOverlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
 	}
 	overlayStarted := time.Now()
 	overlayRegion := trace.StartRegion(context.Background(), "overlay program creation and parse/load")
-	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, transformedOverlays, program.Options().Checkers)
+	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, programOverlays, program.Options().Checkers)
 	overlayRegion.End()
 	overlayDuration := time.Since(overlayStarted)
 	if err != nil {
@@ -419,6 +419,10 @@ func (s *sidecarSession) close() {
 // Overlays are keyed by the caller's spelling, so they are matched to fileNames
 // through normalizeOverlayPath rather than compared directly.
 func (s *sidecarSession) changedFilesFor(fileNames []string, overlays map[string]string) ([]sidecarChangedFile, error) {
+	// An empty stamp map still means "no round trip yet". Overlaid files skip
+	// the stat-diff, but revertDroppedOverlays stamps each one as it hands the
+	// file back, so a session cannot reach a second round trip having stamped
+	// nothing and still owe the worker a disk edit.
 	fresh := len(s.stamps) == 0
 	caseSensitive := osvfs.FS().UseCaseSensitiveFileNames()
 	overlaid := make(map[string]sidecarChangedFile, len(overlays))
@@ -433,10 +437,9 @@ func (s *sidecarSession) changedFilesFor(fileNames []string, overlays map[string
 		s.overlaid[key] = overlaid[key].FileName
 	}
 
-	// A build with no overlays takes the stat-diff exactly as it was before
-	// overlays existed. Keying every project file costs a Clean, a FromSlash
-	// and (off a case-sensitive filesystem) a ToLower per file, for a lookup
-	// that cannot hit.
+	// Keying every project file to answer a lookup that cannot hit costs a
+	// Clean, a FromSlash and (off a case-sensitive filesystem) a ToLower per
+	// file, so a build with no overlays skips it.
 	overlayAware := len(overlaid) > 0
 	for _, fileName := range fileNames {
 		path := filepath.FromSlash(fileName)

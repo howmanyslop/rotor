@@ -43,12 +43,10 @@ func matchOverlaysToProgram(program *compiler.Program, overlays map[string]strin
 }
 
 // matchSolutionOverlaysToProgram is matchOverlaysToProgram for one project of a
-// solution census, where its rule cannot be applied as it stands.
-//
-// A solution's files are split between its projects, so "every overlay must
-// match" is only answerable against the union of all of them — the caller's
-// solutionOverlayMatches collects the matches and checks that union once, after
-// every project has run.
+// solution census. A solution's files are split between its projects, so "every
+// overlay must match" is only answerable against the union of all of them: this
+// records what one project matched, and the caller's solutionOverlayMatches
+// checks the union once, after every project has run.
 func matchSolutionOverlaysToProgram(program *compiler.Program, overlays map[string]string, tracker *solutionOverlayMatches) (int, error) {
 	matched, _ := overlayKeysInProgram(program, overlays)
 	tracker.record(matched)
