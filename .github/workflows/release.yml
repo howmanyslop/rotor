@@ -271,3 +271,28 @@ jobs:
           done < "dist/sloptor-v$VERSION-checksums.txt"
 
           gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json url --jq .url
+
+  release-notes:
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: [validate, publish]
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+
+      - uses: jdx/mise-action@v2
+        with:
+          install_args: communique
+
+      - env:
+          GITHUB_TOKEN: ${{ github.token }}
+          OPENAI_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        name: Generate and publish release notes
+        run: communique generate "${{ github.ref_name }}" --github-release
+
+    timeout-minutes: 15
