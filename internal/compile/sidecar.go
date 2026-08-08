@@ -444,7 +444,11 @@ func (s *sidecarSession) changedFilesFor(fileNames []string, overlays map[string
 	for _, fileName := range fileNames {
 		path := filepath.FromSlash(fileName)
 		if overlayAware {
-			if _, ok := overlaid[normalizeOverlayPath(path, caseSensitive)]; ok {
+			key := normalizeOverlayPath(path, caseSensitive)
+			if _, ok := overlaid[key]; ok {
+				// The program's spelling, not the caller's, so the stamp a
+				// revert writes is the one this loop later looks up.
+				s.overlaid[key] = path
 				continue
 			}
 		}
@@ -474,8 +478,11 @@ func (s *sidecarSession) changedFilesFor(fileNames []string, overlays map[string
 // would have read it from anyway. Stamping the file at the same time keeps the
 // stat-diff below from sending it a second time.
 //
-// A file that has since left the disk is dropped from the stamps instead: there
-// is nothing to restore, and the next stat-diff should treat it as new.
+// Known limitation: a file overlaid and then DELETED from disk keeps its
+// override in the worker for the session's lifetime. There is nothing to resend
+// and the protocol carries no way to forget a file, so rotor only drops its own
+// stamp. Unreachable from `rotor diagnostics`, which sets its overlays once per
+// process; it would need a watch session that both overlays and deletes.
 //
 // overlaid is this round trip's overlays, keyed the way normalizeOverlayPath
 // keys them.

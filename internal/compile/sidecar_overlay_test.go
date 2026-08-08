@@ -169,6 +169,49 @@ func TestChangedFilesForRevertsAnOverlayThatWentAway(t *testing.T) {
 	}
 }
 
+// TestCompileProjectDiagnosticsCensusesAPluginProjectUnderOverlays is the
+// product case the refusal used to block: `sloptor diagnostics` over a real
+// build tsconfig, plugins and all, reporting on the caller's text.
+func TestCompileProjectDiagnosticsCensusesAPluginProjectUnderOverlays(t *testing.T) {
+	// Given a plugin project that censuses clean, and an overlay that breaks
+	// one file's types and removes the export another file imports
+	dir := writeOverlayPluginProject(t, "@scope/overlay-census-fixture", "import { label } from \"./helper\";\nexport const shout = label + \"!\";\n")
+	helperPath := filepath.Join(dir, "src", "helper.ts")
+	if err := os.WriteFile(helperPath, []byte("export const label = \"disk\";\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	control, err := CompileProjectDiagnostics(dir, ProjectOptions{})
+	if err != nil {
+		t.Fatalf("census of the unmodified tree: %v (%v)", err, control.Diagnostics)
+	}
+	for _, file := range control.Files {
+		if file.Outcome != FileOutcomeOK {
+			t.Fatalf("unmodified tree is not clean: %s is %q", file.FileName, file.Outcome)
+		}
+	}
+
+	// When the census runs with that overlay
+	census, err := CompileProjectDiagnostics(dir, ProjectOptions{
+		Overlays: map[string]string{helperPath: "export const gone: number = \"not a number\";\n"},
+	})
+	if err != nil {
+		t.Fatalf("CompileProjectDiagnostics: %v (%v)", err, census.Diagnostics)
+	}
+
+	// Then the overlay is counted, its own type error is reported against it,
+	// and the file that imported what it removed is reported too
+	if census.OverlayMatches != 1 {
+		t.Errorf("OverlayMatches = %d, want 1", census.OverlayMatches)
+	}
+	byFile := censusByFile(census)
+	if got := byFile["helper.ts"].Outcome; got != FileOutcomeTypeError {
+		t.Errorf("helper.ts outcome = %q, want %q", got, FileOutcomeTypeError)
+	}
+	if got := byFile["main.ts"].Outcome; got != FileOutcomeTypeError {
+		t.Errorf("main.ts outcome = %q, want %q — the overlay's removed export did not propagate", got, FileOutcomeTypeError)
+	}
+}
+
 func TestCompileFileKeepsOverlaysOnFilesTheSidecarDidNotTransform(t *testing.T) {
 	// Given a plugin project compiled one file at a time — so the sidecar is
 	// asked to transform main.ts and nothing else — and overlays on both files
