@@ -167,19 +167,16 @@ func matchProgramOverlays(program *compiler.Program, opts ProjectOptions) (int, 
 }
 
 // rejectOverlaysWithSidecar refuses the combination of ProjectOptions.Overlays
-// and any project that routes through the transformer sidecar.
+// and the one sidecar route that still answers from disk.
 //
-// The sidecar sends file NAMES to the Node worker, which reads the text off
-// DISK itself, and prepareTransformerProgram then rebuilds the program from the
-// worker's transformed output alone — discarding opts.Overlays entirely. The
-// compile would silently report disk text. Threading overlays through the
-// sidecar protocol is a separate change; until then this is an error, not a
-// silent wrong answer.
+// Transformer plugins used to be refused here too. They no longer are:
+// changedFilesFor ships every overlay to the worker, whose overrides map backs
+// the LanguageService the plugins run against, and applyTransformerSidecar
+// layers the worker's transformed output over the caller's overlays rather than
+// replacing them. Declaration path rewriting is the remainder — it resolves
+// module names through ts.sys instead of the session.
 func rejectOverlaysWithSidecar(program *compiler.Program) error {
-	switch {
-	case projectUsesTransformerPlugins(program.CommandLine()):
-		return errors.New("compile: source overlays are not supported on projects with transformer plugins (the plugin sidecar reads source from disk)")
-	case declarationUsesPathAliases(program):
+	if declarationUsesPathAliases(program) {
 		return errors.New("compile: source overlays are not supported on projects that emit declarations with baseUrl/paths (the declaration sidecar reads source from disk)")
 	}
 	return nil
@@ -601,8 +598,8 @@ type ProjectOptions struct {
 	//   - A key naming no file in the resulting program is an error. See
 	//     matchOverlaysToProgram: a silently ignored overlay yields a clean
 	//     report on the UNMODIFIED tree, which a caller cannot detect.
-	//   - Projects that route through the transformer sidecar cannot be
-	//     overlaid at all. See rejectOverlaysWithSidecar.
+	//   - Projects that emit declarations with baseUrl/paths cannot be overlaid
+	//     at all. See rejectOverlaysWithSidecar.
 	Overlays map[string]string
 
 	// solutionOverlays is set only by CompileSolutionDiagnostics, and only on

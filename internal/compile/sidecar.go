@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -189,7 +190,13 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 		}, nil, nil
 	}
 
-	transformedOverlays := make(map[string]string, len(response.Transformed))
+	// The worker reports transformed text only for the files it was asked to
+	// compile, which on a single-file or incremental route is a subset of the
+	// project. Rebuilding on that alone would read every other file off disk
+	// and drop the caller's overlay on it, so the two layer: transformed text
+	// wins where it exists, the caller's overlay stands everywhere else.
+	transformedOverlays := make(map[string]string, len(overlays)+len(response.Transformed))
+	maps.Copy(transformedOverlays, overlays)
 	caseSensitive := osvfs.FS().UseCaseSensitiveFileNames()
 	for _, file := range response.Transformed {
 		transformedOverlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
@@ -323,8 +330,8 @@ func spawnSidecarSession(dir, sidecarDir string) (*sidecarSession, error) {
 		return nil, err
 	}
 	return &sidecarSession{
-		cmd:    cmd,
-		stdin:  stdin,
+		cmd:      cmd,
+		stdin:    stdin,
 		stdout:   bufio.NewReader(stdout),
 		stderr:   newSidecarStderrTail(stderrPipe),
 		stamps:   map[string]sidecarFileStamp{},

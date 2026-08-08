@@ -219,30 +219,9 @@ func solutionOverlayProgram(t *testing.T, dir string, overlays map[string]string
 	return tracker, err
 }
 
-func TestSolutionOverlaysSpareAPluginProjectTheOverlaysNeverReach(t *testing.T) {
-	// Given a project that declares a transformer plugin, and a solution census
-	// whose overlays all name files in some OTHER project
-	dir := writeCensusProject(t, map[string]string{"clean.ts": censusFiles["clean.ts"]})
-	addTransformerPlugin(t, dir)
-	elsewhere := filepath.Join(t.TempDir(), "src", "other.ts")
-
-	// When this project of the solution is prepared
-	tracker, err := solutionOverlayProgram(t, dir, map[string]string{elsewhere: censusFiles["noany.ts"]})
-
-	// Then it is not refused. Nothing of the caller's reaches this project, so
-	// the sidecar has nothing of theirs to discard and the census it produces
-	// is the same one an overlay-free run would produce. Refusing the whole run
-	// would make --build unusable for any solution holding one plugin project.
-	if err != nil {
-		t.Fatalf("a plugin project no overlay reaches was refused: %v", err)
-	}
-	if got := tracker.unmatched(map[string]string{elsewhere: ""}); len(got) != 1 {
-		t.Errorf("unmatched = %v, want the overlay still owed a match by another project", got)
-	}
-}
-
-func TestSolutionOverlaysRejectAPluginProjectTheyDoReach(t *testing.T) {
-	// Given the same plugin project, and an overlay for a file it holds
+func TestSolutionOverlaysAcceptAPluginProjectTheyReach(t *testing.T) {
+	// Given a project that declares a transformer plugin, and an overlay for a
+	// file it holds
 	dir := writeCensusProject(t, map[string]string{"clean.ts": censusFiles["clean.ts"]})
 	addTransformerPlugin(t, dir)
 
@@ -250,19 +229,13 @@ func TestSolutionOverlaysRejectAPluginProjectTheyDoReach(t *testing.T) {
 	overlaid := filepath.Join(dir, "src", "clean.ts")
 	tracker, err := solutionOverlayProgram(t, dir, map[string]string{overlaid: censusFiles["noany.ts"]})
 
-	// Then it refuses, exactly as a single-project run does. The sidecar would
-	// read that file off disk and discard the overlay, so the census would
-	// report disk text as `ok`.
-	if err == nil {
-		t.Fatal("an overlay landing in a transformer-plugin project was accepted")
+	// Then it is accepted, exactly as a single-project run is, and the overlay
+	// is recorded against the union
+	if err != nil {
+		t.Fatalf("an overlay landing in a transformer-plugin project was refused: %v", err)
 	}
-	if !strings.Contains(err.Error(), "transformer plugin") {
-		t.Errorf("error = %v, want it to name the transformer-plugin limitation", err)
-	}
-	// And the overlay counts as having reached a project, so the run reports
-	// the refusal rather than sending the caller after a phantom typo
 	if got := tracker.unmatched(map[string]string{overlaid: ""}); len(got) != 0 {
-		t.Errorf("unmatched = %v, want the refused project's overlay recorded as matched", got)
+		t.Errorf("unmatched = %v, want the overlay recorded as matched", got)
 	}
 }
 
