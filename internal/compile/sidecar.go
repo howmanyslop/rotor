@@ -227,7 +227,13 @@ type sidecarSession struct {
 	stdout *bufio.Reader
 	stderr *sidecarStderrTail
 	stamps map[string]sidecarFileStamp
-	dead   bool
+	// overlaid names the files whose text in the worker came from a caller
+	// overlay rather than from disk, keyed the way changedFilesFor looks an
+	// overlay up and valued with the path a request carries. The worker's
+	// overrides map outlives the round trip that filled it, so an overlay that
+	// goes away has to be undone by hand.
+	overlaid map[string]string
+	dead     bool
 }
 
 var (
@@ -319,9 +325,10 @@ func spawnSidecarSession(dir, sidecarDir string) (*sidecarSession, error) {
 	return &sidecarSession{
 		cmd:    cmd,
 		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
-		stderr: newSidecarStderrTail(stderrPipe),
-		stamps: map[string]sidecarFileStamp{},
+		stdout:   bufio.NewReader(stdout),
+		stderr:   newSidecarStderrTail(stderrPipe),
+		stamps:   map[string]sidecarFileStamp{},
+		overlaid: map[string]string{},
 	}, nil
 }
 
@@ -404,23 +411,32 @@ func (s *sidecarSession) close() {
 // Overlaid files are the exception to every rule above. An overlay exists
 // nowhere on disk, so a stat tells us nothing about it and a worker left to
 // read disk would answer on text the caller never sent. Each one ships on
-// every round trip, fresh session or not.
+// every round trip, fresh session or not, and an overlay that goes away is
+// undone by resending the disk text: the worker's overrides map outlives the
+// round trip that filled it and would otherwise serve the stale overlay to
+// every later build.
 func (s *sidecarSession) changedFilesFor(fileNames []string, overlays map[string]string) ([]sidecarChangedFile, error) {
 	fresh := len(s.stamps) == 0
 	caseSensitive := osvfs.FS().UseCaseSensitiveFileNames()
 	changed := []sidecarChangedFile{}
 	for _, fileName := range fileNames {
 		path := filepath.FromSlash(fileName)
-		if text, ok := overlays[normalizeOverlayPath(path, caseSensitive)]; ok {
+		key := normalizeOverlayPath(path, caseSensitive)
+		if text, ok := overlays[key]; ok {
 			changed = append(changed, sidecarChangedFile{FileName: path, Text: text})
+			s.overlaid[key] = path
 			continue
 		}
+		_, reverting := s.overlaid[key]
+		delete(s.overlaid, key)
+
 		info, err := os.Stat(path)
 		if err != nil {
 			continue
 		}
 		stamp := sidecarFileStamp{modTime: info.ModTime(), size: info.Size()}
-		if prev, ok := s.stamps[path]; !fresh && (!ok || prev != stamp) {
+		prev, stamped := s.stamps[path]
+		if reverting || (!fresh && (!stamped || prev != stamp)) {
 			text, err := os.ReadFile(path)
 			if err != nil {
 				return nil, err

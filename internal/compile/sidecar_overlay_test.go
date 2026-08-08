@@ -44,6 +44,12 @@ func writeOverlayPluginProject(t *testing.T, pkgName, diskText string) string {
 	return dir
 }
 
+// newOverlayTestSession is a session with only the bookkeeping changedFilesFor
+// touches — no worker, no pipes.
+func newOverlayTestSession() *sidecarSession {
+	return &sidecarSession{stamps: map[string]sidecarFileStamp{}, overlaid: map[string]string{}}
+}
+
 // writeOverlaySourceFile writes one file and returns the pair changedFilesFor
 // works in: the slash-form name a program reports, and the native path a
 // request carries.
@@ -60,7 +66,7 @@ func TestChangedFilesForShipsOverlaysOnAFreshSession(t *testing.T) {
 	// Given a fresh session — one that ships nothing, because the worker reads
 	// disk itself — and an overlay for its only file
 	fileName, nativePath := writeOverlaySourceFile(t, "disk\n")
-	session := &sidecarSession{stamps: map[string]sidecarFileStamp{}}
+	session := newOverlayTestSession()
 
 	// When the round trip's changed files are collected
 	changed, err := session.changedFilesFor([]string{fileName}, normalizeOverlays(map[string]string{nativePath: "overlay\n"}))
@@ -84,7 +90,7 @@ func TestChangedFilesForShipsOverlaysOnAFreshSession(t *testing.T) {
 func TestChangedFilesForLeavesUnoverlaidFilesToTheWorker(t *testing.T) {
 	// Given a fresh session and no overlays
 	fileName, _ := writeOverlaySourceFile(t, "disk\n")
-	session := &sidecarSession{stamps: map[string]sidecarFileStamp{}}
+	session := newOverlayTestSession()
 
 	// When the round trip's changed files are collected
 	changed, err := session.changedFilesFor([]string{fileName}, nil)
@@ -95,6 +101,36 @@ func TestChangedFilesForLeavesUnoverlaidFilesToTheWorker(t *testing.T) {
 	// Then nothing ships — the fresh-session contract is unchanged
 	if len(changed) != 0 {
 		t.Fatalf("changed = %v, want nothing on a fresh session", changed)
+	}
+}
+
+func TestChangedFilesForRevertsAnOverlayThatWentAway(t *testing.T) {
+	// Given a session that shipped an overlay on an earlier round trip
+	fileName, nativePath := writeOverlaySourceFile(t, "disk\n")
+	session := newOverlayTestSession()
+	if _, err := session.changedFilesFor([]string{fileName}, normalizeOverlays(map[string]string{nativePath: "overlay\n"})); err != nil {
+		t.Fatalf("first round trip: %v", err)
+	}
+
+	// When the next round trip has no overlay for it
+	changed, err := session.changedFilesFor([]string{fileName}, nil)
+	if err != nil {
+		t.Fatalf("second round trip: %v", err)
+	}
+
+	// Then the disk text ships, because the worker's overrides map outlives the
+	// round trip that filled it and would otherwise serve the stale overlay
+	if len(changed) != 1 || changed[0].Text != "disk\n" {
+		t.Fatalf("changed = %v, want the disk text resent", changed)
+	}
+
+	// And once reverted it stays quiet
+	changed, err = session.changedFilesFor([]string{fileName}, nil)
+	if err != nil {
+		t.Fatalf("third round trip: %v", err)
+	}
+	if len(changed) != 0 {
+		t.Fatalf("changed = %v, want nothing once the revert landed", changed)
 	}
 }
 
