@@ -474,8 +474,8 @@ func (s *sidecarSession) changedFilesFor(fileNames []string, overlays map[string
 // A file that has since left the disk is dropped from the stamps instead: there
 // is nothing to restore, and the next stat-diff should treat it as new.
 //
-// @param overlaid - This round trip's overlays, by normalized key.
-// @returns The disk text to resend, in a stable order.
+// overlaid is this round trip's overlays, keyed the way normalizeOverlayPath
+// keys them.
 func (s *sidecarSession) revertDroppedOverlays(overlaid map[string]sidecarChangedFile) []sidecarChangedFile {
 	changed := []sidecarChangedFile{}
 	for _, key := range slices.Sorted(maps.Keys(s.overlaid)) {
