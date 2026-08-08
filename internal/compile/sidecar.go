@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"runtime/trace"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -86,10 +87,6 @@ func prepareProjectProgramForCompile(dir string, program *compiler.Program, sour
 		return nil, nil, nil, diags, err
 	}
 	return prepared.program, prepared.sourceFiles, prepared.sourceTraces, nil, nil
-}
-
-func prepareProjectProgramForBuild(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile, overlays map[string]string) (*preparedTransformerProgram, []string, error) {
-	return prepareTransformerProgram(dir, program, sourceFiles, overlays)
 }
 
 func prepareTransformerProgram(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile, overlays map[string]string) (*preparedTransformerProgram, []string, error) {
@@ -195,8 +192,7 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 	// project. Rebuilding on that alone would read every other file off disk
 	// and drop the caller's overlay on it, so the two layer: transformed text
 	// wins where it exists, the caller's overlay stands everywhere else.
-	transformedOverlays := make(map[string]string, len(overlays)+len(response.Transformed))
-	maps.Copy(transformedOverlays, overlays)
+	transformedOverlays := normalizeOverlays(overlays)
 	caseSensitive := osvfs.FS().UseCaseSensitiveFileNames()
 	for _, file := range response.Transformed {
 		transformedOverlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
@@ -415,35 +411,46 @@ func (s *sidecarSession) close() {
 // reads from disk); warm sessions ship new text so the LanguageService
 // snapshot versions advance (upstream updateFile semantics).
 //
-// Overlaid files are the exception to every rule above. An overlay exists
-// nowhere on disk, so a stat tells us nothing about it and a worker left to
-// read disk would answer on text the caller never sent. Each one ships on
-// every round trip, fresh session or not, and an overlay that goes away is
-// undone by resending the disk text: the worker's overrides map outlives the
-// round trip that filled it and would otherwise serve the stale overlay to
-// every later build.
+// Overlaid files are outside all of that. An overlay exists nowhere on disk,
+// so a stat says nothing about it and a worker left to read disk would answer
+// on text the caller never sent. Each one ships on every round trip, fresh
+// session or not, and the stat-diff skips it.
+//
+// Overlays are keyed by the caller's spelling, so they are matched to fileNames
+// through normalizeOverlayPath rather than compared directly.
 func (s *sidecarSession) changedFilesFor(fileNames []string, overlays map[string]string) ([]sidecarChangedFile, error) {
 	fresh := len(s.stamps) == 0
 	caseSensitive := osvfs.FS().UseCaseSensitiveFileNames()
-	changed := []sidecarChangedFile{}
+	overlaid := make(map[string]sidecarChangedFile, len(overlays))
+	for path, text := range overlays {
+		key := normalizeOverlayPath(path, caseSensitive)
+		overlaid[key] = sidecarChangedFile{FileName: filepath.FromSlash(path), Text: text}
+	}
+
+	changed := s.revertDroppedOverlays(overlaid)
+	for _, key := range slices.Sorted(maps.Keys(overlaid)) {
+		changed = append(changed, overlaid[key])
+		s.overlaid[key] = overlaid[key].FileName
+	}
+
+	// A build with no overlays takes the stat-diff exactly as it was before
+	// overlays existed. Keying every project file costs a Clean, a FromSlash
+	// and (off a case-sensitive filesystem) a ToLower per file, for a lookup
+	// that cannot hit.
+	overlayAware := len(overlaid) > 0
 	for _, fileName := range fileNames {
 		path := filepath.FromSlash(fileName)
-		key := normalizeOverlayPath(path, caseSensitive)
-		if text, ok := overlays[key]; ok {
-			changed = append(changed, sidecarChangedFile{FileName: path, Text: text})
-			s.overlaid[key] = path
-			continue
+		if overlayAware {
+			if _, ok := overlaid[normalizeOverlayPath(path, caseSensitive)]; ok {
+				continue
+			}
 		}
-		_, reverting := s.overlaid[key]
-		delete(s.overlaid, key)
-
 		info, err := os.Stat(path)
 		if err != nil {
 			continue
 		}
 		stamp := sidecarFileStamp{modTime: info.ModTime(), size: info.Size()}
-		prev, stamped := s.stamps[path]
-		if reverting || (!fresh && (!stamped || prev != stamp)) {
+		if prev, ok := s.stamps[path]; !fresh && (!ok || prev != stamp) {
 			text, err := os.ReadFile(path)
 			if err != nil {
 				return nil, err
@@ -453,6 +460,41 @@ func (s *sidecarSession) changedFilesFor(fileNames []string, overlays map[string
 		s.stamps[path] = stamp
 	}
 	return changed, nil
+}
+
+// revertDroppedOverlays undoes the overlays this round trip no longer carries,
+// by resending each file's disk text.
+//
+// The worker's override map outlives the request that filled it, so without
+// this a file overlaid once stays overlaid for every later build in the
+// process. Resending the disk text puts the override back where the worker
+// would have read it from anyway. Stamping the file at the same time keeps the
+// stat-diff below from sending it a second time.
+//
+// A file that has since left the disk is dropped from the stamps instead: there
+// is nothing to restore, and the next stat-diff should treat it as new.
+//
+// @param overlaid - This round trip's overlays, by normalized key.
+// @returns The disk text to resend, in a stable order.
+func (s *sidecarSession) revertDroppedOverlays(overlaid map[string]sidecarChangedFile) []sidecarChangedFile {
+	changed := []sidecarChangedFile{}
+	for _, key := range slices.Sorted(maps.Keys(s.overlaid)) {
+		if _, ok := overlaid[key]; ok {
+			continue
+		}
+		path := s.overlaid[key]
+		delete(s.overlaid, key)
+
+		text, err := os.ReadFile(path)
+		info, statErr := os.Stat(path)
+		if err != nil || statErr != nil {
+			delete(s.stamps, path)
+			continue
+		}
+		changed = append(changed, sidecarChangedFile{FileName: path, Text: string(text)})
+		s.stamps[path] = sidecarFileStamp{modTime: info.ModTime(), size: info.Size()}
+	}
+	return changed
 }
 
 func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*ast.SourceFile, overlays map[string]string) (*sidecarResponse, error) {

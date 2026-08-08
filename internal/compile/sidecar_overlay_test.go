@@ -7,45 +7,19 @@ import (
 	"testing"
 )
 
-// taggingPlugin rewrites string literals the way prefixStringPlugin does, but
-// leaves import and export specifiers alone so a fixture can span more than one
-// file. It has to change something: the worker reports a file as transformed
-// only when the transform returned a new node, and an unchanged project takes
-// the early return instead of the program rebuild.
-const taggingPlugin = `const ts = require("typescript");
-
-module.exports = function programTransformer() {
-	return (context) => {
-		const visit = (node) => {
-			if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
-				return node;
-			}
-			if (ts.isStringLiteral(node)) {
-				return ts.factory.createStringLiteral("seen:" + node.text);
-			}
-			return ts.visitEachChild(node, visit, context);
-		};
-		return (sourceFile) => ts.visitNode(sourceFile, visit);
-	};
-};
-`
-
 // writeOverlayPluginProject is the shared fixture for the sidecar overlay
-// tests: one named plugin over a src/main.ts, which is enough to route the
-// project through the sidecar.
-func writeOverlayPluginProject(t *testing.T, pkgName, pluginFile, pluginSource, diskText string) string {
+// tests: prefixStringPlugin over a src/main.ts, which is enough to route the
+// project through the sidecar. The plugin has to change something — the worker
+// reports a file as transformed only when the transform returned a new node,
+// and an unchanged project takes the early return instead of the program
+// rebuild — so every diskText here carries a string literal.
+func writeOverlayPluginProject(t *testing.T, pkgName, diskText string) string {
 	t.Helper()
 	setRepoSidecarPath(t)
 	closeSidecarSessions()
 	dir := writeProject(t, pkgName, "")
 	t.Cleanup(closeSidecarSessions)
-	if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "plugins", pluginFile), []byte(pluginSource), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	tsconfig := `{
+	writeSidecarPluginFixture(t, dir, "", `{
 	"compilerOptions": {
 		"allowSyntheticDefaultImports": true,
 		"module": "CommonJS",
@@ -60,16 +34,13 @@ func writeOverlayPluginProject(t *testing.T, pkgName, pluginFile, pluginSource, 
 		"outDir": "out",
 		"plugins": [
 			{
-				"transform": "./plugins/` + pluginFile + `",
+				"transform": "./plugins/prefix-string.js",
 				"prefix": "plugin"
 			}
 		]
 	},
 	"include": ["src"]
-}`
-	if err := os.WriteFile(filepath.Join(dir, "tsconfig.json"), []byte(tsconfig), 0o644); err != nil {
-		t.Fatal(err)
-	}
+}`)
 	if err := os.WriteFile(filepath.Join(dir, "src", "main.ts"), []byte(diskText), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +72,7 @@ func TestChangedFilesForShipsOverlaysOnAFreshSession(t *testing.T) {
 	session := newOverlayTestSession()
 
 	// When the round trip's changed files are collected
-	changed, err := session.changedFilesFor([]string{fileName}, normalizeOverlays(map[string]string{nativePath: "overlay\n"}))
+	changed, err := session.changedFilesFor([]string{fileName}, map[string]string{nativePath: "overlay\n"})
 	if err != nil {
 		t.Fatalf("changedFilesFor: %v", err)
 	}
@@ -136,11 +107,43 @@ func TestChangedFilesForLeavesUnoverlaidFilesToTheWorker(t *testing.T) {
 	}
 }
 
+func TestChangedFilesForShipsOverlaysOutsideTheStampedSet(t *testing.T) {
+	// Given an overlay for a file the stamp list does not carry. The stamp list
+	// is projectSourceFiles, which drops declaration files, project-reference
+	// sources and anything that is not .ts/.tsx — while an overlay only has to
+	// name a file the program holds.
+	stamped, _ := writeOverlaySourceFile(t, "disk\n")
+	ambient := filepath.Join(filepath.Dir(stamped), "types.d.ts")
+	if err := os.WriteFile(ambient, []byte("declare const disk: number;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	session := newOverlayTestSession()
+
+	// When the round trip's changed files are collected
+	changed, err := session.changedFilesFor([]string{stamped}, map[string]string{ambient: "declare const overlaid: number;\n"})
+	if err != nil {
+		t.Fatalf("changedFilesFor: %v", err)
+	}
+
+	// Then it ships anyway, under the caller's spelling. An overlay the worker
+	// never hears about leaves its plugins typing against disk while rotor's
+	// own program types against the overlay — the two disagree silently.
+	if len(changed) != 1 {
+		t.Fatalf("changed = %v, want the unstamped overlay", changed)
+	}
+	if changed[0].FileName != ambient {
+		t.Errorf("fileName = %q, want %q", changed[0].FileName, ambient)
+	}
+	if changed[0].Text != "declare const overlaid: number;\n" {
+		t.Errorf("text = %q, want the overlay's", changed[0].Text)
+	}
+}
+
 func TestChangedFilesForRevertsAnOverlayThatWentAway(t *testing.T) {
 	// Given a session that shipped an overlay on an earlier round trip
 	fileName, nativePath := writeOverlaySourceFile(t, "disk\n")
 	session := newOverlayTestSession()
-	if _, err := session.changedFilesFor([]string{fileName}, normalizeOverlays(map[string]string{nativePath: "overlay\n"})); err != nil {
+	if _, err := session.changedFilesFor([]string{fileName}, map[string]string{nativePath: "overlay\n"}); err != nil {
 		t.Fatalf("first round trip: %v", err)
 	}
 
@@ -169,7 +172,7 @@ func TestChangedFilesForRevertsAnOverlayThatWentAway(t *testing.T) {
 func TestCompileFileKeepsOverlaysOnFilesTheSidecarDidNotTransform(t *testing.T) {
 	// Given a plugin project compiled one file at a time — so the sidecar is
 	// asked to transform main.ts and nothing else — and overlays on both files
-	dir := writeOverlayPluginProject(t, "@scope/overlay-partial-fixture", "tagging.js", taggingPlugin,
+	dir := writeOverlayPluginProject(t, "@scope/overlay-partial-fixture",
 		"import { label } from \"./helper\";\nexport const tag = \"main\";\nexport const joined = label + label;\n")
 	helperPath := filepath.Join(dir, "src", "helper.ts")
 	if err := os.WriteFile(helperPath, []byte("export const label = 1;\n"), 0o644); err != nil {
@@ -235,7 +238,7 @@ func TestBuildProjectOverlaysReachDeclarationPathRewriting(t *testing.T) {
 func TestBuildProjectOverlaysReachTransformerPlugins(t *testing.T) {
 	// Given a plugin project whose file on disk says one thing, and an overlay
 	// that says another
-	dir := writeOverlayPluginProject(t, "@scope/overlay-plugin-fixture", "prefix-string.js", prefixStringPlugin,
+	dir := writeOverlayPluginProject(t, "@scope/overlay-plugin-fixture",
 		"export const phase = \"disk\";\n")
 	mainPath := filepath.Join(dir, "src", "main.ts")
 

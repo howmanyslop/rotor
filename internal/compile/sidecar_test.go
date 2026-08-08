@@ -45,6 +45,9 @@ module.exports = function programTransformer(program, config, helpers) {
 
 	return (context) => {
 		const visit = (node) => {
+			if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+				return node;
+			}
 			if (ts.isStringLiteral(node)) {
 				return ts.factory.createStringLiteral(config.prefix + ":" + node.text);
 			}
