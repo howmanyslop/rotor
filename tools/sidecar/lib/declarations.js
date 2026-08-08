@@ -3,7 +3,10 @@ const path = require("node:path");
 const typeReferencePackage = "types";
 const typeReferenceScope = "@rbxts/";
 
-function createDeclarationTransformers(ts, program, moduleResolutionHost = ts.sys) {
+// moduleResolutionHost is required rather than defaulted to ts.sys: a default
+// would silently resolve against disk, which is the behavior the session's
+// override map exists to replace.
+function createDeclarationTransformers(ts, program, moduleResolutionHost) {
   return [transformTypeReferenceDirectives(ts), transformPaths(ts, program, moduleResolutionHost)];
 }
 

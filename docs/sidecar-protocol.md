@@ -57,8 +57,15 @@ Edits are communicated via `changedFiles`: rotor stat-diffs the project's
 `.ts`/`.tsx` files against the session's last-seen stamps and ships new text
 for anything that changed, which bumps the worker's LanguageService script
 versions (upstream `updateFile` semantics). A request on a fresh worker sends
-no overlays — the worker reads from disk. If a worker dies mid-request, rotor
-respawns it once and retries.
+no changed files — the worker reads from disk. If a worker dies mid-request,
+rotor respawns it once and retries.
+
+**Caller source overlays** (`ProjectOptions.Overlays`, which `rotor
+diagnostics` fills from its stdin request) ride the same field, under
+different rules. An overlay exists nowhere on disk, so no stat describes it:
+each one ships on every round trip, fresh worker or not. An overlay the next
+round trip drops is undone by resending the file's disk text, because the
+worker's override map outlives the request that filled it.
 
 Known limitation: a warm worker's *plugin-visible* view of an edited ambient
 `.d.ts` can be stale until the watch session restarts (stamps cover the

@@ -43,32 +43,13 @@ func matchOverlaysToProgram(program *compiler.Program, overlays map[string]strin
 }
 
 // matchSolutionOverlaysToProgram is matchOverlaysToProgram for one project of a
-// solution census, where neither of its two rules can be applied as they stand.
-//
-// A solution's files are split between its projects, so "every overlay must
-// match" is only answerable against the union of all of them — the caller's
-// solutionOverlayMatches collects the matches and checks that union once, after
-// every project has run.
-//
-// The transformer-plugin refusal narrows the same way. It exists because the
-// sidecar reads source off DISK and rebuilds the program from its own output,
-// discarding the caller's overlays — a silently wrong answer. That can only
-// happen to a project the overlays actually reach. A solution may reference a
-// plugin project the census never overlays; refusing the whole run for it would
-// make --build unusable for exactly the projects that need it, and would refuse
-// a run in which nothing of the caller's could be discarded.
+// solution census. A solution's files are split between its projects, so "every
+// overlay must match" is only answerable against the union of all of them: this
+// records what one project matched, and the caller's solutionOverlayMatches
+// checks the union once, after every project has run.
 func matchSolutionOverlaysToProgram(program *compiler.Program, overlays map[string]string, tracker *solutionOverlayMatches) (int, error) {
 	matched, _ := overlayKeysInProgram(program, overlays)
-	// Recorded before the refusal below, not after: an overlay that reached a
-	// project rotor then refused did reach a project, and reporting it as
-	// matching nothing anywhere would send the caller looking for a typo
-	// instead of reading the refusal.
 	tracker.record(matched)
-	if len(matched) > 0 {
-		if err := rejectOverlaysWithSidecar(program); err != nil {
-			return 0, err
-		}
-	}
 	return len(matched), nil
 }
 

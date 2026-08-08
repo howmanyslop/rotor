@@ -151,38 +151,15 @@ func newProjectProgramWithOptions(projectDir, tsConfigPath string, opts ProjectO
 // matchProgramOverlays checks the overlays against the program they were
 // applied to, and reports how many of them landed on a file it holds.
 //
-// The two rules — every overlay must match something, and a project the sidecar
-// transforms cannot be overlaid at all — are scoped to one program when there
-// is only one, and to the whole solution when opts came from
-// CompileSolutionDiagnostics. See matchSolutionOverlaysToProgram for why they
+// The rule — every overlay must match something — is scoped to one program when
+// there is only one, and to the whole solution when opts came from
+// CompileSolutionDiagnostics. See matchSolutionOverlaysToProgram for why it
 // cannot be applied per project under --build.
 func matchProgramOverlays(program *compiler.Program, opts ProjectOptions) (int, error) {
 	if opts.solutionOverlays != nil {
 		return matchSolutionOverlaysToProgram(program, opts.Overlays, opts.solutionOverlays)
 	}
-	if err := rejectOverlaysWithSidecar(program); err != nil {
-		return 0, err
-	}
 	return matchOverlaysToProgram(program, opts.Overlays)
-}
-
-// rejectOverlaysWithSidecar refuses the combination of ProjectOptions.Overlays
-// and any project that routes through the transformer sidecar.
-//
-// The sidecar sends file NAMES to the Node worker, which reads the text off
-// DISK itself, and prepareTransformerProgram then rebuilds the program from the
-// worker's transformed output alone — discarding opts.Overlays entirely. The
-// compile would silently report disk text. Threading overlays through the
-// sidecar protocol is a separate change; until then this is an error, not a
-// silent wrong answer.
-func rejectOverlaysWithSidecar(program *compiler.Program) error {
-	switch {
-	case projectUsesTransformerPlugins(program.CommandLine()):
-		return errors.New("compile: source overlays are not supported on projects with transformer plugins (the plugin sidecar reads source from disk)")
-	case declarationUsesPathAliases(program):
-		return errors.New("compile: source overlays are not supported on projects that emit declarations with baseUrl/paths (the declaration sidecar reads source from disk)")
-	}
-	return nil
 }
 
 // projectIsPackage ports the isPackage detection of createProjectData.ts
@@ -594,15 +571,17 @@ type ProjectOptions struct {
 	// is). Nothing is written back to disk. Empty (the default) leaves the
 	// filesystem wrapping byte-for-byte as it was before overlays existed.
 	//
-	// Three limits, all enforced rather than silently tolerated:
+	// Two limits, both enforced rather than silently tolerated:
 	//   - Overlays REPLACE files; they cannot ADD one. newOverlayFS overrides
 	//     FileExists and ReadFile, not directory enumeration, so a path the
 	//     tsconfig include never walks to is never asked for.
 	//   - A key naming no file in the resulting program is an error. See
 	//     matchOverlaysToProgram: a silently ignored overlay yields a clean
 	//     report on the UNMODIFIED tree, which a caller cannot detect.
-	//   - Projects that route through the transformer sidecar cannot be
-	//     overlaid at all. See rejectOverlaysWithSidecar.
+	//
+	// Projects with transformer plugins are not a limit. changedFilesFor ships
+	// every overlay to the Node worker, whose overrides map backs the
+	// LanguageService the plugins and the declaration emit both run against.
 	Overlays map[string]string
 
 	// solutionOverlays is set only by CompileSolutionDiagnostics, and only on
@@ -692,7 +671,7 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 
 func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOptions) (map[string]string, []DiagnosticInfo, error) {
 	sourceFiles := projectSourceFiles(program)
-	program, sourceFiles, traces, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles)
+	program, sourceFiles, traces, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles, opts.Overlays)
 	if err != nil {
 		return nil, stringDiagnostics(diags), err
 	}

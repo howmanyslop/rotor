@@ -96,7 +96,7 @@ func transformStateForFile(t *testing.T, dir, relPath string) *transformer.State
 	if sourceFile == nil {
 		t.Fatalf("source file not in program: %s", filePath)
 	}
-	program, prepared, traces, diags, err := prepareProjectProgramForCompile(absDir, program, []*ast.SourceFile{sourceFile})
+	program, prepared, traces, diags, err := prepareProjectProgramForCompile(absDir, program, []*ast.SourceFile{sourceFile}, nil)
 	if err != nil {
 		t.Fatalf("prepareProjectProgramForCompile: %v (diags: %v)", err, diags)
 	}
@@ -491,25 +491,29 @@ func addTransformerPlugin(t *testing.T, dir string) {
 	}
 }
 
-func TestCompileProjectOverlaysWithTransformerPluginsAreRejected(t *testing.T) {
-	// Given a project with a transformer plugin, and an overlay
+func TestCompileProjectOverlaysWithTransformerPluginsAreAccepted(t *testing.T) {
+	// Given a project with a transformer plugin, and an overlay for a file it
+	// holds
 	dir := writeCensusProject(t, map[string]string{"clean.ts": censusFiles["clean.ts"]})
 	addTransformerPlugin(t, dir)
 	cleanPath := filepath.Join(dir, "src", "clean.ts")
 
-	// When a census is asked for
-	_, err := CompileProjectDiagnostics(dir, ProjectOptions{
+	// When the overlays are matched against the program
+	_, program, _, err := newProjectProgramWithOptions(dir, "", ProjectOptions{})
+	if err != nil {
+		t.Fatalf("newProjectProgramWithOptions: %v", err)
+	}
+	matched, err := matchProgramOverlays(program, ProjectOptions{
 		Overlays: map[string]string{cleanPath: censusFiles["noany.ts"]},
 	})
 
-	// Then it refuses. The sidecar sends file NAMES and reads disk itself, then
-	// rebuilds the program on its own overlays alone — so the overlays would be
-	// discarded and the census would report disk text as `ok`.
-	if err == nil {
-		t.Fatal("overlays combined with transformer plugins were accepted")
+	// Then the plugin does not disqualify them. The worker holds the overlay
+	// text, so the census reports on what the caller sent.
+	if err != nil {
+		t.Fatalf("overlays on a transformer-plugin project were refused: %v", err)
 	}
-	if !strings.Contains(err.Error(), "transformer plugin") {
-		t.Errorf("error = %v, want it to name the transformer-plugin limitation", err)
+	if matched != 1 {
+		t.Errorf("matched = %d, want 1", matched)
 	}
 }
 
@@ -590,7 +594,7 @@ func censusCompileOutputs(t *testing.T, dir string) map[string]string {
 		t.Fatalf("newProjectProgramWithOptions: %v (diags: %v)", err, diags)
 	}
 	sourceFiles := projectSourceFiles(program)
-	program, sourceFiles, prepTraces, prepDiags, err := prepareProjectProgramForCompile(absDir, program, sourceFiles)
+	program, sourceFiles, prepTraces, prepDiags, err := prepareProjectProgramForCompile(absDir, program, sourceFiles, nil)
 	if err != nil {
 		t.Fatalf("prepareProjectProgramForCompile: %v (diags: %v)", err, prepDiags)
 	}
