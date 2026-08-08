@@ -193,6 +193,45 @@ func TestCompileFileKeepsOverlaysOnFilesTheSidecarDidNotTransform(t *testing.T) 
 	}
 }
 
+func TestBuildProjectOverlaysReachDeclarationPathRewriting(t *testing.T) {
+	// Given a project that emits declarations through `paths`, and an overlay
+	// that is the only thing importing the alias
+	setRepoSidecarPath(t)
+	closeSidecarSessions()
+	dir := writeProject(t, "@scope/overlay-declaration-fixture", "")
+	t.Cleanup(closeSidecarSessions)
+	writeSidecarPluginFixture(t, dir, "", strings.Replace(
+		sidecarDeclarationConfig(`[]`),
+		`"outDir": "out",`,
+		`"outDir": "out", "baseUrl": ".", "paths": { "@alias/*": ["src/*"] },`,
+		1,
+	))
+	if err := os.WriteFile(filepath.Join(dir, "src", "value.ts"), []byte("export interface Value { label: string; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainPath := filepath.Join(dir, "src", "main.ts")
+	if err := os.WriteFile(mainPath, []byte("export type Output = string;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// When the project is built with that overlay
+	if _, diags, err := BuildProjectWithOptions(dir, ProjectOptions{
+		Overlays: map[string]string{mainPath: "import type { Value } from \"@alias/value\";\nexport type Output = Value;\n"},
+	}); err != nil {
+		t.Fatalf("BuildProjectWithOptions: %v (diags: %v)", err, diags)
+	}
+
+	// Then the declaration carries the overlay's import, rewritten off the
+	// alias — the emit saw the overlay and resolved against the same file view
+	declaration, err := os.ReadFile(filepath.Join(dir, "out", "main.d.ts"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(declaration), `from "./value"`) {
+		t.Fatalf("declaration did not come from the overlay:\n%s", declaration)
+	}
+}
+
 func TestBuildProjectOverlaysReachTransformerPlugins(t *testing.T) {
 	// Given a plugin project whose file on disk says one thing, and an overlay
 	// that says another

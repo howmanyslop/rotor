@@ -119,6 +119,21 @@ class SidecarProjectSession {
     return actualPath;
   }
 
+  // moduleResolutionHost backs declaration path rewriting with the same file
+  // view the LanguageService has. ts.sys would answer from disk, so an overlay
+  // that adds an import would be resolved against a tree that does not have it.
+  moduleResolutionHost() {
+    return {
+      fileExists: (fileName) => this.fileExists(fileName),
+      readFile: (fileName) => this.readFile(fileName),
+      directoryExists: this.ts.sys.directoryExists,
+      getCurrentDirectory: () => this.projectDir,
+      getDirectories: this.ts.sys.getDirectories,
+      realpath: this.ts.sys.realpath,
+      useCaseSensitiveFileNames: this.ts.sys.useCaseSensitiveFileNames,
+    };
+  }
+
   getScriptFileNames() {
     const fileNames = [];
     for (const [canonical, actualPath] of this.actualPaths.entries()) {
@@ -233,7 +248,7 @@ class SidecarProjectSession {
     const declarations = [];
     const afterDeclarations = [
       ...wrapTransformersWithParentFix(this.ts, transforms.afterDeclarations),
-      ...createDeclarationTransformers(this.ts, program),
+      ...createDeclarationTransformers(this.ts, program, this.moduleResolutionHost()),
     ];
     const customTransformers = { afterDeclarations };
     const diagnostics = [];

@@ -151,35 +151,15 @@ func newProjectProgramWithOptions(projectDir, tsConfigPath string, opts ProjectO
 // matchProgramOverlays checks the overlays against the program they were
 // applied to, and reports how many of them landed on a file it holds.
 //
-// The two rules — every overlay must match something, and a project the sidecar
-// transforms cannot be overlaid at all — are scoped to one program when there
-// is only one, and to the whole solution when opts came from
-// CompileSolutionDiagnostics. See matchSolutionOverlaysToProgram for why they
+// The rule — every overlay must match something — is scoped to one program when
+// there is only one, and to the whole solution when opts came from
+// CompileSolutionDiagnostics. See matchSolutionOverlaysToProgram for why it
 // cannot be applied per project under --build.
 func matchProgramOverlays(program *compiler.Program, opts ProjectOptions) (int, error) {
 	if opts.solutionOverlays != nil {
 		return matchSolutionOverlaysToProgram(program, opts.Overlays, opts.solutionOverlays)
 	}
-	if err := rejectOverlaysWithSidecar(program); err != nil {
-		return 0, err
-	}
 	return matchOverlaysToProgram(program, opts.Overlays)
-}
-
-// rejectOverlaysWithSidecar refuses the combination of ProjectOptions.Overlays
-// and the one sidecar route that still answers from disk.
-//
-// Transformer plugins used to be refused here too. They no longer are:
-// changedFilesFor ships every overlay to the worker, whose overrides map backs
-// the LanguageService the plugins run against, and applyTransformerSidecar
-// layers the worker's transformed output over the caller's overlays rather than
-// replacing them. Declaration path rewriting is the remainder — it resolves
-// module names through ts.sys instead of the session.
-func rejectOverlaysWithSidecar(program *compiler.Program) error {
-	if declarationUsesPathAliases(program) {
-		return errors.New("compile: source overlays are not supported on projects that emit declarations with baseUrl/paths (the declaration sidecar reads source from disk)")
-	}
-	return nil
 }
 
 // projectIsPackage ports the isPackage detection of createProjectData.ts
@@ -591,15 +571,17 @@ type ProjectOptions struct {
 	// is). Nothing is written back to disk. Empty (the default) leaves the
 	// filesystem wrapping byte-for-byte as it was before overlays existed.
 	//
-	// Three limits, all enforced rather than silently tolerated:
+	// Two limits, both enforced rather than silently tolerated:
 	//   - Overlays REPLACE files; they cannot ADD one. newOverlayFS overrides
 	//     FileExists and ReadFile, not directory enumeration, so a path the
 	//     tsconfig include never walks to is never asked for.
 	//   - A key naming no file in the resulting program is an error. See
 	//     matchOverlaysToProgram: a silently ignored overlay yields a clean
 	//     report on the UNMODIFIED tree, which a caller cannot detect.
-	//   - Projects that emit declarations with baseUrl/paths cannot be overlaid
-	//     at all. See rejectOverlaysWithSidecar.
+	//
+	// Projects with transformer plugins are not a limit. changedFilesFor ships
+	// every overlay to the Node worker, whose overrides map backs the
+	// LanguageService the plugins and the declaration emit both run against.
 	Overlays map[string]string
 
 	// solutionOverlays is set only by CompileSolutionDiagnostics, and only on
