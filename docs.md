@@ -203,14 +203,12 @@ cannot carry a project's worth of source, which is why this is stdin.
   overlays, not per-project matches.
 - Unknown top-level fields in the request are rejected, so a typo'd wrapper key
   fails instead of parsing to an empty overlay set.
-- Overlays **cannot be combined with transformer plugins** (or with declaration
-  emit through `baseUrl`/`paths`). Those route through the Node sidecar, which
-  is handed file *names* and reads the text off disk itself; the overlays would
-  be silently discarded and disk text reported as `ok`. The combination is
-  refused instead. Under `--build` the refusal is per project and fires only
-  where an overlay actually lands: a solution may reference a plugin project
-  the census never overlays, and refusing the whole run for it would refuse a
-  run in which nothing of yours could be discarded.
+- Overlays work on projects with **transformer plugins**, so you can census
+  your real build tsconfig rather than authoring a plugin-free copy of it. The
+  text ships to the Node sidecar as a changed file, the worker's plugins run
+  against it, and the program rotor rebuilds from the worker's output keeps
+  your overlay on every file the worker was not asked to transform. Declaration
+  emit through `baseUrl`/`paths` resolves module names against the same view.
 
 #### Solutions (`--build`)
 
