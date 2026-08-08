@@ -96,7 +96,7 @@ func transformStateForFile(t *testing.T, dir, relPath string) *transformer.State
 	if sourceFile == nil {
 		t.Fatalf("source file not in program: %s", filePath)
 	}
-	program, prepared, traces, diags, err := prepareProjectProgramForCompile(absDir, program, []*ast.SourceFile{sourceFile})
+	program, prepared, traces, diags, err := prepareProjectProgramForCompile(absDir, program, []*ast.SourceFile{sourceFile}, nil)
 	if err != nil {
 		t.Fatalf("prepareProjectProgramForCompile: %v (diags: %v)", err, diags)
 	}
@@ -590,7 +590,7 @@ func censusCompileOutputs(t *testing.T, dir string) map[string]string {
 		t.Fatalf("newProjectProgramWithOptions: %v (diags: %v)", err, diags)
 	}
 	sourceFiles := projectSourceFiles(program)
-	program, sourceFiles, prepTraces, prepDiags, err := prepareProjectProgramForCompile(absDir, program, sourceFiles)
+	program, sourceFiles, prepTraces, prepDiags, err := prepareProjectProgramForCompile(absDir, program, sourceFiles, nil)
 	if err != nil {
 		t.Fatalf("prepareProjectProgramForCompile: %v (diags: %v)", err, prepDiags)
 	}

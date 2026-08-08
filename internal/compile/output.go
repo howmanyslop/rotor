@@ -128,7 +128,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 			msg := "Option 'emitDeclarationOnly' cannot be specified without specifying option 'declaration' or option 'composite'."
 			return nil, []string{msg}, errors.New("compile: TypeScript diagnostics")
 		}
-		prepared, sidecarDiags, err := prepareProjectProgramForBuild(dir, program, sourceFiles)
+		prepared, sidecarDiags, err := prepareProjectProgramForBuild(dir, program, sourceFiles, normalizeOverlays(opts.Overlays))
 		if err != nil {
 			return nil, sidecarDiags, err
 		}
@@ -241,7 +241,7 @@ func BuildProjectWithOptions(projectDir string, opts ProjectOptions) (*BuildResu
 		}
 	}
 
-	prepared, diags, err := prepareProjectProgramForBuild(dir, program, selectedFiles)
+	prepared, diags, err := prepareProjectProgramForBuild(dir, program, selectedFiles, normalizeOverlays(opts.Overlays))
 	if err != nil {
 		return nil, diags, err
 	}

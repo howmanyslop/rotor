@@ -79,19 +79,19 @@ type preparedTransformerProgram struct {
 	overlayProgramRecorded   bool
 }
 
-func prepareProjectProgramForCompile(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*compiler.Program, []*ast.SourceFile, diagnosticTraces, []string, error) {
-	prepared, diags, err := prepareTransformerProgram(dir, program, sourceFiles)
+func prepareProjectProgramForCompile(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile, overlays map[string]string) (*compiler.Program, []*ast.SourceFile, diagnosticTraces, []string, error) {
+	prepared, diags, err := prepareTransformerProgram(dir, program, sourceFiles, overlays)
 	if err != nil {
 		return nil, nil, nil, diags, err
 	}
 	return prepared.program, prepared.sourceFiles, prepared.sourceTraces, nil, nil
 }
 
-func prepareProjectProgramForBuild(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*preparedTransformerProgram, []string, error) {
-	return prepareTransformerProgram(dir, program, sourceFiles)
+func prepareProjectProgramForBuild(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile, overlays map[string]string) (*preparedTransformerProgram, []string, error) {
+	return prepareTransformerProgram(dir, program, sourceFiles, overlays)
 }
 
-func prepareTransformerProgram(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*preparedTransformerProgram, []string, error) {
+func prepareTransformerProgram(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile, overlays map[string]string) (*preparedTransformerProgram, []string, error) {
 	if len(sourceFiles) == 0 {
 		return &preparedTransformerProgram{program: program, sourceFiles: sourceFiles}, nil, nil
 	}
@@ -99,7 +99,7 @@ func prepareTransformerProgram(dir string, program *compiler.Program, sourceFile
 		return &preparedTransformerProgram{program: program, sourceFiles: sourceFiles}, nil, nil
 	}
 
-	transformed, diags, err := applyTransformerSidecar(dir, program, sourceFiles)
+	transformed, diags, err := applyTransformerSidecar(dir, program, sourceFiles, overlays)
 	if err != nil {
 		return nil, diags, err
 	}
@@ -137,7 +137,7 @@ func declarationUsesPathAliases(program *compiler.Program) bool {
 	return options.GetEmitDeclarations() && (options.BaseUrl != "" || options.Paths != nil && options.Paths.Size() > 0)
 }
 
-func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile) (*preparedTransformerProgram, []string, error) {
+func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles []*ast.SourceFile, overlays map[string]string) (*preparedTransformerProgram, []string, error) {
 	configPath := program.Options().ConfigFilePath
 	if configPath == "" {
 		configPath = filepath.ToSlash(filepath.Join(filepath.FromSlash(dir), "tsconfig.json"))
@@ -145,7 +145,7 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 
 	sidecarStarted := time.Now()
 	sidecarRegion := trace.StartRegion(context.Background(), "transformer sidecar")
-	response, err := runTransformerSidecar(dir, configPath, sourceFiles, projectSourceFiles(program))
+	response, err := runTransformerSidecar(dir, configPath, sourceFiles, projectSourceFiles(program), overlays)
 	sidecarRegion.End()
 	sidecarDuration := time.Since(sidecarStarted)
 	if err != nil {
@@ -189,14 +189,14 @@ func applyTransformerSidecar(dir string, program *compiler.Program, sourceFiles 
 		}, nil, nil
 	}
 
-	overlays := make(map[string]string, len(response.Transformed))
+	transformedOverlays := make(map[string]string, len(response.Transformed))
 	caseSensitive := osvfs.FS().UseCaseSensitiveFileNames()
 	for _, file := range response.Transformed {
-		overlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
+		transformedOverlays[normalizeOverlayPath(file.FileName, caseSensitive)] = file.Text
 	}
 	overlayStarted := time.Now()
 	overlayRegion := trace.StartRegion(context.Background(), "overlay program creation and parse/load")
-	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, overlays, program.Options().Checkers)
+	transformedProgram, _, err := newProjectProgramWithOverlay(dir, configPath, transformedOverlays, program.Options().Checkers)
 	overlayRegion.End()
 	overlayDuration := time.Since(overlayStarted)
 	if err != nil {
@@ -400,11 +400,21 @@ func (s *sidecarSession) close() {
 // session's last-seen stamps. Fresh sessions only record stamps (the worker
 // reads from disk); warm sessions ship new text so the LanguageService
 // snapshot versions advance (upstream updateFile semantics).
-func (s *sidecarSession) changedFilesFor(fileNames []string) ([]sidecarChangedFile, error) {
+//
+// Overlaid files are the exception to every rule above. An overlay exists
+// nowhere on disk, so a stat tells us nothing about it and a worker left to
+// read disk would answer on text the caller never sent. Each one ships on
+// every round trip, fresh session or not.
+func (s *sidecarSession) changedFilesFor(fileNames []string, overlays map[string]string) ([]sidecarChangedFile, error) {
 	fresh := len(s.stamps) == 0
+	caseSensitive := osvfs.FS().UseCaseSensitiveFileNames()
 	changed := []sidecarChangedFile{}
 	for _, fileName := range fileNames {
 		path := filepath.FromSlash(fileName)
+		if text, ok := overlays[normalizeOverlayPath(path, caseSensitive)]; ok {
+			changed = append(changed, sidecarChangedFile{FileName: path, Text: text})
+			continue
+		}
 		info, err := os.Stat(path)
 		if err != nil {
 			continue
@@ -422,7 +432,7 @@ func (s *sidecarSession) changedFilesFor(fileNames []string) ([]sidecarChangedFi
 	return changed, nil
 }
 
-func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*ast.SourceFile) (*sidecarResponse, error) {
+func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*ast.SourceFile, overlays map[string]string) (*sidecarResponse, error) {
 	sidecarDir, err := resolveSidecarDir()
 	if err != nil {
 		return nil, err
@@ -453,7 +463,7 @@ func runTransformerSidecar(dir, configPath string, compileFiles, stampFiles []*a
 		for _, sourceFile := range stampFiles {
 			stampNames = append(stampNames, sourceFile.FileName())
 		}
-		changedFiles, err := session.changedFilesFor(stampNames)
+		changedFiles, err := session.changedFilesFor(stampNames, overlays)
 		if err != nil {
 			return nil, err
 		}

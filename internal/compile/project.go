@@ -692,7 +692,7 @@ func CompileProjectWithOptions(projectDir string, opts ProjectOptions) (map[stri
 
 func compileProjectProgram(dir string, program *compiler.Program, opts ProjectOptions) (map[string]string, []DiagnosticInfo, error) {
 	sourceFiles := projectSourceFiles(program)
-	program, sourceFiles, traces, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles)
+	program, sourceFiles, traces, diags, err := prepareProjectProgramForCompile(dir, program, sourceFiles, normalizeOverlays(opts.Overlays))
 	if err != nil {
 		return nil, stringDiagnostics(diags), err
 	}
